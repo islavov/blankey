@@ -16,9 +16,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
-from blanka.config import FONTS_DIR
+from blankey.config import FONTS_DIR
 
-FONT_NAME = "BlankaSans"
+FONT_NAME = "BlankeySans"
 FONT_FILE = FONTS_DIR / "NotoSans-Regular.ttf"
 DEFAULT_SIZE = 9.0
 MIN_SIZE = 5.0

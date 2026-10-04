@@ -1,4 +1,4 @@
-"""`blanka mcp`: stdio MCP server for Claude Desktop that forwards to the running tray app.
+"""`blankey mcp`: stdio MCP server for Claude Desktop that forwards to the running tray app.
 
 Each JSON-RPC line from stdin is POSTed to the app's local HTTP endpoint and the JSON reply is
 written back to stdout. Requests run on their own threads so a blocking wait_request does not
@@ -14,9 +14,9 @@ import urllib.error
 import urllib.request
 from email.message import Message
 
-from blanka.config import load_config
-from blanka.mcp_server import HEALTH_PATH, HEALTH_TEXT
-from blanka.ui.platform import launch_command
+from blankey.config import load_config
+from blankey.mcp_server import HEALTH_PATH, HEALTH_TEXT
+from blankey.ui.platform import launch_command
 
 STARTUP_TIMEOUT_S = 20
 REQUEST_TIMEOUT_S = 1900  # longer than wait_request's maximum
@@ -72,7 +72,7 @@ class Bridge:
         request_id = message.get("id") if isinstance(message, dict) else None
         try:
             if not self.ensure_app():
-                raise ConnectionError("Blanka is not running and could not be started")
+                raise ConnectionError("Blankey is not running and could not be started")
             status, headers, body = self.post(line.encode())
             if status == 404 and self.session_id:  # app restarted: session is gone
                 self.session_id = None
@@ -104,7 +104,7 @@ class Bridge:
 
 
 def server_running(url: str) -> bool:
-    """True only if Blanka itself answers; another program on the same port does not count."""
+    """True only if Blankey itself answers; another program on the same port does not count."""
     health = url.removesuffix("/mcp") + HEALTH_PATH
     try:
         with urllib.request.urlopen(health, timeout=1) as response:

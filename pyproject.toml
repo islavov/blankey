@@ -1,5 +1,5 @@
 [project]
-name = "blanka"
+name = "blankey"
 version = "0.1.0"
 description = "Local encrypted PII vault and document templating with an MCP server"
 readme = "README.md"
@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.scripts]
-blanka = "blanka.app:main"
+blankey = "blankey.app:main"
 
 [build-system]
 requires = ["uv_build>=0.11.3,<0.12.0"]

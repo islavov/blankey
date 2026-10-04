@@ -11,7 +11,7 @@ if sys.platform == "win32":
     import winreg
 
 NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
-LAUNCH_AGENT_LABEL = "bg.blanka.app"
+LAUNCH_AGENT_LABEL = "bg.blankey.app"
 WINDOWS_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
@@ -42,7 +42,7 @@ def bring_to_front() -> None:
 def launch_command() -> list[str]:
     if getattr(sys, "frozen", False):
         return [sys.executable]
-    return [sys.executable, "-m", "blanka"]
+    return [sys.executable, "-m", "blankey"]
 
 
 def _launch_agent_path() -> Path:
@@ -50,7 +50,7 @@ def _launch_agent_path() -> Path:
 
 
 def _xdg_autostart_path() -> Path:
-    return Path.home() / ".config" / "autostart" / "blanka.desktop"
+    return Path.home() / ".config" / "autostart" / "blankey.desktop"
 
 
 def autostart_enabled() -> bool:
@@ -60,7 +60,7 @@ def autostart_enabled() -> bool:
         case "win32":
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY) as key:
                 try:
-                    winreg.QueryValueEx(key, "Blanka")
+                    winreg.QueryValueEx(key, "Blankey")
                     return True
                 except FileNotFoundError:
                     return False
@@ -82,16 +82,16 @@ def set_autostart(enabled: bool) -> None:
         case "win32":
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WINDOWS_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
                 if enabled:
-                    winreg.SetValueEx(key, "Blanka", 0, winreg.REG_SZ, " ".join(f'"{c}"' for c in command))
+                    winreg.SetValueEx(key, "Blankey", 0, winreg.REG_SZ, " ".join(f'"{c}"' for c in command))
                 else:
                     with contextlib.suppress(FileNotFoundError):
-                        winreg.DeleteValue(key, "Blanka")
+                        winreg.DeleteValue(key, "Blankey")
         case _:
             path = _xdg_autostart_path()
             if enabled:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(
-                    "[Desktop Entry]\nType=Application\nName=Blanka\n"
+                    "[Desktop Entry]\nType=Application\nName=Blankey\n"
                     f"Exec={' '.join(command)}\nX-GNOME-Autostart-enabled=true\n",
                     encoding="utf-8",
                 )
@@ -110,11 +110,11 @@ def claude_desktop_config_path() -> Path:
 
 
 def connect_claude_desktop() -> Path:
-    """Register `blanka mcp` (stdio) as an MCP server in Claude Desktop's config, keeping other entries."""
+    """Register `blankey mcp` (stdio) as an MCP server in Claude Desktop's config, keeping other entries."""
     path = claude_desktop_config_path()
     config = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     command, *args = launch_command()
-    config.setdefault("mcpServers", {})["blanka"] = {"command": command, "args": [*args, "mcp"]}
+    config.setdefault("mcpServers", {})["blankey"] = {"command": command, "args": [*args, "mcp"]}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return path

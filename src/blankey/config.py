@@ -4,7 +4,7 @@ from pathlib import Path
 
 from platformdirs import user_data_path
 
-APP_NAME = "Blanka"
+APP_NAME = "Blankey"
 ASSETS_DIR = Path(__file__).parent / "assets"
 FONTS_DIR = ASSETS_DIR / "fonts"
 

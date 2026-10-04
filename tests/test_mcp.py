@@ -8,9 +8,9 @@ import pytest
 from pyhanko.pdf_utils.reader import PdfFileReader
 from pyhanko.sign.validation import validate_pdf_signature
 
-from blanka.core import GenerateOptions, RequestKind
-from blanka.mcp_server import build_server
-from blanka.vault import FieldInput, FieldType
+from blankey.core import GenerateOptions, RequestKind
+from blankey.mcp_server import build_server
+from blankey.vault import FieldInput, FieldType
 from tests.conftest import PASSWORD
 
 SENTINEL_NAME = "Сентинела Тайнова"

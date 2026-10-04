@@ -1,7 +1,7 @@
 import pytest
 
-from blanka import biometric
-from blanka.ui.unlock import UnlockDialog, ensure_unlocked, quick_unlock
+from blankey import biometric
+from blankey.ui.unlock import UnlockDialog, ensure_unlocked, quick_unlock
 
 
 @pytest.fixture

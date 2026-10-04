@@ -5,8 +5,8 @@ import keyring
 import pytest
 from reportlab.pdfgen import canvas
 
-from blanka.config import load_config
-from blanka.core import Blanka
+from blankey.config import load_config
+from blankey.core import Blankey
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -24,10 +24,10 @@ def memory_keyring(monkeypatch):
 
 @pytest.fixture
 def app(tmp_path):
-    blanka = Blanka(load_config(tmp_path / "data"))
-    blanka.vault.initialize(PASSWORD)
-    yield blanka
-    blanka.vault.close()
+    blankey = Blankey(load_config(tmp_path / "data"))
+    blankey.vault.initialize(PASSWORD)
+    yield blankey
+    blankey.vault.close()
 
 
 @pytest.fixture

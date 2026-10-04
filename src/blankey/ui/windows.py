@@ -22,11 +22,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from blanka.core import Blanka
-from blanka.ui.requests import GenerateDialog, open_request
-from blanka.ui.unlock import ensure_unlocked
+from blankey.core import Blankey
+from blankey.ui.requests import GenerateDialog, open_request
+from blankey.ui.unlock import ensure_unlocked
 
-OPEN_DIR = Path(tempfile.gettempdir()) / "blanka-open"
+OPEN_DIR = Path(tempfile.gettempdir()) / "blankey-open"
 
 
 def clear_opened_documents() -> None:
@@ -35,10 +35,10 @@ def clear_opened_documents() -> None:
 
 
 class DocumentsWindow(QWidget):
-    def __init__(self, app: Blanka):
+    def __init__(self, app: Blankey):
         super().__init__()
         self.app = app
-        self.setWindowTitle("Blanka - documents")
+        self.setWindowTitle("Blankey - documents")
         self.resize(820, 420)
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["#", "Title", "Template", "Signature", "Password", "Created"])
@@ -103,16 +103,16 @@ class DocumentsWindow(QWidget):
         doc = self._selected()
         if doc is None:
             return
-        if QMessageBox.question(self, "Blanka", f'Delete "{doc.title}"?') == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "Blankey", f'Delete "{doc.title}"?') == QMessageBox.StandardButton.Yes:
             self.app.vault.delete_document(doc.id)
             self.refresh()
 
 
 class TemplatesWindow(QWidget):
-    def __init__(self, app: Blanka):
+    def __init__(self, app: Blankey):
         super().__init__()
         self.app = app
-        self.setWindowTitle("Blanka - templates")
+        self.setWindowTitle("Blankey - templates")
         self.resize(560, 380)
         self.list = QListWidget()
         generate = QPushButton("Generate…")
@@ -168,10 +168,10 @@ class TemplatesWindow(QWidget):
 
 
 class RequestsWindow(QWidget):
-    def __init__(self, app: Blanka):
+    def __init__(self, app: Blankey):
         super().__init__()
         self.app = app
-        self.setWindowTitle("Blanka - requests from Claude")
+        self.setWindowTitle("Blankey - requests from Claude")
         self.resize(520, 320)
         self.list = QListWidget()
         self.list.itemDoubleClicked.connect(lambda *_: self._open())

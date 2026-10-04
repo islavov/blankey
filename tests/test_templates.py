@@ -3,10 +3,10 @@ import io
 import pytest
 from pypdf import PdfReader
 
-from blanka.render import pdf_form
-from blanka.templates import TemplateKind, engine
-from blanka.templates.bindings import evaluate, example_context, money, nest, referenced_paths
-from blanka.vault import FieldInput, FieldType
+from blankey.render import pdf_form
+from blankey.templates import TemplateKind, engine
+from blankey.templates.bindings import evaluate, example_context, money, nest, referenced_paths
+from blankey.vault import FieldInput, FieldType
 
 FIELDS = {
     "name": "{{ applicant.name }}",

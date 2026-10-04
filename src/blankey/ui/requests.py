@@ -15,12 +15,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from blanka.core import Blanka, GenerateOptions
-from blanka.render.preview import render_pages
-from blanka.ui.unlock import ensure_unlocked
-from blanka.ui.widgets import PagePreview, input_value, value_input
-from blanka.vault import FieldInput, FieldType, Request
-from blanka.vault.fieldtypes import validate
+from blankey.core import Blankey, GenerateOptions
+from blankey.render.preview import render_pages
+from blankey.ui.unlock import ensure_unlocked
+from blankey.ui.widgets import PagePreview, input_value, value_input
+from blankey.vault import FieldInput, FieldType, Request
+from blankey.vault.fieldtypes import validate
 
 SIGN_CHOICES = {
     "none": "No signature",
@@ -30,7 +30,7 @@ SIGN_CHOICES = {
 
 
 class ProfileInputDialog(QDialog):
-    def __init__(self, app: Blanka, request: Request, parent: QWidget | None = None):
+    def __init__(self, app: Blankey, request: Request, parent: QWidget | None = None):
         super().__init__(parent)
         self.app = app
         self.request = request
@@ -68,7 +68,7 @@ class ProfileInputDialog(QDialog):
             form.addRow(label, widget)
             self.inputs.append((spec, field_type, widget))
         layout.addLayout(form)
-        layout.addWidget(QLabel("<small>Values stay in Blanka. Claude only sees the keys and lengths.</small>"))
+        layout.addWidget(QLabel("<small>Values stay in Blankey. Claude only sees the keys and lengths.</small>"))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._save)
@@ -88,7 +88,7 @@ class ProfileInputDialog(QDialog):
         if self.name_edit is not None and not self.name_edit.text().strip():
             errors.append("Enter a profile name")
         if errors:
-            QMessageBox.warning(self, "Blanka", "\n".join(errors))
+            QMessageBox.warning(self, "Blankey", "\n".join(errors))
             return
         if self.profile_id is None:
             kind = (self.request.payload.get("new_profile") or {}).get("kind", "")
@@ -115,7 +115,7 @@ class GenerateDialog(QDialog):
 
     def __init__(
         self,
-        app: Blanka,
+        app: Blankey,
         template_id: str,
         profiles: dict[str, int],
         defaults: dict | None = None,
@@ -201,11 +201,11 @@ class GenerateDialog(QDialog):
         password = None
         if self.encrypt.isChecked():
             if not self.password.text() or self.password.text() != self.password_repeat.text():
-                QMessageBox.warning(self, "Blanka", "The passwords do not match.")
+                QMessageBox.warning(self, "Blankey", "The passwords do not match.")
                 return
             password = self.password.text()
         if sign == "qes" and not self.app.config.pkcs11_lib:
-            QMessageBox.warning(self, "Blanka", f"Set pkcs11_lib in {self.app.config.config_path} (the card driver).")
+            QMessageBox.warning(self, "Blankey", f"Set pkcs11_lib in {self.app.config.config_path} (the card driver).")
             return
         options = GenerateOptions(
             sign=sign, password=password, pkcs11_pin=self.pin.text(), signer_name=self.signer.text()
@@ -213,7 +213,7 @@ class GenerateDialog(QDialog):
         try:
             doc_id = self.app.generate(self.template_id, self.profiles, options, self.title.text().strip())
         except Exception as exc:
-            QMessageBox.critical(self, "Blanka", f"Generation failed: {exc}")
+            QMessageBox.critical(self, "Blankey", f"Generation failed: {exc}")
             return
         if self.request is not None:
             doc = next(d for d in self.app.vault.list_documents() if d.id == doc_id)
@@ -236,7 +236,7 @@ class GenerateDialog(QDialog):
         super().reject()
 
 
-def open_request(app: Blanka, request: Request, parent: QWidget | None = None) -> None:
+def open_request(app: Blankey, request: Request, parent: QWidget | None = None) -> None:
     if request.status != "pending":
         return
     if not ensure_unlocked(app, parent, "Claude sent a request. Unlock the vault to continue."):

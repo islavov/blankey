@@ -13,10 +13,10 @@ import keyring
 from cryptography.exceptions import InvalidTag
 from keyring.errors import PasswordDeleteError
 
-from blanka.vault import crypto, db
-from blanka.vault.fieldtypes import FieldType
+from blankey.vault import crypto, db
+from blankey.vault.fieldtypes import FieldType
 
-KEYRING_SERVICE = "blanka"
+KEYRING_SERVICE = "blankey"
 KEYRING_USER = "vault-kek"
 
 

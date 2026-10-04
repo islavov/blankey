@@ -5,12 +5,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from blanka.config import Config
-from blanka.output import protect
-from blanka.render.preview import page_count
-from blanka.templates import TemplateStore, engine
-from blanka.templates.bindings import profile_context
-from blanka.vault import FieldInfo, Vault
+from blankey.config import Config
+from blankey.output import protect
+from blankey.render.preview import page_count
+from blankey.templates import TemplateStore, engine
+from blankey.templates.bindings import profile_context
+from blankey.vault import FieldInfo, Vault
 
 
 class RequestKind:
@@ -26,7 +26,7 @@ class GenerateOptions:
     signer_name: str = ""
 
 
-class Blanka:
+class Blankey:
     def __init__(self, config: Config):
         self.config = config
         self.vault = Vault(config.db_path)
@@ -63,7 +63,7 @@ class Blanka:
         raw = self.vault.get_secret(protect.SELF_SIGNED_SECRET)
         if raw is not None:
             return protect.SelfSigned.load(raw)
-        identity = protect.create_self_signed(common_name or "Blanka")
+        identity = protect.create_self_signed(common_name or "Blankey")
         self.vault.put_secret(protect.SELF_SIGNED_SECRET, identity.dump())
         return identity
 

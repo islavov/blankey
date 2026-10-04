@@ -10,7 +10,7 @@ from jinja2 import ChainableUndefined, Undefined, nodes
 from jinja2.nativetypes import NativeEnvironment
 from jinja2.sandbox import SandboxedEnvironment
 
-from blanka.vault.fieldtypes import FieldType, coerce
+from blankey.vault.fieldtypes import FieldType, coerce
 
 
 class _Environment(SandboxedEnvironment, NativeEnvironment):

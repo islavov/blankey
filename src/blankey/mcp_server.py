@@ -14,14 +14,14 @@ from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from starlette.responses import PlainTextResponse
 
-from blanka.core import Blanka, RequestKind
-from blanka.render import pdf_form, preview
-from blanka.templates import TemplateKind, engine
-from blanka.templates.bindings import example_context
-from blanka.vault import FieldType, VaultLocked
+from blankey.core import Blankey, RequestKind
+from blankey.render import pdf_form, preview
+from blankey.templates import TemplateKind, engine
+from blankey.templates.bindings import example_context
+from blankey.vault import FieldType, VaultLocked
 
 INSTRUCTIONS = """\
-Blanka keeps personal data (PII) encrypted in a local vault and renders document templates.
+Blankey keeps personal data (PII) encrypted in a local vault and renders document templates.
 You never see real values. You see profiles, their field keys, labels, types and value lengths.
 
 Workflow:
@@ -40,7 +40,7 @@ The user exports real documents from the app; you only get their metadata.
 
 TOOL_TIMEOUT_MAX = 1800
 HEALTH_PATH = "/health"
-HEALTH_TEXT = "blanka"
+HEALTH_TEXT = "blankey"
 EXPECTED_ERRORS = (KeyError, ValueError, FileNotFoundError, VaultLocked)
 
 
@@ -67,8 +67,8 @@ def _expected_errors_as_tool_errors(fn):
     return wrapper
 
 
-def build_server(app: Blanka) -> MCPServer:
-    mcp = MCPServer(name="blanka", instructions=INSTRUCTIONS)
+def build_server(app: Blankey) -> MCPServer:
+    mcp = MCPServer(name="blankey", instructions=INSTRUCTIONS)
 
     def tool(**options):
         def register(fn):
@@ -286,10 +286,10 @@ def _request_view(request) -> dict[str, Any]:
 
 
 class McpThread(threading.Thread):
-    def __init__(self, app: Blanka):
-        super().__init__(name="blanka-mcp", daemon=True)
+    def __init__(self, app: Blankey):
+        super().__init__(name="blankey-mcp", daemon=True)
         # localhost only; the SDK adds Host/Origin checks against DNS rebinding. JSON responses keep the
-        # stdio bridge (blanka mcp) a plain request/response proxy.
+        # stdio bridge (blankey mcp) a plain request/response proxy.
         asgi = build_server(app).streamable_http_app(json_response=True)
         asgi.add_route(HEALTH_PATH, lambda request: PlainTextResponse(HEALTH_TEXT))
         self.server = uvicorn.Server(

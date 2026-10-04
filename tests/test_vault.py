@@ -3,8 +3,8 @@ import sqlite3
 import pytest
 from cryptography.exceptions import InvalidTag
 
-from blanka.vault import FieldInput, FieldType, Vault, VaultLocked, WrongSecret
-from blanka.vault.fieldtypes import valid_egn, valid_iban, validate
+from blankey.vault import FieldInput, FieldType, Vault, VaultLocked, WrongSecret
+from blankey.vault.fieldtypes import valid_egn, valid_iban, validate
 from tests.conftest import PASSWORD
 
 

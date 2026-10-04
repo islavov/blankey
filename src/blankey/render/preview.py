@@ -3,7 +3,7 @@ import io
 import pypdfium2 as pdfium
 from PIL import ImageDraw
 
-from blanka.render.pdf_form import FormField
+from blankey.render.pdf_form import FormField
 
 DEFAULT_DPI = 80
 

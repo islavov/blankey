@@ -12,9 +12,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from blanka import biometric
-from blanka.core import Blanka
-from blanka.vault import Vault, WrongSecret
+from blankey import biometric
+from blankey.core import Blankey
+from blankey.vault import Vault, WrongSecret
 
 MIN_PASSWORD = 8
 
@@ -31,7 +31,7 @@ class SetupDialog(QDialog):
     def __init__(self, vault: Vault, parent: QWidget | None = None):
         super().__init__(parent)
         self.vault = vault
-        self.setWindowTitle("Blanka - new vault")
+        self.setWindowTitle("Blankey - new vault")
         self.password = _password_edit()
         self.repeat = _password_edit()
         keyring_label = "Unlock with Touch ID" if biometric.available() else "Unlock automatically with the keychain"
@@ -55,10 +55,10 @@ class SetupDialog(QDialog):
 
     def _create(self) -> None:
         if len(self.password.text()) < MIN_PASSWORD:
-            QMessageBox.warning(self, "Blanka", f"The password must be at least {MIN_PASSWORD} characters.")
+            QMessageBox.warning(self, "Blankey", f"The password must be at least {MIN_PASSWORD} characters.")
             return
         if self.password.text() != self.repeat.text():
-            QMessageBox.warning(self, "Blanka", "The passwords do not match.")
+            QMessageBox.warning(self, "Blankey", "The passwords do not match.")
             return
         recovery = self.vault.initialize(self.password.text(), self.use_keyring.isChecked())
         RecoveryKeyDialog(recovery, self).exec()
@@ -91,7 +91,7 @@ class UnlockDialog(QDialog):
     def __init__(self, vault: Vault, reason: str = "", parent: QWidget | None = None):
         super().__init__(parent)
         self.vault = vault
-        self.setWindowTitle("Blanka - unlock")
+        self.setWindowTitle("Blankey - unlock")
         self.password = _password_edit()
         recover = QPushButton("Forgot password…")
         recover.setFlat(True)
@@ -120,7 +120,7 @@ class UnlockDialog(QDialog):
         try:
             self.vault.unlock(self.password.text())
         except WrongSecret:
-            QMessageBox.warning(self, "Blanka", "Wrong password.")
+            QMessageBox.warning(self, "Blankey", "Wrong password.")
             self.password.selectAll()
             return
         self.accept()
@@ -140,12 +140,12 @@ class UnlockDialog(QDialog):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         if len(new_password.text()) < MIN_PASSWORD:
-            QMessageBox.warning(self, "Blanka", f"The password must be at least {MIN_PASSWORD} characters.")
+            QMessageBox.warning(self, "Blankey", f"The password must be at least {MIN_PASSWORD} characters.")
             return
         try:
             self.vault.unlock_with_recovery(key.text(), new_password.text())
         except WrongSecret:
-            QMessageBox.warning(self, "Blanka", "Invalid recovery key.")
+            QMessageBox.warning(self, "Blankey", "Invalid recovery key.")
             return
         self.accept()
 
@@ -154,12 +154,12 @@ def quick_unlock(vault: Vault, reason: str = "") -> bool:
     """Unlock with the keychain-wrapped key; on machines with a fingerprint reader it needs a scan first."""
     if not vault.keyring_enabled:
         return False
-    if biometric.available() and not biometric.authenticate(reason or "unlock the Blanka vault"):
+    if biometric.available() and not biometric.authenticate(reason or "unlock the Blankey vault"):
         return False
     return vault.unlock_with_keyring()
 
 
-def ensure_unlocked(app: Blanka, parent: QWidget | None = None, reason: str = "") -> bool:
+def ensure_unlocked(app: Blankey, parent: QWidget | None = None, reason: str = "") -> bool:
     if app.vault.unlocked or quick_unlock(app.vault, reason):
         return True
     return UnlockDialog(app.vault, reason, parent).exec() == QDialog.DialogCode.Accepted

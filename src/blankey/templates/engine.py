@@ -11,11 +11,11 @@ from typing import Any
 import typst
 from docxtpl import DocxTemplate
 
-from blanka.config import FONTS_DIR
-from blanka.render import pdf_form
-from blanka.templates.bindings import as_text, evaluate, referenced_paths, to_json
-from blanka.templates.store import Template, TemplateKind
-from blanka.vault import FieldInfo
+from blankey.config import FONTS_DIR
+from blankey.render import pdf_form
+from blankey.templates.bindings import as_text, evaluate, referenced_paths, to_json
+from blankey.templates.store import Template, TemplateKind
+from blankey.vault import FieldInfo
 
 
 @dataclass(slots=True)

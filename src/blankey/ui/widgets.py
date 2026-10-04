@@ -1,7 +1,7 @@
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QCheckBox, QLabel, QLineEdit, QScrollArea, QVBoxLayout, QWidget
 
-from blanka.vault.fieldtypes import TRUE_VALUES, FieldType
+from blankey.vault.fieldtypes import TRUE_VALUES, FieldType
 
 PLACEHOLDERS = {
     FieldType.DATE: "DD.MM.YYYY",

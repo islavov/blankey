@@ -1,4 +1,4 @@
-# Blanka
+# Blankey
 
 Local, offline tray app that keeps personal data encrypted and fills document templates.
 An MCP server lets Claude design templates, test them with invented data, and ask for real
@@ -8,13 +8,13 @@ documents, without ever seeing the real values.
 
 ```bash
 uv sync
-uv run blanka          # first run creates the vault (master password + one-time recovery key)
+uv run blankey          # first run creates the vault (master password + one-time recovery key)
 uv run pytest
 uv run ruff check && uv run ruff format
 ```
 
 The app lives in the menu bar / system tray. Data is stored in the per-user data directory
-(`~/Library/Application Support/Blanka` on macOS): `vault.db`, `templates/`, `previews/`, `config.toml`.
+(`~/Library/Application Support/Blankey` on macOS): `vault.db`, `templates/`, `previews/`, `config.toml`.
 
 ## Connect Claude
 
@@ -22,9 +22,9 @@ The server listens on `http://127.0.0.1:8765/mcp` without authentication. It onl
 connections, the SDK rejects foreign Host/Origin headers (DNS rebinding), and no tool returns personal data.
 
 - **Claude Desktop**: tray menu → "Connect Claude Desktop", then restart Claude Desktop. This adds
-  `blanka mcp` (a stdio bridge to the running app, which starts the app if needed) to
+  `blankey mcp` (a stdio bridge to the running app, which starts the app if needed) to
   `claude_desktop_config.json`.
-- **Claude Code**: `claude mcp add --transport http blanka http://127.0.0.1:8765/mcp`
+- **Claude Code**: `claude mcp add --transport http blankey http://127.0.0.1:8765/mcp`
   (tray menu → "Copy Claude Code command").
 
 ## How the PII boundary works

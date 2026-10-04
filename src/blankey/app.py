@@ -6,15 +6,15 @@ from PySide6.QtCore import QEvent, QObject, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon, QWidget
 
-from blanka import biometric, bridge
-from blanka.config import load_config
-from blanka.core import Blanka
-from blanka.mcp_server import McpThread
-from blanka.ui import icons, platform
-from blanka.ui.profiles import ProfilesWindow
-from blanka.ui.requests import open_request
-from blanka.ui.unlock import SetupDialog, ensure_unlocked
-from blanka.ui.windows import DocumentsWindow, RequestsWindow, TemplatesWindow, clear_opened_documents
+from blankey import biometric, bridge
+from blankey.config import load_config
+from blankey.core import Blankey
+from blankey.mcp_server import McpThread
+from blankey.ui import icons, platform
+from blankey.ui.profiles import ProfilesWindow
+from blankey.ui.requests import open_request
+from blankey.ui.unlock import SetupDialog, ensure_unlocked
+from blankey.ui.windows import DocumentsWindow, RequestsWindow, TemplatesWindow, clear_opened_documents
 
 USER_INPUT_EVENTS = {QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.Wheel}
 
@@ -26,7 +26,7 @@ class Bridge(QObject):
 
 
 class Tray(QObject):
-    def __init__(self, qt_app: QApplication, app: Blanka, mcp: McpThread):
+    def __init__(self, qt_app: QApplication, app: Blankey, mcp: McpThread):
         super().__init__(qt_app)
         self.qt_app = qt_app
         self.app = app
@@ -40,7 +40,7 @@ class Tray(QObject):
         app.on_request = self.bridge.request_created.emit
 
         self.tray = QSystemTrayIcon()
-        self.tray.setToolTip("Blanka")
+        self.tray.setToolTip("Blankey")
         self.tray.messageClicked.connect(self._process_requests)
         self.menu = QMenu()
         self.menu.aboutToShow.connect(self._build_menu)
@@ -113,17 +113,17 @@ class Tray(QObject):
         self._refresh_icon()
 
     def _copy_mcp_command(self) -> None:
-        QGuiApplication.clipboard().setText(f"claude mcp add --transport http blanka {self.app.config.mcp_url}")
-        self.tray.showMessage("Blanka", "Command copied.", QSystemTrayIcon.MessageIcon.Information, 3000)
+        QGuiApplication.clipboard().setText(f"claude mcp add --transport http blankey {self.app.config.mcp_url}")
+        self.tray.showMessage("Blankey", "Command copied.", QSystemTrayIcon.MessageIcon.Information, 3000)
 
     def _connect_claude_desktop(self) -> None:
         try:
             path = platform.connect_claude_desktop()
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(None, "Blanka", f"Could not write the config: {exc}")
+            QMessageBox.warning(None, "Blankey", f"Could not write the config: {exc}")
             return
         message = f"Added to {path.name}. Restart Claude Desktop."
-        self.tray.showMessage("Blanka", message, QSystemTrayIcon.MessageIcon.Information, 5000)
+        self.tray.showMessage("Blankey", message, QSystemTrayIcon.MessageIcon.Information, 5000)
 
     def _toggle_keyring(self, enabled: bool) -> None:
         if enabled:
@@ -197,19 +197,19 @@ def main() -> None:
         bridge.main()
         return
     qt_app = QApplication(sys.argv)
-    qt_app.setApplicationName("Blanka")
+    qt_app.setApplicationName("Blankey")
     qt_app.setQuitOnLastWindowClosed(False)
     qt_app.setWindowIcon(icons.app_icon())
     if not QSystemTrayIcon.isSystemTrayAvailable():
-        QMessageBox.critical(None, "Blanka", "No system tray available (on GNOME install the AppIndicator extension).")
+        QMessageBox.critical(None, "Blankey", "No system tray available (on GNOME install the AppIndicator extension).")
         sys.exit(1)
     config = load_config()
     if bridge.server_running(config.mcp_url):
-        QMessageBox.information(None, "Blanka", "Blanka is already running. Look for the B icon in the menu bar.")
+        QMessageBox.information(None, "Blankey", "Blankey is already running. Look for the B icon in the menu bar.")
         sys.exit(0)
     platform.hide_dock_icon()
 
-    app = Blanka(config)
+    app = Blankey(config)
     if not app.vault.initialized:
         platform.bring_to_front()
         if SetupDialog(app.vault).exec() != QDialog.DialogCode.Accepted:

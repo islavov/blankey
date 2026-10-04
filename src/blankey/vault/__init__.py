@@ -1,5 +1,5 @@
-from blanka.vault.fieldtypes import FieldType
-from blanka.vault.vault import (
+from blankey.vault.fieldtypes import FieldType
+from blankey.vault.vault import (
     DocumentInfo,
     FieldInfo,
     FieldInput,

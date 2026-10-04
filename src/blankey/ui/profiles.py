@@ -13,19 +13,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from blanka.core import Blanka
-from blanka.ui.unlock import ensure_unlocked
-from blanka.vault import FieldInput, FieldType
-from blanka.vault.fieldtypes import validate
+from blankey.core import Blankey
+from blankey.ui.unlock import ensure_unlocked
+from blankey.vault import FieldInput, FieldType
+from blankey.vault.fieldtypes import validate
 
 COLUMNS = ["Key", "Label", "Type", "Value"]
 
 
 class ProfilesWindow(QWidget):
-    def __init__(self, app: Blanka):
+    def __init__(self, app: Blankey):
         super().__init__()
         self.app = app
-        self.setWindowTitle("Blanka - profiles")
+        self.setWindowTitle("Blankey - profiles")
         self.resize(900, 560)
 
         self.profiles = QListWidget()
@@ -129,7 +129,7 @@ class ProfilesWindow(QWidget):
                 errors.append(f"{key}: {error}")
             inputs.append(FieldInput(key, value, self.table.item(row, 1).text().strip(), field_type))
         if errors:
-            QMessageBox.warning(self, "Blanka", "\n".join(errors))
+            QMessageBox.warning(self, "Blankey", "\n".join(errors))
             return
         for key in self._removed - seen:
             self.app.vault.delete_field(profile_id, key)
@@ -166,7 +166,7 @@ class ProfilesWindow(QWidget):
         if profile_id is None:
             return
         profile = self.app.vault.get_profile(profile_id)
-        answer = QMessageBox.question(self, "Blanka", f'Delete profile "{profile.name}" and all its data?')
+        answer = QMessageBox.question(self, "Blankey", f'Delete profile "{profile.name}" and all its data?')
         if answer == QMessageBox.StandardButton.Yes:
             self.app.vault.delete_profile(profile_id)
             self.app.vault.audit("user", "delete_profile", str(profile_id))

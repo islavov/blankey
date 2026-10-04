@@ -1,11 +1,11 @@
 import pytest
 from PySide6.QtWidgets import QCheckBox, QMessageBox
 
-from blanka.core import RequestKind
-from blanka.templates import TemplateKind
-from blanka.ui.profiles import ProfilesWindow
-from blanka.ui.requests import GenerateDialog, ProfileInputDialog
-from blanka.vault import FieldInput
+from blankey.core import RequestKind
+from blankey.templates import TemplateKind
+from blankey.ui.profiles import ProfilesWindow
+from blankey.ui.requests import GenerateDialog, ProfileInputDialog
+from blankey.vault import FieldInput
 
 
 @pytest.fixture(autouse=True)
