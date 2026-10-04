@@ -1,0 +1,303 @@
+"""MCP tools. Nothing here may return a vault value or real-data document bytes."""
+
+import asyncio
+import functools
+import inspect
+import threading
+import time
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any
+
+import uvicorn
+from mcp.server.mcpserver import Image, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from starlette.responses import PlainTextResponse
+
+from blanka.core import Blanka, RequestKind
+from blanka.render import pdf_form, preview
+from blanka.templates import TemplateKind, engine
+from blanka.templates.bindings import example_context
+from blanka.vault import FieldType, VaultLocked
+
+INSTRUCTIONS = """\
+Blanka keeps personal data (PII) encrypted in a local vault and renders document templates.
+You never see real values. You see profiles, their field keys, labels, types and value lengths.
+
+Workflow:
+1. inspect_pdf_form on a blank PDF form (or write a Typst template) to learn its fields.
+2. list_profiles / describe_profile to see which data keys exist.
+3. save_template with Jinja bindings per field, e.g. "{{ applicant.address.city }}",
+   "{{ 'X' if applicant.citizenship == 'българско' }}", "{{ loan.amount | money }}".
+   Checkboxes: any truthy value checks them. Radio groups: return the state name, e.g. "/Choice2".
+4. save_example + render_example to fill the template with invented example data and look at the result.
+5. check_bindings against real profiles: reports missing/empty keys, overflow (fit_ratio > 1) and
+   missing glyphs, without revealing values.
+6. request_profile_input to ask the user to type missing data into the app, then wait_request.
+7. request_generate to ask the user to approve, sign and/or encrypt the real document, then wait_request.
+The user exports real documents from the app; you only get their metadata.
+"""
+
+TOOL_TIMEOUT_MAX = 1800
+HEALTH_PATH = "/health"
+HEALTH_TEXT = "blanka"
+EXPECTED_ERRORS = (KeyError, ValueError, FileNotFoundError, VaultLocked)
+
+
+def _expected_errors_as_tool_errors(fn):
+    """Report bad input to the client instead of an opaque crash."""
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def async_wrapper(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except EXPECTED_ERRORS as exc:
+                raise ToolError(str(exc)) from exc
+
+        return async_wrapper
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except EXPECTED_ERRORS as exc:
+            raise ToolError(str(exc)) from exc
+
+    return wrapper
+
+
+def build_server(app: Blanka) -> MCPServer:
+    mcp = MCPServer(name="blanka", instructions=INSTRUCTIONS)
+
+    def tool(**options):
+        def register(fn):
+            return mcp.tool(**options)(_expected_errors_as_tool_errors(fn))
+
+        return register
+
+    def audit(action: str, target: str = "") -> None:
+        app.vault.audit("mcp", action, target)
+
+    @tool()
+    def vault_status() -> dict[str, Any]:
+        """Whether the vault exists and is unlocked. Real-value checks need it unlocked."""
+        return {"initialized": app.vault.initialized, "unlocked": app.vault.unlocked}
+
+    @tool()
+    def list_profiles() -> list[dict[str, Any]]:
+        """List profiles (people, loans, companies...) stored in the vault."""
+        audit("list_profiles")
+        return [asdict(p) for p in app.vault.list_profiles()]
+
+    @tool()
+    def describe_profile(profile_id: int) -> dict[str, Any]:
+        """Field keys of a profile with label, type and value length in characters (0 = empty). No values."""
+        audit("describe_profile", str(profile_id))
+        profile = app.vault.get_profile(profile_id)
+        return asdict(profile) | {
+            "fields": [
+                {"key": f.key, "label": f.label, "type": str(f.type), "length": f.length}
+                for f in app.vault.describe(profile_id)
+            ]
+        }
+
+    @tool()
+    def list_templates() -> list[dict[str, Any]]:
+        """List saved templates."""
+        return [
+            {"id": t.id, "name": t.name, "kind": str(t.kind), "roles": t.roles, "fields": len(t.fields)}
+            for t in app.templates.all()
+        ]
+
+    @tool()
+    def get_template(template_id: str) -> dict[str, Any]:
+        """Full template manifest (roles, field bindings) and its example names."""
+        template = app.templates.get(template_id)
+        return engine.describe_template(template) | {"examples": app.templates.examples(template_id)}
+
+    @tool(structured_output=False)
+    def inspect_pdf_form(path: str, annotate_pages: list[int] | None = None) -> list[Any]:
+        """List the AcroForm fields of a local PDF (name, type, page, rects in PDF points, comb length,
+        button states). annotate_pages renders those 1-based pages with every field outlined and named."""
+        pdf = Path(path).expanduser().read_bytes()
+        fields = pdf_form.inspect_form(pdf)
+        out: list[Any] = [engine.dump([asdict(f) for f in fields])]
+        for page in annotate_pages or []:
+            out.append(Image(data=preview.annotate_fields(pdf, fields, page), format="png"))
+        return out
+
+    @tool()
+    def save_template(
+        template_id: str,
+        name: str,
+        kind: TemplateKind,
+        fields: dict[str, str],
+        roles: dict[str, str],
+        description: str = "",
+        source_path: str | None = None,
+        source_text: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or replace a template. kind: pdf_form (source_path = blank PDF form), typst (source_text,
+        reads `json(bytes(sys.inputs.data))` for the field values) or docx (source_path, docxtpl Jinja tags).
+        fields maps PDF field names / template variables to Jinja expressions over the roles.
+        roles maps role names (e.g. applicant, loan) to a short description. Omit the source to keep
+        the existing one."""
+        template = app.templates.save(
+            template_id,
+            name,
+            kind,
+            roles,
+            fields,
+            description,
+            source_file=Path(source_path).expanduser() if source_path else None,
+            source_text=source_text,
+        )
+        audit("save_template", template_id)
+        return engine.describe_template(template)
+
+    @tool()
+    def save_example(template_id: str, name: str, data: dict[str, Any]) -> str:
+        """Store an invented example dataset keyed by role, e.g. {"applicant": {"name": "Иван Иванов"}}."""
+        app.templates.save_example(template_id, name, data)
+        return f"Saved example {name!r}"
+
+    @tool(structured_output=False)
+    def render_example(
+        template_id: str,
+        example: str | dict[str, Any],
+        pages: list[int] | None = None,
+        dpi: int = 80,
+    ) -> list[Any]:
+        """Render a template with example data (a saved example name or an inline dict keyed by role).
+        Returns warnings, the preview PDF path and PNGs of the selected pages (default: all)."""
+        template = app.templates.get(template_id)
+        data = app.templates.get_example(template_id, example) if isinstance(example, str) else example
+        rendered = engine.render(template, example_context(data))
+        out_path = app.config.previews_dir / f"{template_id}-example.{rendered.extension}"
+        out_path.write_bytes(rendered.content)
+        summary = {"path": str(out_path), "warnings": rendered.warnings}
+        out: list[Any] = [engine.dump(summary)]
+        if rendered.is_pdf:
+            out += [Image(data=png, format="png") for png in preview.render_pages(rendered.content, pages, dpi)]
+        return out
+
+    @tool()
+    def check_bindings(template_id: str, profiles: dict[str, int]) -> dict[str, Any]:
+        """Check a template against real profiles ({role: profile_id}) without revealing values:
+        missing/empty keys always; fit_ratio (> 1 = text too wide) and missing glyphs when the vault is unlocked."""
+        audit("check_bindings", f"template={template_id} profiles={profiles}")
+        reports = app.check_bindings(template_id, profiles)
+        problems = [asdict(r) for r in reports if r.status != "ok"]
+        return {
+            "vault_unlocked": app.vault.unlocked,
+            "checked": len(reports),
+            "ok": len(reports) - len(problems),
+            "problems": problems,
+        }
+
+    @tool()
+    def request_profile_input(
+        fields: list[dict[str, Any]],
+        reason: str,
+        profile_id: int | None = None,
+        new_profile_name: str | None = None,
+        new_profile_kind: str = "",
+    ) -> dict[str, Any]:
+        """Ask the user to type data into the app. fields: [{key, label, type, required, hint}] with type one of
+        text, number, date, bool, egn, iban, email, phone. Give profile_id to extend a profile, or
+        new_profile_name to create one. Returns a request id; call wait_request for the outcome."""
+        if profile_id is None and not new_profile_name:
+            raise ValueError("Pass profile_id or new_profile_name")
+        if profile_id is not None:
+            app.vault.get_profile(profile_id)
+        for item in fields:
+            if "key" not in item:
+                raise ValueError("Every field needs a key")
+            FieldType(item.get("type", "text"))
+        payload = {
+            "profile_id": profile_id,
+            "new_profile": {"name": new_profile_name, "kind": new_profile_kind} if profile_id is None else None,
+            "fields": fields,
+            "reason": reason,
+        }
+        request_id = app.create_request(RequestKind.PROFILE_INPUT, payload)
+        return {"request_id": request_id, "status": "pending"}
+
+    @tool()
+    def request_generate(
+        template_id: str,
+        profiles: dict[str, int],
+        sign: str = "none",
+        encrypt: bool = False,
+        title: str = "",
+    ) -> dict[str, Any]:
+        """Ask the user to generate the real document. sign: none | self-signed | qes. With encrypt=true the
+        user sets the password in the app. Returns a request id; call wait_request for the outcome."""
+        template = app.templates.get(template_id)
+        missing_roles = set(template.roles) - set(profiles)
+        if missing_roles:
+            raise ValueError(f"Missing profiles for roles: {', '.join(sorted(missing_roles))}")
+        for profile_id in profiles.values():
+            app.vault.get_profile(profile_id)
+        if sign not in {"none", "self-signed", "qes"}:
+            raise ValueError("sign must be none, self-signed or qes")
+        payload = {"template_id": template_id, "profiles": profiles, "sign": sign, "encrypt": encrypt, "title": title}
+        request_id = app.create_request(RequestKind.GENERATE, payload)
+        return {"request_id": request_id, "status": "pending"}
+
+    @tool()
+    async def wait_request(request_id: int, timeout_s: int = 300) -> dict[str, Any]:
+        """Wait until the user resolves a request (or the timeout passes). Returns status and metadata only."""
+        deadline = time.monotonic() + min(timeout_s, TOOL_TIMEOUT_MAX)
+        while True:
+            request = app.vault.get_request(request_id)
+            if request.status != "pending" or time.monotonic() >= deadline:
+                return _request_view(request)
+            await asyncio.sleep(0.5)
+
+    @tool()
+    def get_request(request_id: int) -> dict[str, Any]:
+        """Current status of a request."""
+        return _request_view(app.vault.get_request(request_id))
+
+    @tool()
+    def list_requests(status: str | None = None) -> list[dict[str, Any]]:
+        """List requests, optionally filtered by status (pending, done, cancelled)."""
+        return [_request_view(r) for r in app.vault.list_requests(status)]
+
+    @tool()
+    def list_documents() -> list[dict[str, Any]]:
+        """Generated real documents (metadata only; the user exports them from the app)."""
+        return [asdict(d) for d in app.vault.list_documents()]
+
+    return mcp
+
+
+def _request_view(request) -> dict[str, Any]:
+    return {
+        "id": request.id,
+        "kind": request.kind,
+        "status": request.status,
+        "result": request.result,
+        "created_at": request.created_at,
+        "resolved_at": request.resolved_at,
+    }
+
+
+class McpThread(threading.Thread):
+    def __init__(self, app: Blanka):
+        super().__init__(name="blanka-mcp", daemon=True)
+        # localhost only; the SDK adds Host/Origin checks against DNS rebinding. JSON responses keep the
+        # stdio bridge (blanka mcp) a plain request/response proxy.
+        asgi = build_server(app).streamable_http_app(json_response=True)
+        asgi.add_route(HEALTH_PATH, lambda request: PlainTextResponse(HEALTH_TEXT))
+        self.server = uvicorn.Server(
+            uvicorn.Config(asgi, host="127.0.0.1", port=app.config.port, log_level="warning", lifespan="on")
+        )
+
+    def run(self) -> None:
+        self.server.run()
+
+    def stop(self) -> None:
+        self.server.should_exit = True

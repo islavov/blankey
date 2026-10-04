@@ -1,0 +1,52 @@
+[project]
+name = "blanka"
+version = "0.1.0"
+description = "Local encrypted PII vault and document templating with an MCP server"
+readme = "README.md"
+authors = [
+    { name = "Ivelin", email = "hello@blankey.io" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "argon2-cffi>=25.1.0",
+    "cryptography>=50.0.2",
+    "docxtpl>=0.20.2",
+    "keyring>=25.7.0",
+    "mcp[cli]>=2.3.0",
+    "pikepdf>=10.16.0",
+    "platformdirs>=4.12.3",
+    "pyhanko[pkcs11]>=0.37.0",
+    "pypdf>=6.19.0",
+    "pypdfium2>=5.13.0",
+    "pyside6>=6.11.2",
+    "pyyaml>=6.0.3",
+    "reportlab>=5.0.1",
+    "typst>=0.15.0",
+]
+
+[project.scripts]
+blanka = "blanka.app:main"
+
+[build-system]
+requires = ["uv_build>=0.11.3,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-qt>=4.5.0",
+    "ruff>=0.16.10",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# Cyrillic text is intentional
+ignore = ["RUF001", "RUF002", "RUF003"]
