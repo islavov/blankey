@@ -2,43 +2,21 @@ import signal
 import sys
 import time
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QEvent, QObject, QTimer, Signal
+from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon, QWidget
 
 from blanka import bridge
 from blanka.config import load_config
 from blanka.core import Blanka
 from blanka.mcp_server import McpThread
-from blanka.ui import platform
+from blanka.ui import icons, platform
 from blanka.ui.profiles import ProfilesWindow
 from blanka.ui.requests import open_request
 from blanka.ui.unlock import SetupDialog, UnlockDialog, ensure_unlocked
 from blanka.ui.windows import DocumentsWindow, RequestsWindow, TemplatesWindow, clear_opened_documents
 
 USER_INPUT_EVENTS = {QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.Wheel}
-
-
-def tray_icon(locked: bool, pending: int) -> QIcon:
-    pixmap = QPixmap(64, 64)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor("#5f6b7a") if locked else QColor("#2e7d32"))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawRoundedRect(4, 4, 56, 56, 12, 12)
-    painter.setPen(QColor("white"))
-    font = QFont()
-    font.setPixelSize(40)
-    font.setBold(True)
-    painter.setFont(font)
-    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "B")
-    if pending:
-        painter.setBrush(QColor("#e53935"))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(40, 0, 24, 24)
-    painter.end()
-    return QIcon(pixmap)
 
 
 class Bridge(QObject):
@@ -178,7 +156,7 @@ class Tray(QObject):
 
     def _refresh_icon(self) -> None:
         pending = len(self.app.vault.list_requests("pending"))
-        self.tray.setIcon(tray_icon(not self.app.vault.unlocked, pending))
+        self.tray.setIcon(icons.tray_icon(locked=not self.app.vault.unlocked, pending=pending > 0))
 
     # -- requests from Claude ----------------------------------------------------
 
@@ -220,6 +198,7 @@ def main() -> None:
     qt_app = QApplication(sys.argv)
     qt_app.setApplicationName("Blanka")
     qt_app.setQuitOnLastWindowClosed(False)
+    qt_app.setWindowIcon(icons.app_icon())
     if not QSystemTrayIcon.isSystemTrayAvailable():
         QMessageBox.critical(None, "Blanka", "No system tray available (on GNOME install the AppIndicator extension).")
         sys.exit(1)
