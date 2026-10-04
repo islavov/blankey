@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from blanka import biometric
+from blanka.core import Blanka
 from blanka.vault import Vault, WrongSecret
 
 MIN_PASSWORD = 8
@@ -32,7 +34,8 @@ class SetupDialog(QDialog):
         self.setWindowTitle("Blanka - new vault")
         self.password = _password_edit()
         self.repeat = _password_edit()
-        self.use_keyring = QCheckBox("Unlock automatically with the system keychain")
+        keyring_label = "Unlock with Touch ID" if biometric.available() else "Unlock automatically with the keychain"
+        self.use_keyring = QCheckBox(keyring_label)
         form = QFormLayout()
         form.addRow("Master password", self.password)
         form.addRow("Repeat", self.repeat)
@@ -102,8 +105,16 @@ class UnlockDialog(QDialog):
         form = QFormLayout()
         form.addRow("Password", self.password)
         layout.addLayout(form)
+        if vault.keyring_enabled and biometric.available():
+            touch_id = QPushButton("Use Touch ID")
+            touch_id.clicked.connect(self._touch_id)
+            layout.addWidget(touch_id)
         layout.addWidget(recover)
         layout.addWidget(buttons)
+
+    def _touch_id(self) -> None:
+        if quick_unlock(self.vault):
+            self.accept()
 
     def _unlock(self) -> None:
         try:
@@ -139,7 +150,16 @@ class UnlockDialog(QDialog):
         self.accept()
 
 
-def ensure_unlocked(vault: Vault, parent: QWidget | None = None, reason: str = "") -> bool:
-    if vault.unlocked or vault.unlock_with_keyring():
+def quick_unlock(vault: Vault, reason: str = "") -> bool:
+    """Unlock with the keychain-wrapped key; on machines with a fingerprint reader it needs a scan first."""
+    if not vault.keyring_enabled:
+        return False
+    if biometric.available() and not biometric.authenticate(reason or "unlock the Blanka vault"):
+        return False
+    return vault.unlock_with_keyring()
+
+
+def ensure_unlocked(app: Blanka, parent: QWidget | None = None, reason: str = "") -> bool:
+    if app.vault.unlocked or quick_unlock(app.vault, reason):
         return True
-    return UnlockDialog(vault, reason, parent).exec() == QDialog.DialogCode.Accepted
+    return UnlockDialog(app.vault, reason, parent).exec() == QDialog.DialogCode.Accepted

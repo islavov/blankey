@@ -239,7 +239,7 @@ class GenerateDialog(QDialog):
 def open_request(app: Blanka, request: Request, parent: QWidget | None = None) -> None:
     if request.status != "pending":
         return
-    if not ensure_unlocked(app.vault, parent, "Claude sent a request. Unlock the vault to continue."):
+    if not ensure_unlocked(app, parent, "Claude sent a request. Unlock the vault to continue."):
         return
     match request.kind:
         case "profile_input":

@@ -6,14 +6,14 @@ from PySide6.QtCore import QEvent, QObject, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon, QWidget
 
-from blanka import bridge
+from blanka import biometric, bridge
 from blanka.config import load_config
 from blanka.core import Blanka
 from blanka.mcp_server import McpThread
 from blanka.ui import icons, platform
 from blanka.ui.profiles import ProfilesWindow
 from blanka.ui.requests import open_request
-from blanka.ui.unlock import SetupDialog, UnlockDialog, ensure_unlocked
+from blanka.ui.unlock import SetupDialog, ensure_unlocked
 from blanka.ui.windows import DocumentsWindow, RequestsWindow, TemplatesWindow, clear_opened_documents
 
 USER_INPUT_EVENTS = {QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.Wheel}
@@ -79,7 +79,8 @@ class Tray(QObject):
         self.menu.addAction(status)
         self.menu.addAction("Connect Claude Desktop", self._connect_claude_desktop)
         self.menu.addAction("Copy Claude Code command", self._copy_mcp_command)
-        keyring_action = QAction("Unlock with keychain", self.menu, checkable=True)
+        label = "Unlock with Touch ID" if biometric.available() else "Unlock with keychain"
+        keyring_action = QAction(label, self.menu, checkable=True)
         keyring_action.setChecked(vault.keyring_enabled)
         keyring_action.setEnabled(vault.unlocked)
         keyring_action.toggled.connect(self._toggle_keyring)
@@ -98,7 +99,7 @@ class Tray(QObject):
             "templates": TemplatesWindow,
             "requests": RequestsWindow,
         }
-        if name == "profiles" and not ensure_unlocked(self.app.vault):
+        if name == "profiles" and not ensure_unlocked(self.app):
             return
         window = self.windows.get(name)
         if window is None:
@@ -134,7 +135,7 @@ class Tray(QObject):
 
     def _unlock(self) -> None:
         platform.bring_to_front()
-        UnlockDialog(self.app.vault).exec()
+        ensure_unlocked(self.app)
         self._refresh_icon()
 
     def _lock(self) -> None:
@@ -213,8 +214,8 @@ def main() -> None:
         platform.bring_to_front()
         if SetupDialog(app.vault).exec() != QDialog.DialogCode.Accepted:
             sys.exit(0)
-    else:
-        app.vault.unlock_with_keyring()
+    elif not biometric.available():
+        app.vault.unlock_with_keyring()  # with Touch ID the vault stays locked until first use
 
     mcp = McpThread(app)
     mcp.start()

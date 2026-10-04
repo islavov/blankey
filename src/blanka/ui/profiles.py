@@ -85,7 +85,7 @@ class ProfilesWindow(QWidget):
         self.table.setRowCount(0)
         self._removed.clear()
         profile_id = self._profile_id()
-        if profile_id is None or not ensure_unlocked(self.app.vault, self):
+        if profile_id is None or not ensure_unlocked(self.app, self):
             return
         values = self.app.vault.get_values(profile_id)
         for info in self.app.vault.describe(profile_id):
@@ -113,7 +113,7 @@ class ProfilesWindow(QWidget):
 
     def _save(self) -> None:
         profile_id = self._profile_id()
-        if profile_id is None or not ensure_unlocked(self.app.vault, self):
+        if profile_id is None or not ensure_unlocked(self.app, self):
             return
         inputs, errors, seen = [], [], set()
         for row in range(self.table.rowCount()):

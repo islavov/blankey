@@ -83,7 +83,7 @@ class DocumentsWindow(QWidget):
 
     def _open(self) -> None:
         doc = self._selected()
-        if doc is None or not ensure_unlocked(self.app.vault, self):
+        if doc is None or not ensure_unlocked(self.app, self):
             return
         OPEN_DIR.mkdir(mode=0o700, exist_ok=True)
         path = OPEN_DIR / doc.filename
@@ -92,7 +92,7 @@ class DocumentsWindow(QWidget):
 
     def _export(self) -> None:
         doc = self._selected()
-        if doc is None or not ensure_unlocked(self.app.vault, self):
+        if doc is None or not ensure_unlocked(self.app, self):
             return
         target, _ = QFileDialog.getSaveFileName(self, "Export", str(Path.home() / doc.filename))
         if target:
@@ -144,7 +144,7 @@ class TemplatesWindow(QWidget):
 
     def _generate(self) -> None:
         item = self.list.currentItem()
-        if item is None or not ensure_unlocked(self.app.vault, self):
+        if item is None or not ensure_unlocked(self.app, self):
             return
         template = self.app.templates.get(item.data(Qt.ItemDataRole.UserRole))
         dialog = QDialog(self)
