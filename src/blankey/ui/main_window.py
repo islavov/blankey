@@ -3,7 +3,7 @@
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, QRect, QSize, Qt
-from PySide6.QtGui import QAction, QColor, QFont, QKeySequence, QPainter, QPalette
+from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QKeySequence, QPainter, QPalette
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -28,7 +28,7 @@ from blankey.core import Blankey
 from blankey.ui import macos, platform
 from blankey.ui.pages import ActivityPage, DocumentsPage, FillSetsPage, TemplatesPage
 from blankey.ui.profiles import ProfilesPage
-from blankey.ui.widgets import Page, accent_color, fit_to_screen, secondary_color
+from blankey.ui.widgets import Page, accent_color, secondary_color
 
 SECTIONS: list[tuple[str, list[type[Page]]]] = [
     ("Claude", [ActivityPage]),
@@ -109,7 +109,9 @@ class MainWindow(QMainWindow):
         self.on_lock = on_lock
         self.setWindowTitle("Blankey")
         self.setUnifiedTitleAndToolBarOnMac(True)
-        fit_to_screen(self, 0.72, 0.75, 1100, 680)
+        # zoomed: fills the screen outside the menu bar and Dock, title bar included; not a full-screen Space
+        self.resize((self.screen() or QGuiApplication.primaryScreen()).availableGeometry().size())
+        self.setWindowState(Qt.WindowState.WindowMaximized)
 
         self.pages: list[Page] = []
         self.sidebar = QListWidget()
