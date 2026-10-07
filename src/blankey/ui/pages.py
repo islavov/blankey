@@ -1,5 +1,6 @@
 """Main window pages: Claude activity, fill sets, documents and templates."""
 
+import html
 from pathlib import Path
 
 from PySide6.QtCore import QRect, QRectF, QSize, Qt, QUrl
@@ -21,7 +22,6 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QHBoxLayout,
-    QLabel,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -412,11 +412,8 @@ class TemplatePreview(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(4)
-        self.id_label = QLabel()
-        self.id_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        mono = QFont("Menlo")
-        mono.setPointSizeF(self.id_label.font().pointSizeF() - 1)
-        self.id_label.setFont(mono)
+        self.info.setTextFormat(Qt.TextFormat.RichText)
+        self.info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.copy_button = QPushButton("Copy ID")
         self.copy_button.setToolTip("Copy the template ID to give to Claude")
         self.copy_button.setVisible(False)
@@ -424,7 +421,6 @@ class TemplatePreview(QWidget):
         self.info.setMinimumWidth(1)
         details = QHBoxLayout()
         details.setSpacing(12)
-        details.addWidget(self.id_label, 0, Qt.AlignmentFlag.AlignVCenter)
         details.addWidget(self.info, 1, Qt.AlignmentFlag.AlignVCenter)
         details.addWidget(self.copy_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.heading)
@@ -434,20 +430,22 @@ class TemplatePreview(QWidget):
 
     def clear(self) -> None:
         self.heading.setText("")
-        self.id_label.setText("")
         self.copy_button.setVisible(False)
         self.info.setText("")
         self.stack.setCurrentWidget(self.message)
 
     def show_template(self, template: Template, examples: list[dict], used_by: list[str]) -> None:
         blanks = docx.variables(template.source_path) if template.kind == TemplateKind.DOCX else list(template.fields)
-        parts = [f"{len(blanks)} blanks", f"roles: {', '.join(template.roles) or '-'}"]
+        parts = [
+            f'<span style="font-family: Menlo">{html.escape(template.id)}</span>',
+            f"{len(blanks)} blanks",
+            html.escape(f"roles: {', '.join(template.roles) or '-'}"),
+        ]
         if used_by:
-            parts.append(f"used by: {', '.join(used_by)}")
+            parts.append(html.escape(f"used by: {', '.join(used_by)}"))
         self.heading.setText(template.name)
-        self.id_label.setText(template.id)
         self.copy_button.setVisible(True)
-        self.info.setText("  ·  ".join(parts))
+        self.info.setText("&nbsp; · &nbsp;".join(parts))
         if template.kind == TemplateKind.DOCX:
             self.browser.setHtml(docx.to_html(template.source_path, template.labels))
             self.stack.setCurrentWidget(self.browser)

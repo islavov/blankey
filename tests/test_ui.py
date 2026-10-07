@@ -226,7 +226,7 @@ def test_templates_page_previews_docx_and_deletes(qtbot, app, filled_docx, tmp_p
     item = page.list.item(0)
     assert (item.text(), item.data(Qt.ItemDataRole.UserRole)) == ("Договор", "loan")
     assert item.data(Qt.ItemDataRole.UserRole + 1) == "Word  ·  1 blank  ·  1 fill set"
-    assert page.preview.id_label.text() == "loan"
+    assert page.preview.info.text().startswith('<span style="font-family: Menlo">loan</span>')
     page.copy_id()
     assert QGuiApplication.clipboard().text() == "loan"
     page.filter("nothing")
