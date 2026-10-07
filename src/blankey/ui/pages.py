@@ -60,7 +60,7 @@ class TablePage(Page):
         self.table.setHorizontalHeaderLabels(list(self.columns))
         style_table(self.table)
         self.table.doubleClicked.connect(lambda *_: self.open())
-        empty = secondary_label(self.empty_text, smaller=False)
+        self.empty_label = empty = secondary_label(self.empty_text, smaller=False)
         empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.list_area = QWidget()
         self.stack = QStackedLayout(self.list_area)
@@ -153,10 +153,21 @@ class ActivityPage(TablePage):
         self.pending = 0
         self.refresh()
 
+    def activate(self) -> bool:
+        if not ensure_unlocked(self.app, self.window(), "Activity is encrypted. Unlock the vault to see it."):
+            return False
+        self.refresh()
+        return True
+
     def refresh(self) -> None:
+        self.pending = self.app.vault.count_requests("pending")
+        locked = not self.app.vault.unlocked
+        self.empty_label.setText("Activity is encrypted. Unlock the vault to see it." if locked else self.empty_text)
+        if locked:
+            self.set_rows([])
+            return
         requests = sorted(self.app.vault.list_requests(), key=lambda r: (r.status != "pending", -r.id))
         names = {t.id: t.name for t in self.app.templates.all()}
-        self.pending = sum(r.status == "pending" for r in requests)
         self.set_rows(
             [
                 (

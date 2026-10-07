@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from typing import Self
 
 from argon2.low_level import Type, hash_secret_raw
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 KEY_SIZE = 32
 NONCE_SIZE = 12
@@ -66,3 +69,36 @@ def new_recovery_key() -> str:
 def normalize_recovery_key(value: str) -> str:
     raw = "".join(ch for ch in value.upper() if ch.isalnum())
     return "-".join(raw[i : i + 4] for i in range(0, len(raw), 4))
+
+
+# -- sealing: encrypt with a public key while the vault is locked, open only when unlocked --------
+
+SEAL_INFO = b"blankey:seal"
+
+
+def new_seal_keypair() -> tuple[bytes, bytes]:
+    """(private, public) X25519 raw keys."""
+    private = X25519PrivateKey.generate()
+    return private.private_bytes_raw(), private.public_key().public_bytes_raw()
+
+
+def _seal_key(shared: bytes, ephemeral: bytes, public: bytes) -> bytes:
+    return HKDF(algorithm=hashes.SHA256(), length=KEY_SIZE, salt=None, info=SEAL_INFO + ephemeral + public).derive(
+        shared
+    )
+
+
+def seal(public: bytes, plaintext: bytes, aad: bytes) -> bytes:
+    ephemeral = X25519PrivateKey.generate()
+    ephemeral_public = ephemeral.public_key().public_bytes_raw()
+    key = _seal_key(ephemeral.exchange(X25519PublicKey.from_public_bytes(public)), ephemeral_public, public)
+    nonce, ct = encrypt(key, plaintext, aad)
+    return ephemeral_public + nonce + ct
+
+
+def unseal(private: bytes, sealed: bytes, aad: bytes) -> bytes:
+    secret = X25519PrivateKey.from_private_bytes(private)
+    ephemeral_public, nonce, ct = sealed[:32], sealed[32 : 32 + NONCE_SIZE], sealed[32 + NONCE_SIZE :]
+    public = secret.public_key().public_bytes_raw()
+    key = _seal_key(secret.exchange(X25519PublicKey.from_public_bytes(ephemeral_public)), ephemeral_public, public)
+    return decrypt(key, nonce, ct, aad)

@@ -66,6 +66,10 @@ SCHEMA = [
         ciphertext BLOB NOT NULL
     );
     """,
+    """
+    ALTER TABLE requests ADD COLUMN sealed_payload BLOB;
+    ALTER TABLE requests ADD COLUMN sealed_result BLOB;
+    """,
 ]
 
 

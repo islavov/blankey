@@ -263,6 +263,7 @@ def open_request(app: Blankey, request: Request, parent: QWidget | None = None) 
         return
     if not ensure_unlocked(app, parent, "Claude sent a request. Unlock the vault to continue."):
         return
+    request = app.vault.get_request(request.id)  # the payload is readable only now
     match request.kind:
         case "profile_input":
             ProfileInputDialog(app, request, parent).exec()

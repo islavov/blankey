@@ -18,6 +18,8 @@ from blankey.vault.fieldtypes import FieldType
 
 KEYRING_SERVICE = "blankey"
 KEYRING_USER = "vault-kek"
+REQUEST_PUBLIC_KEY = "request_public_key"
+REQUEST_PRIVATE_KEY = "request_private_key"
 
 
 class VaultLocked(Exception):
@@ -82,6 +84,11 @@ class Request:
     result: dict[str, Any] | None
     created_at: str
     resolved_at: str | None
+    hidden: bool = False  # payload sealed and the vault is locked
+
+
+def _request_aad(request_id: int, part: str = "payload") -> bytes:
+    return f"request:{request_id}|{part}".encode()
 
 
 def now() -> str:
@@ -108,6 +115,8 @@ class Vault:
         self._conn = db.connect(path)
         self._lock = threading.RLock()
         self._dek: bytes | None = None
+        self._seal_private: bytes | None = None
+        self._results: dict[int, dict[str, Any]] = {}  # resolved results for Claude, kept for this process
 
     # -- key management ----------------------------------------------------
 
@@ -132,6 +141,7 @@ class Vault:
             kek = crypto.derive_key(recovery_key, params)
             self._set_meta("wrapped_recovery", crypto.wrap_key(kek, dek))
             self._dek = dek
+            self._after_unlock()
             if use_keyring:
                 self.enable_keyring()
         return recovery_key
@@ -175,6 +185,7 @@ class Vault:
 
     def lock(self) -> None:
         self._dek = None
+        self._seal_private = None
 
     def _set_password(self, dek: bytes, password: str) -> None:
         params = crypto.KdfParams.new()
@@ -189,6 +200,7 @@ class Vault:
             self._dek = crypto.unwrap_key(kek, wrapped)
         except InvalidTag as exc:
             raise WrongSecret(meta_key) from exc
+        self._after_unlock()
 
     def _require_dek(self) -> bytes:
         if self._dek is None:
@@ -438,13 +450,19 @@ class Vault:
         return FillSetInfo(row["id"], row["name"], json.loads(row["templates"]), profiles, row["updated_at"])
 
     # -- requests ----------------------------------------------------------
+    # Payloads and results are sealed to the request public key, so the MCP thread can store a request while
+    # the vault is locked, and only an unlocked vault can read it. Kind, status and timestamps stay readable.
 
     def create_request(self, kind: str, payload: dict[str, Any]) -> int:
-        cur = self._execute(
-            "INSERT INTO requests (kind, payload, created_at) VALUES (?, ?, ?)",
-            (kind, json.dumps(payload, ensure_ascii=False), now()),
-        )
-        return cur.lastrowid
+        public = self._meta(REQUEST_PUBLIC_KEY)
+        if public is None:
+            raise VaultLocked("Unlock Blankey once to enable requests from Claude")
+        with self._lock, self._transaction():
+            cur = self._execute("INSERT INTO requests (kind, payload, created_at) VALUES (?, '{}', ?)", (kind, now()))
+            request_id = cur.lastrowid
+            sealed = crypto.seal(public, json.dumps(payload, ensure_ascii=False).encode(), _request_aad(request_id))
+            self._execute("UPDATE requests SET sealed_payload = ? WHERE id = ?", (sealed, request_id))
+        return request_id
 
     def get_request(self, request_id: int) -> Request:
         row = self._execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
@@ -459,23 +477,63 @@ class Vault:
             rows = self._execute("SELECT * FROM requests ORDER BY id DESC LIMIT 100").fetchall()
         return [self._request(r) for r in rows]
 
+    def count_requests(self, status: str) -> int:
+        return self._execute("SELECT COUNT(*) FROM requests WHERE status = ?", (status,)).fetchone()[0]
+
     def resolve_request(self, request_id: int, status: str, result: dict[str, Any]) -> None:
+        public = self._meta(REQUEST_PUBLIC_KEY)
+        plain = json.dumps(result, ensure_ascii=False).encode()
+        sealed = crypto.seal(public, plain, _request_aad(request_id, "result"))
         self._execute(
-            "UPDATE requests SET status = ?, result = ?, resolved_at = ? WHERE id = ?",
-            (status, json.dumps(result, ensure_ascii=False), now(), request_id),
+            "UPDATE requests SET status = ?, result = NULL, sealed_result = ?, resolved_at = ? WHERE id = ?",
+            (status, sealed, now(), request_id),
+        )
+        self._results[request_id] = result
+
+    def _request(self, row) -> Request:
+        payload: dict[str, Any] = {}
+        result = self._results.get(row["id"])
+        hidden = False
+        if row["sealed_payload"] is not None:
+            if self._seal_private is None:
+                hidden = True
+            else:
+                aad = _request_aad(row["id"])
+                payload = json.loads(crypto.unseal(self._seal_private, row["sealed_payload"], aad))
+        else:
+            payload = json.loads(row["payload"])
+        if result is None and row["sealed_result"] is not None and self._seal_private is not None:
+            aad = _request_aad(row["id"], "result")
+            result = json.loads(crypto.unseal(self._seal_private, row["sealed_result"], aad))
+        elif result is None and row["result"]:
+            result = json.loads(row["result"])
+        return Request(
+            row["id"], row["kind"], payload, row["status"], result, row["created_at"], row["resolved_at"], hidden
         )
 
-    @staticmethod
-    def _request(row) -> Request:
-        return Request(
-            row["id"],
-            row["kind"],
-            json.loads(row["payload"]),
-            row["status"],
-            json.loads(row["result"]) if row["result"] else None,
-            row["created_at"],
-            row["resolved_at"],
-        )
+    def _after_unlock(self) -> None:
+        """Create the request key pair on first unlock, then seal requests stored before sealing existed."""
+        private = self.get_secret(REQUEST_PRIVATE_KEY)
+        if private is None:
+            private, public = crypto.new_seal_keypair()
+            self.put_secret(REQUEST_PRIVATE_KEY, private)
+            self._set_meta(REQUEST_PUBLIC_KEY, public)
+        self._seal_private = private
+        public = self._meta(REQUEST_PUBLIC_KEY)
+        rows = self._execute("SELECT id, payload, result FROM requests WHERE sealed_payload IS NULL").fetchall()
+        with self._lock, self._transaction():
+            for row in rows:
+                sealed_payload = crypto.seal(public, row["payload"].encode(), _request_aad(row["id"]))
+                sealed_result = (
+                    crypto.seal(public, row["result"].encode(), _request_aad(row["id"], "result"))
+                    if row["result"]
+                    else None
+                )
+                self._execute(
+                    "UPDATE requests SET payload = '{}', result = NULL, sealed_payload = ?, sealed_result = ? "
+                    "WHERE id = ?",
+                    (sealed_payload, sealed_result, row["id"]),
+                )
 
     # -- audit & maintenance -----------------------------------------------
 

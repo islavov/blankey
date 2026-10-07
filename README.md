@@ -34,8 +34,10 @@ connections, the SDK rejects foreign Host/Origin headers (DNS rebinding), and no
 - Field keys, labels, types and value lengths are plaintext metadata. That is all MCP can read.
 - MCP tools render templates only with example data. Real documents are rendered in the app,
   after the user approves the request, and stored encrypted. Only metadata goes back to Claude.
-- Requests from Claude (`request_profile_input`, `request_generate`) open a dialog in the app;
+- Requests from Claude (`request_profile_input`, `request_generate`, `request_fill`) open a dialog in the app;
   Claude blocks on `wait_request` until the user saves, approves or cancels.
+- Request payloads and results are sealed to a request key pair (X25519 + AES-GCM): stored while the vault
+  is locked, readable only after unlocking. The Activity page needs an unlocked vault.
 - `tests/test_mcp.py` pushes sentinel values through every tool and asserts they never come back.
 
 ## Templates

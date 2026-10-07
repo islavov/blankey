@@ -67,7 +67,7 @@ class Tray(QObject):
         else:
             self.menu.addAction("Unlock…", self._unlock)
         self.menu.addSeparator()
-        pending = len(vault.list_requests("pending"))
+        pending = vault.count_requests("pending")
         label = f"Open Blankey ({pending} from Claude)" if pending else "Open Blankey"
         self.menu.addAction(label, self.open_main)
         self.menu.addSeparator()
@@ -96,7 +96,7 @@ class Tray(QObject):
             self.main = MainWindow(self.app, on_lock=self._lock, on_quit=self.quit)
         else:
             self.main.refresh()
-        if self.app.vault.list_requests("pending"):
+        if self.app.vault.count_requests("pending"):
             self.main.show_page(ActivityPage)
         self.main.show()
         self.main.raise_()
@@ -149,7 +149,7 @@ class Tray(QObject):
         return False
 
     def _refresh_icon(self) -> None:
-        pending = len(self.app.vault.list_requests("pending"))
+        pending = self.app.vault.count_requests("pending")
         self.tray.setIcon(icons.tray_icon(locked=not self.app.vault.unlocked, pending=pending > 0))
 
     # -- requests from Claude ----------------------------------------------------
@@ -157,7 +157,8 @@ class Tray(QObject):
     def _on_request(self, request_id: int) -> None:
         self._refresh_icon()
         request = self.app.vault.get_request(request_id)
-        message = request.payload.get("reason") or "Claude asks you to approve a document."
+        # the reason is sealed until the vault is unlocked
+        message = request.payload.get("reason") or "Claude sent a request. Open Blankey to review it."
         self.tray.showMessage("Request from Claude", message, QSystemTrayIcon.MessageIcon.Information, 8000)
         QTimer.singleShot(0, self._process_requests)
 

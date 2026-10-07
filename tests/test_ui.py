@@ -227,3 +227,13 @@ def test_templates_page_previews_docx_and_deletes(qtbot, app, filled_docx, tmp_p
     page._delete()
     assert app.templates.all() == []
     assert page.preview.heading.text() == ""
+
+
+def test_activity_is_hidden_while_locked(qtbot, app):
+    app.vault.create_request("fill", {"templates": ["t"], "name": "secret-set", "reason": "Тайно"})
+    app.vault.lock()
+    page = pages.ActivityPage(app)
+    qtbot.addWidget(page)
+    assert page.table.rowCount() == 0
+    assert page.badge() == 1
+    assert "Unlock" in page.empty_label.text()

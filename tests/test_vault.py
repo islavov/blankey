@@ -107,3 +107,54 @@ def test_validation(field_type, value, ok):
 def test_validators_direct():
     assert valid_egn("7501020018")
     assert valid_iban("BG80BNBG96611020345678")
+
+
+def test_requests_are_sealed_and_need_unlock(app):
+    vault = app.vault
+    request_id = vault.create_request("fill", {"reason": "Договор за Тайнов", "values": {"x": "Тайна"}})
+    row = (
+        sqlite3.connect(app.config.db_path)
+        .execute("SELECT payload, sealed_payload FROM requests WHERE id = ?", (request_id,))
+        .fetchone()
+    )
+    assert row[0] == "{}" and "Тайн".encode() not in row[1]
+
+    vault.lock()
+    hidden = vault.get_request(request_id)
+    assert hidden.hidden and hidden.payload == {} and hidden.kind == "fill"
+    assert vault.count_requests("pending") == 1
+    vault.unlock(PASSWORD)
+    assert vault.get_request(request_id).payload["reason"] == "Договор за Тайнов"
+
+    vault.resolve_request(request_id, "done", {"outcome": "saved", "fill_set_id": 3})
+    raw = sqlite3.connect(app.config.db_path).execute("SELECT result FROM requests").fetchone()[0]
+    assert raw is None
+    vault.lock()
+    assert vault.get_request(request_id).result == {"outcome": "saved", "fill_set_id": 3}  # kept for Claude
+
+    fresh = Vault(app.config.db_path)
+    assert fresh.get_request(request_id).result is None
+    fresh.unlock(PASSWORD)
+    assert fresh.get_request(request_id).result["fill_set_id"] == 3
+    fresh.close()
+
+
+def test_plaintext_requests_from_before_sealing_are_sealed_on_unlock(app):
+    conn = sqlite3.connect(app.config.db_path)
+    conn.execute(
+        "INSERT INTO requests (kind, payload, status, result, created_at) VALUES "
+        "('generate', '{\"reason\": \"Стар\"}', 'done', '{\"outcome\": \"generated\"}', '2026-01-01')"
+    )
+    conn.commit()
+    app.vault.lock()
+    app.vault.unlock(PASSWORD)
+    payload, result, sealed = conn.execute("SELECT payload, result, sealed_payload FROM requests").fetchone()
+    assert payload == "{}" and result is None and sealed is not None
+    request = app.vault.list_requests()[0]
+    assert request.payload == {"reason": "Стар"} and request.result == {"outcome": "generated"}
+
+
+def test_requests_need_a_key_pair(app):
+    app.vault._execute("DELETE FROM meta WHERE key = 'request_public_key'")
+    with pytest.raises(VaultLocked, match="Unlock Blankey once"):
+        app.vault.create_request("fill", {})
