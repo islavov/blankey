@@ -1,5 +1,6 @@
 """Turn a filled .docx into a docxtpl template and find its blanks."""
 
+import html
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -8,6 +9,9 @@ from typing import Any
 
 import docx
 from docx.document import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.table import Table
 from docx.text.paragraph import Paragraph
 
 TAG_RE = re.compile(r"\{\{\s*([A-Za-z_]\w*)[^}]*\}\}")
@@ -121,3 +125,52 @@ def blank_contexts(path: Path, width: int = 400) -> dict[str, list[str]]:
                 after = after[:half] + "…"
             contexts.setdefault(match.group(1), []).append(" ".join((before + BLANK + after).split()))
     return contexts
+
+
+ALIGN = {WD_ALIGN_PARAGRAPH.CENTER: "center", WD_ALIGN_PARAGRAPH.RIGHT: "right", WD_ALIGN_PARAGRAPH.JUSTIFY: "justify"}
+
+
+def _run_html(run, labels: dict[str, str]) -> str:
+    text = html.escape(run.text)
+    text = TAG_RE.sub(lambda m: f'<span class="blank">&nbsp;{html.escape(labels.get(m[1]) or m[1])}&nbsp;</span>', text)
+    if run.bold:
+        text = f"<b>{text}</b>"
+    if run.italic:
+        text = f"<i>{text}</i>"
+    if run.underline:
+        text = f"<u>{text}</u>"
+    if run.font.size is not None:
+        text = f'<span style="font-size:{run.font.size.pt:g}pt">{text}</span>'
+    return text
+
+
+def _paragraph_html(paragraph: Paragraph, labels: dict[str, str]) -> str:
+    body = "".join(_run_html(run, labels) for run in paragraph.runs) or "&nbsp;"
+    align = ALIGN.get(paragraph.alignment)
+    style = paragraph.style.name if paragraph.style is not None else ""
+    if style.startswith(("Heading", "Title")):
+        body = f'<span style="font-size:15pt; font-weight:600">{body}</span>'
+    return f'<p align="{align}">{body}</p>' if align else f"<p>{body}</p>"
+
+
+def to_html(path: Path, labels: dict[str, str] | None = None) -> str:
+    """The document body as simple HTML for a read-only preview; {{ var }} tags become
+    <span class="blank"> chips showing the variable's label."""
+    labels = labels or {}
+    document = docx.Document(str(path))
+    parts = []
+    for child in document.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            parts.append(_paragraph_html(Paragraph(child, document), labels))
+        elif child.tag == qn("w:tbl"):
+            rows = []
+            for row in Table(child, document).rows:
+                seen, cells = set(), []
+                for cell in row.cells:
+                    if id(cell._tc) in seen:
+                        continue
+                    seen.add(id(cell._tc))
+                    cells.append("<td>" + "".join(_paragraph_html(p, labels) for p in cell.paragraphs) + "</td>")
+                rows.append("<tr>" + "".join(cells) + "</tr>")
+            parts.append('<table width="100%" cellpadding="4">' + "".join(rows) + "</table>")
+    return "\n".join(parts)

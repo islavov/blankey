@@ -240,3 +240,12 @@ def test_source_menu_and_typing(qtbot, app, template, profiles):
     qtbot.keyClick(editor, Qt.Key.Key_Return)
     qtbot.waitUntil(lambda: dialog.current_bindings()["loan_amount"] == {"value": "50 000"})
     assert dialog.describe_row(row)[:3] == ("Value", "", "50 000")
+
+
+def test_docx_to_html_shows_blanks_as_chips(template):
+    html = docx_template.to_html(template.source_path, {"loan_amount": "Сума & <лихва>"})
+    assert '<span class="blank">&nbsp;Сума &amp; &lt;лихва&gt;&nbsp;</span>' in html
+    assert '<span class="blank">&nbsp;company_name&nbsp;</span>' in html
+    assert "<b>1. " in html
+    assert "<table" in html and "<td>" in html
+    assert "{{" not in html

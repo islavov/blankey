@@ -208,3 +208,22 @@ def test_activity_lists_waiting_first_with_outcomes(qtbot, app):
         ["Profile data", "2 fields", "Saved 1 field, 1 skipped"],
     ]
     assert page.badge() == 1 and page.subtitle() == "1 waiting"
+
+
+def test_templates_page_previews_docx_and_deletes(qtbot, app, filled_docx, tmp_path, monkeypatch):
+    from blankey.templates import docx
+
+    target = tmp_path / "t.docx"
+    docx.tokenize(filled_docx, target, [{"find": "34 000", "var": "amount"}])
+    app.templates.save("loan", "Договор", TemplateKind.DOCX, {"company": "c"}, {}, source_file=target)
+    app.vault.save_fill_set("delta", ["loan"], {}, {})
+    page = pages.TemplatesPage(app)
+    qtbot.addWidget(page)
+    assert page.preview.heading.text() == "Договор"
+    assert "used by: delta" in page.preview.info.text()
+    assert "amount" in page.preview.browser.toPlainText()
+    assert not page.generate_action.isVisible()
+    monkeypatch.setattr(pages, "confirm", lambda *args: True)
+    page._delete()
+    assert app.templates.all() == []
+    assert page.preview.heading.text() == ""
