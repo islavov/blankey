@@ -11,6 +11,7 @@ from blankey.ui.profiles import ProfilesPage
 from blankey.ui.requests import GenerateDialog, ProfileInputDialog
 from blankey.ui.widgets import secondary_color
 from blankey.vault import FieldInput
+from tests.conftest import PASSWORD
 
 
 @pytest.fixture(autouse=True)
@@ -288,3 +289,19 @@ def test_switching_templates_keeps_the_split(qtbot, app, filled_docx, tmp_path):
         qtbot.wait(20)
         widths.append((page.list_area.width(), page.preview.width()))
     assert len(set(widths)) == 1
+
+
+def test_unlocking_from_the_window_keeps_it_open(qtbot, app, monkeypatch):
+    from blankey.ui import main_window
+
+    app.vault.lock()
+    locked = []
+    window = MainWindow(app, on_lock=lambda: locked.append(True), on_quit=lambda: None)
+    qtbot.addWidget(window)
+    assert window.lock_button.text() == "Unlock…"
+    monkeypatch.setattr(main_window, "ensure_unlocked", lambda app, parent: app.vault.unlock(PASSWORD) or True)
+    window.lock_button.click()
+    assert app.vault.unlocked and not locked
+    assert window.lock_button.text() == "Lock" and window.lock_label.text() == "Vault unlocked"
+    window.lock_button.click()
+    assert locked == [True]

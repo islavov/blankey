@@ -28,6 +28,7 @@ from blankey.core import Blankey
 from blankey.ui import macos, platform
 from blankey.ui.pages import ActivityPage, DocumentsPage, FillSetsPage, TemplatesPage
 from blankey.ui.profiles import ProfilesPage
+from blankey.ui.unlock import ensure_unlocked
 from blankey.ui.widgets import Page, accent_color, secondary_color
 
 SECTIONS: list[tuple[str, list[type[Page]]]] = [
@@ -134,8 +135,8 @@ class MainWindow(QMainWindow):
                 page.changed.connect(self._update_page_info)
 
         self.lock_label = QLabel()
-        lock_button = QPushButton("Lock")
-        lock_button.clicked.connect(on_lock)
+        self.lock_button = lock_button = QPushButton("Lock")
+        lock_button.clicked.connect(self._toggle_lock)
         footer = QHBoxLayout()
         footer.setContentsMargins(20, 10, 14, 12)
         footer.addWidget(self.lock_label, 1)
@@ -232,7 +233,16 @@ class MainWindow(QMainWindow):
             item = self.sidebar.item(row)
             if item.data(PAGE_ROLE) is not None:
                 item.setData(BADGE_ROLE, self.pages[item.data(PAGE_ROLE)].badge())
-        self.lock_label.setText("Vault unlocked" if self.app.vault.unlocked else "Vault locked")
+        unlocked = self.app.vault.unlocked
+        self.lock_label.setText("Vault unlocked" if unlocked else "Vault locked")
+        self.lock_button.setText("Lock" if unlocked else "Unlock…")
+
+    def _toggle_lock(self) -> None:
+        """Lock closes the window (the tray rebuilds it); unlocking happens in place."""
+        if self.app.vault.unlocked:
+            self.on_lock()
+        elif ensure_unlocked(self.app, self):
+            self.refresh()
 
     def refresh(self) -> None:
         for page in self.pages:
