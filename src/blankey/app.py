@@ -126,7 +126,7 @@ class Tray(QObject):
 
     def _unlock(self) -> None:
         platform.bring_to_front()
-        if ensure_unlocked(self.app) and self.main is not None:
+        if ensure_unlocked(self.app, self.main) and self.main is not None:
             self.main.refresh()
         self._refresh_icon()
 

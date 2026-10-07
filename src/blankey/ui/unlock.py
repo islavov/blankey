@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from blankey import biometric
 from blankey.core import Blankey
+from blankey.ui import platform
 from blankey.vault import Vault, WrongSecret
 
 MIN_PASSWORD = 8
@@ -160,6 +161,19 @@ def quick_unlock(vault: Vault, reason: str = "") -> bool:
 
 
 def ensure_unlocked(app: Blankey, parent: QWidget | None = None, reason: str = "") -> bool:
-    if app.vault.unlocked or quick_unlock(app.vault, reason):
+    if app.vault.unlocked:
+        return True
+    if quick_unlock(app.vault, reason):
+        _return_focus(parent)
         return True
     return UnlockDialog(app.vault, reason, parent).exec() == QDialog.DialogCode.Accepted
+
+
+def _return_focus(parent: QWidget | None) -> None:
+    """The system Touch ID prompt takes focus; macOS may hand it back to the previously active app, leaving
+    our window behind it (it looks closed). Reactivate the app and raise the window."""
+    platform.bring_to_front()
+    if parent is not None:
+        window = parent.window()
+        window.raise_()
+        window.activateWindow()
