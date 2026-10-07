@@ -1,5 +1,6 @@
 """Dialogs for requests coming from Claude: profile input and document generation."""
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -8,7 +9,6 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QMessageBox,
     QVBoxLayout,
@@ -19,7 +19,17 @@ from blankey.core import Blankey, GenerateOptions
 from blankey.render.preview import render_pages
 from blankey.ui.fill import open_fill_request
 from blankey.ui.unlock import ensure_unlocked
-from blankey.ui.widgets import PagePreview, fit_to_screen, input_value, open_documents, value_input
+from blankey.ui.widgets import (
+    HeaderStrip,
+    PagePreview,
+    fit_to_screen,
+    footer_note,
+    input_value,
+    open_documents,
+    secondary_label,
+    separator,
+    value_input,
+)
 from blankey.vault import FieldInput, FieldType, Request
 from blankey.vault.fieldtypes import validate
 
@@ -41,16 +51,23 @@ class ProfileInputDialog(QDialog):
         fit_to_screen(self, 0.45, 0, 720)
 
         layout = QVBoxLayout(self)
-        reason = QLabel(payload.get("reason") or "")
-        reason.setWordWrap(True)
-        layout.addWidget(reason)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        count = len(payload.get("fields", []))
+        target = app.vault.get_profile(self.profile_id).name if self.profile_id is not None else "a new profile"
+        title = f"{count} field{'s' if count != 1 else ''} for {target}"
+        layout.addWidget(HeaderStrip("person.fill", title, payload.get("reason") or ""))
+        layout.addWidget(separator())
 
         form = QFormLayout()
+        form.setContentsMargins(28, 20, 28, 20)
+        form.setVerticalSpacing(12)
+        form.setHorizontalSpacing(12)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         existing: dict[str, tuple[FieldType, str]] = {}
         self.name_edit: QLineEdit | None = None
         if self.profile_id is not None:
-            profile = app.vault.get_profile(self.profile_id)
-            form.addRow("Profile", QLabel(f"<b>{profile.name}</b>"))
             existing = app.vault.get_values(self.profile_id)
         else:
             new_profile = payload.get("new_profile") or {}
@@ -69,12 +86,18 @@ class ProfileInputDialog(QDialog):
             form.addRow(label, widget)
             self.inputs.append((spec, field_type, widget))
         layout.addLayout(form)
-        layout.addWidget(QLabel("<small>Values stay in Blankey. Claude only sees the keys and lengths.</small>"))
+        layout.addStretch()
+        layout.addWidget(separator())
 
+        footer = QHBoxLayout()
+        footer.setContentsMargins(20, 12, 20, 14)
+        footer.addWidget(footer_note("Values stay in Blankey. Claude only sees the field names and lengths."), 1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Save).setDefault(True)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        footer.addWidget(buttons)
+        layout.addLayout(footer)
 
     def _save(self) -> None:
         errors, items, statuses = [], [], []
@@ -140,13 +163,9 @@ class GenerateDialog(QDialog):
 
         side = QVBoxLayout()
         names = ", ".join(f"{role}: {app.vault.get_profile(pid).name}" for role, pid in profiles.items())
-        info = QLabel(f"<b>{template.name}</b><br>{names}")
-        info.setWordWrap(True)
-        side.addWidget(info)
+        side.addWidget(HeaderStrip("doc.badge.gearshape", template.name, names))
         if rendered.warnings:
-            warning = QLabel("Warnings:\n" + "\n".join(rendered.warnings))
-            warning.setWordWrap(True)
-            side.addWidget(warning)
+            side.addWidget(secondary_label("\n".join(rendered.warnings)))
 
         self.title = QLineEdit(defaults.get("title") or template.name)
         self.sign = QComboBox()
@@ -177,7 +196,7 @@ class GenerateDialog(QDialog):
         side.addWidget(options)
         side.addStretch()
         buttons = QDialogButtonBox()
-        buttons.addButton("Generate", QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton("Generate", QDialogButtonBox.ButtonRole.AcceptRole).setDefault(True)
         buttons.addButton("Decline", QDialogButtonBox.ButtonRole.RejectRole)
         buttons.accepted.connect(self._generate)
         buttons.rejected.connect(self.reject)

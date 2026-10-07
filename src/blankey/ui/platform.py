@@ -10,6 +10,7 @@ from pathlib import Path
 if sys.platform == "win32":
     import winreg
 
+NS_APPLICATION_ACTIVATION_POLICY_REGULAR = 0
 NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
 LAUNCH_AGENT_LABEL = "bg.blankey.app"
 WINDOWS_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -31,6 +32,13 @@ def hide_dock_icon() -> None:
     """Run as a menu bar app on macOS (the packaged app sets LSUIElement instead)."""
     if sys.platform == "darwin":
         _ns_app_call(b"setActivationPolicy:", ctypes.c_long, NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY)
+
+
+def set_dock_visible(visible: bool) -> None:
+    """Regular app (Dock icon + menu bar) while the main window is open, menu bar app otherwise."""
+    if sys.platform == "darwin":
+        policy = NS_APPLICATION_ACTIVATION_POLICY_REGULAR if visible else NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY
+        _ns_app_call(b"setActivationPolicy:", ctypes.c_long, policy)
 
 
 def bring_to_front() -> None:

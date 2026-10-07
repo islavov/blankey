@@ -4,23 +4,18 @@ import time
 
 from PySide6.QtCore import QEvent, QObject, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication
-from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon
 
 from blankey import biometric, bridge
 from blankey.config import load_config
 from blankey.core import Blankey
 from blankey.mcp_server import McpThread
 from blankey.ui import icons, platform
-from blankey.ui.profiles import ProfilesWindow
+from blankey.ui.main_window import MainWindow
+from blankey.ui.pages import RequestsPage
 from blankey.ui.requests import open_request
 from blankey.ui.unlock import SetupDialog, ensure_unlocked
 from blankey.ui.widgets import clear_opened_documents
-from blankey.ui.windows import (
-    DocumentsWindow,
-    FillSetsWindow,
-    RequestsWindow,
-    TemplatesWindow,
-)
 
 USER_INPUT_EVENTS = {QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.Wheel}
 
@@ -37,7 +32,7 @@ class Tray(QObject):
         self.qt_app = qt_app
         self.app = app
         self.mcp = mcp
-        self.windows: dict[str, QWidget] = {}
+        self.main: MainWindow | None = None
         self.last_activity = time.monotonic()
         self.handling_requests = False
 
@@ -73,12 +68,8 @@ class Tray(QObject):
             self.menu.addAction("Unlock…", self._unlock)
         self.menu.addSeparator()
         pending = len(vault.list_requests("pending"))
-        requests = self.menu.addAction(f"Requests from Claude ({pending})", lambda: self._show("requests"))
-        requests.setEnabled(pending > 0)
-        self.menu.addAction("Profiles…", lambda: self._show("profiles"))
-        self.menu.addAction("Documents…", lambda: self._show("documents"))
-        self.menu.addAction("Templates…", lambda: self._show("templates"))
-        self.menu.addAction("Fill sets…", lambda: self._show("fill_sets"))
+        label = f"Open Blankey ({pending} from Claude)" if pending else "Open Blankey"
+        self.menu.addAction(label, self.open_main)
         self.menu.addSeparator()
         running = self.mcp.is_alive() and self.mcp.server.started
         status = QAction(f"MCP: {self.app.config.mcp_url}" if running else "MCP: not running", self.menu)
@@ -99,25 +90,17 @@ class Tray(QObject):
         self.menu.addSeparator()
         self.menu.addAction("Quit", self.quit)
 
-    def _show(self, name: str) -> None:
-        factories = {
-            "profiles": ProfilesWindow,
-            "documents": DocumentsWindow,
-            "templates": TemplatesWindow,
-            "requests": RequestsWindow,
-            "fill_sets": FillSetsWindow,
-        }
-        if name == "profiles" and not ensure_unlocked(self.app):
-            return
-        window = self.windows.get(name)
-        if window is None:
-            window = self.windows[name] = factories[name](self.app)
+    def open_main(self) -> None:
+        """Show the main window, on the requests page when Claude is waiting."""
+        if self.main is None:
+            self.main = MainWindow(self.app, on_lock=self._lock, on_quit=self.quit)
         else:
-            window.refresh()
-        platform.bring_to_front()
-        window.show()
-        window.raise_()
-        window.activateWindow()
+            self.main.refresh()
+        if self.app.vault.list_requests("pending"):
+            self.main.show_page(RequestsPage)
+        self.main.show()
+        self.main.raise_()
+        self.main.activateWindow()
         self._refresh_icon()
 
     def _copy_mcp_command(self) -> None:
@@ -147,8 +130,10 @@ class Tray(QObject):
         self._refresh_icon()
 
     def _lock(self) -> None:
-        for window in self.windows.values():
-            window.close()
+        if self.main is not None:
+            self.main.close()
+            self.main.deleteLater()
+            self.main = None
         self.app.vault.lock()
         clear_opened_documents()
         self._refresh_icon()
@@ -190,9 +175,8 @@ class Tray(QObject):
             self.handling_requests = False
             self.last_activity = time.monotonic()
             self._refresh_icon()
-            for name in ("documents", "fill_sets"):
-                if window := self.windows.get(name):
-                    window.refresh()
+            if self.main is not None:
+                self.main.refresh()
 
     def quit(self) -> None:
         self.mcp.stop()

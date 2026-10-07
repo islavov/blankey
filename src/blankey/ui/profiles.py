@@ -1,72 +1,76 @@
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QVBoxLayout,
     QWidget,
 )
 
 from blankey.core import Blankey
 from blankey.ui.unlock import ensure_unlocked
-from blankey.ui.widgets import fit_to_screen
+from blankey.ui.widgets import Page, confirm, filter_table, style_list, style_table
 from blankey.vault import FieldInput, FieldType
 from blankey.vault.fieldtypes import validate
 
 COLUMNS = ["Key", "Label", "Type", "Value"]
 
 
-class ProfilesWindow(QWidget):
-    def __init__(self, app: Blankey):
-        super().__init__()
-        self.app = app
-        self.setWindowTitle("Blankey - profiles")
-        fit_to_screen(self, 0.7, 0.7, 1000, 620)
+class ProfilesPage(Page):
+    title = "Profiles"
+    symbol = "person.crop.circle"
 
+    def __init__(self, app: Blankey, parent: QWidget | None = None):
+        super().__init__(app, parent)
         self.profiles = QListWidget()
+        style_list(self.profiles)
+        self.profiles.setAlternatingRowColors(False)
+        self.profiles.setFixedWidth(240)
         self.profiles.currentItemChanged.connect(lambda *_: self._load_fields())
-        add_profile = QPushButton("New profile")
-        add_profile.clicked.connect(self._add_profile)
-        rename_profile = QPushButton("Rename")
-        rename_profile.clicked.connect(self._rename_profile)
-        delete_profile = QPushButton("Delete")
-        delete_profile.clicked.connect(self._delete_profile)
 
         self.table = QTableWidget(0, len(COLUMNS))
         self.table.setHorizontalHeaderLabels(COLUMNS)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        style_table(self.table, editable=True)
         for column, width in enumerate((260, 240, 120)):
             self.table.setColumnWidth(column, width)
-        add_field = QPushButton("Add field")
-        add_field.clicked.connect(lambda: self._append_row("", "", FieldType.TEXT, ""))
-        remove_field = QPushButton("Remove field")
-        remove_field.clicked.connect(self._remove_row)
-        save = QPushButton("Save")
-        save.clicked.connect(self._save)
 
-        left = QVBoxLayout()
-        left.addWidget(self.profiles)
-        for button in (add_profile, rename_profile, delete_profile):
-            left.addWidget(button)
-        right = QVBoxLayout()
-        right.addWidget(self.table)
-        row = QHBoxLayout()
-        for button in (add_field, remove_field):
-            row.addWidget(button)
-        row.addStretch()
-        row.addWidget(save)
-        right.addLayout(row)
+        self.action("New profile", "person.badge.plus", self._add_profile)
+        self.action("Rename", "pencil", self._rename_profile)
+        self.action("Delete profile", "person.badge.minus", self._delete_profile)
+        self.action("Add field", "plus", lambda: self._append_row("", "", FieldType.TEXT, ""))
+        self.action("Remove field", "minus", self._remove_row)
+        self.action("Save", "checkmark.circle", self._save, QKeySequence.StandardKey.Save)
+
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.VLine)
+        divider.setFrameShadow(QFrame.Shadow.Plain)
+        divider.setForegroundRole(QPalette.ColorRole.Mid)
         layout = QHBoxLayout(self)
-        layout.addLayout(left, 1)
-        layout.addLayout(right, 3)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.profiles)
+        layout.addWidget(divider)
+        layout.addWidget(self.table, 1)
         self._removed: set[str] = set()
         self.refresh()
+
+    def activate(self) -> bool:
+        if not ensure_unlocked(self.app, self.window()):
+            return False
+        self._load_fields()
+        return True
+
+    def subtitle(self) -> str:
+        return f"{self.profiles.count()} profiles"
+
+    def filter(self, text: str) -> None:
+        filter_table(self.table, text)
 
     def refresh(self) -> None:
         current = self._profile_id()
@@ -79,6 +83,7 @@ class ProfilesWindow(QWidget):
                 self.profiles.setCurrentItem(item)
         if self.profiles.currentItem() is None and self.profiles.count():
             self.profiles.setCurrentRow(0)
+        self.changed.emit()
 
     def _profile_id(self) -> int | None:
         item = self.profiles.currentItem()
@@ -88,7 +93,7 @@ class ProfilesWindow(QWidget):
         self.table.setRowCount(0)
         self._removed.clear()
         profile_id = self._profile_id()
-        if profile_id is None or not ensure_unlocked(self.app, self):
+        if profile_id is None or not self.app.vault.unlocked:
             return
         values = self.app.vault.get_values(profile_id)
         for info in self.app.vault.describe(profile_id):
@@ -169,8 +174,8 @@ class ProfilesWindow(QWidget):
         if profile_id is None:
             return
         profile = self.app.vault.get_profile(profile_id)
-        answer = QMessageBox.question(self, "Blankey", f'Delete profile "{profile.name}" and all its data?')
-        if answer == QMessageBox.StandardButton.Yes:
+        informative = "All its fields are removed from the vault."
+        if confirm(self.window(), f'Delete the profile "{profile.name}"?', informative):
             self.app.vault.delete_profile(profile_id)
             self.app.vault.audit("user", "delete_profile", str(profile_id))
             self.refresh()

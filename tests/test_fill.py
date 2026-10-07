@@ -187,7 +187,7 @@ def test_request_fill_validates_and_hides_values(qtbot, app, template, profiles,
     assert bindings["manager_egn"] == {"path": "manager.egn"}
     assert bindings["contract_date"] == {"default": True}
     row = list(dialog.vars).index("contract_no")
-    dialog._combo(row).setEditText("17")
+    dialog.set_binding(row, {"value": "17"})
     dialog._save(generate=True)
 
     result = app.vault.get_request(request.id).result

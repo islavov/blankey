@@ -1,12 +1,13 @@
 import pytest
-from PySide6.QtCore import QItemSelectionModel
+from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtWidgets import QCheckBox, QMessageBox
 
 from blankey.core import RequestKind
 from blankey.templates import TemplateKind
-from blankey.ui.profiles import ProfilesWindow
+from blankey.ui import pages
+from blankey.ui.main_window import MainWindow
+from blankey.ui.profiles import ProfilesPage
 from blankey.ui.requests import GenerateDialog, ProfileInputDialog
-from blankey.ui.windows import DocumentsWindow
 from blankey.vault import FieldInput
 
 
@@ -91,20 +92,21 @@ def test_generate_dialog_resolves_request(qtbot, app, template):
     assert (result["signed"], result["encrypted"], result["pages"]) == ("self-signed", True, 1)
 
 
-def test_profiles_window_round_trip(qtbot, app):
+def test_profiles_page_round_trip(qtbot, app):
     pid = app.vault.create_profile("Иван", "person")
     app.vault.set_values(pid, [FieldInput("city", "София", "Град")])
-    window = ProfilesWindow(app)
+    window = ProfilesPage(app)
     qtbot.addWidget(window)
+    assert window.activate()
     assert window.table.item(0, 3).text() == "София"
     window.table.item(0, 3).setText("Пловдив")
     window._save()
     assert app.vault.get_values(pid)["city"][1] == "Пловдив"
 
 
-def test_documents_window_deletes_all_selected(qtbot, app, monkeypatch):
+def test_documents_page_deletes_all_selected(qtbot, app, monkeypatch):
     ids = [app.vault.store_document("t", f"Doc {i}", {}, 0, "", False, f"d{i}.docx", b"x") for i in range(3)]
-    window = DocumentsWindow(app)
+    window = pages.DocumentsPage(app)
     qtbot.addWidget(window)
     selection = window.table.selectionModel()
     for row in (0, 2):
@@ -113,8 +115,36 @@ def test_documents_window_deletes_all_selected(qtbot, app, monkeypatch):
             QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
         )
     asked = []
-    monkeypatch.setattr(QMessageBox, "question", lambda *args: asked.append(args[2]) or QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(pages, "confirm", lambda parent, text, *args: asked.append(text) or True)
     window._delete()
     assert asked == ["Delete 2 documents?"]
     assert [d.id for d in app.vault.list_documents()] == [ids[1]]
     assert window.table.rowCount() == 1
+
+
+def test_main_window_switches_pages_and_filters(qtbot, app):
+    app.vault.store_document("t", "Договор", {}, 0, "", False, "a.docx", b"x")
+    app.vault.store_document("t", "Решение", {}, 0, "", False, "b.docx", b"x")
+    window = MainWindow(app, on_lock=lambda: None, on_quit=lambda: None)
+    qtbot.addWidget(window)
+    assert isinstance(window.current_page(), pages.FillSetsPage)
+    window.show_page(pages.DocumentsPage)
+    page = window.current_page()
+    assert isinstance(page, pages.DocumentsPage)
+    assert window.title_label.text() == "Documents"
+    assert [a.text() for a in window.toolbar.actions() if a in page.toolbar_actions] == ["Open", "Export", "Delete"]
+    window.search.setText("решение")
+    visible = [page.table.item(r, 0).text() for r in range(page.table.rowCount()) if not page.table.isRowHidden(r)]
+    assert visible == ["Решение"]
+
+
+def test_main_window_badges_pending_requests(qtbot, app):
+    app.create_request(RequestKind.PROFILE_INPUT, {"profile_id": None, "fields": [], "reason": "need data"})
+    window = MainWindow(app, on_lock=lambda: None, on_quit=lambda: None)
+    qtbot.addWidget(window)
+    window.show_page(pages.RequestsPage)
+    assert window.subtitle_label.text() == "1 waiting"
+    item = next(
+        window.sidebar.item(r) for r in range(window.sidebar.count()) if window.sidebar.item(r).text() == "Requests"
+    )
+    assert item.data(Qt.ItemDataRole.UserRole + 1) == 1

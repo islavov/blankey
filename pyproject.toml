@@ -16,6 +16,7 @@ dependencies = [
     "pikepdf>=10.16.0",
     "platformdirs>=4.12.3",
     "pyhanko[pkcs11]>=0.37.0",
+    "pyobjc-framework-cocoa>=12.2.2 ; sys_platform == 'darwin'",
     "pyobjc-framework-localauthentication>=12.2.2 ; sys_platform == 'darwin'",
     "pypdf>=6.19.0",
     "pypdfium2>=5.13.0",
