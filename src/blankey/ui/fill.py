@@ -46,7 +46,7 @@ from blankey.vault import Request
 BINDING_ROLE = Qt.ItemDataRole.UserRole
 OPTIONS_ROLE = Qt.ItemDataRole.UserRole + 1
 VAR_ROLE = Qt.ItemDataRole.UserRole + 2
-FIELD, CONTEXT, SOURCE = range(3)
+FIELD, SOURCE, CONTEXT = range(3)
 CHOOSE = "Choose a source…"
 
 
@@ -307,7 +307,7 @@ class FillDialog(QDialog):
         layout.addWidget(separator())
 
         self.table = QTableWidget(len(self.var_list), 3)
-        self.table.setHorizontalHeaderLabels(["Field", "In the document", "Source and value"])
+        self.table.setHorizontalHeaderLabels(["Field", "Source and value", "In the document"])
         style_table(self.table, editable=True)
         self.table.setWordWrap(True)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
