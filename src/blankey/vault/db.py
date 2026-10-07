@@ -54,6 +54,18 @@ SCHEMA = [
         target TEXT NOT NULL DEFAULT ''
     );
     """,
+    """
+    CREATE TABLE fill_sets (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        templates TEXT NOT NULL,
+        profiles TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        nonce BLOB NOT NULL,
+        ciphertext BLOB NOT NULL
+    );
+    """,
 ]
 
 

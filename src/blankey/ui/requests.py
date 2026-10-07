@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from blankey.core import Blankey, GenerateOptions
 from blankey.render.preview import render_pages
+from blankey.ui.fill import open_fill_request
 from blankey.ui.unlock import ensure_unlocked
 from blankey.ui.widgets import PagePreview, input_value, value_input
 from blankey.vault import FieldInput, FieldType, Request
@@ -248,3 +249,5 @@ def open_request(app: Blankey, request: Request, parent: QWidget | None = None) 
             payload = request.payload
             profiles = {role: int(pid) for role, pid in payload["profiles"].items()}
             GenerateDialog(app, payload["template_id"], profiles, payload, request, parent).exec()
+        case "fill":
+            open_fill_request(app, request, parent)

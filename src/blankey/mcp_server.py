@@ -3,6 +3,7 @@
 import asyncio
 import functools
 import inspect
+import tempfile
 import threading
 import time
 from dataclasses import asdict
@@ -16,8 +17,9 @@ from starlette.responses import PlainTextResponse
 
 from blankey.core import Blankey, RequestKind
 from blankey.render import pdf_form, preview
-from blankey.templates import TemplateKind, engine
+from blankey.templates import TemplateKind, docx, engine, fill
 from blankey.templates.bindings import example_context
+from blankey.templates.store import ID_RE
 from blankey.vault import FieldType, VaultLocked
 
 INSTRUCTIONS = """\
@@ -36,6 +38,19 @@ Workflow:
 6. request_profile_input to ask the user to type missing data into the app, then wait_request.
 7. request_generate to ask the user to approve, sign and/or encrypt the real document, then wait_request.
 The user exports real documents from the app; you only get their metadata.
+
+Filled .docx documents (contracts, decisions...):
+1. inspect_docx to read the paragraphs and their runs.
+2. save_docx_template with replacements [{find, var, occurrence?}] that turn the variable spans
+   (names, ids, addresses, amounts, dates, dot blanks like "......") into {{ var }} tags. Replace only the
+   value, not its label ("ЕГН ......" -> find the dots with occurrence). A span must sit inside one run.
+   Use the same var names across related documents so one fill covers them all.
+   fields gives a default per var: "{{ manager.egn }}", "{{ manager.name | upper }}", "{{ today() }}".
+3. request_fill for one or more templates: the user sees every blank with its context and picks the source
+   (vault path, your literal, or the template default). Pass non-personal data you know (amounts, rates,
+   terms, dates, city) in values, and vault paths in paths. Never put personal data in values: ask for it
+   with request_profile_input instead. wait_request returns the fill set id and document ids.
+4. list_fill_sets shows saved fill sets (sources only); request_fill with fill_set_id reopens one.
 """
 
 TOOL_TIMEOUT_MAX = 1800
@@ -157,6 +172,38 @@ def build_server(app: Blankey) -> MCPServer:
         return engine.describe_template(template)
 
     @tool()
+    def inspect_docx(path: str) -> list[dict[str, Any]]:
+        """Paragraphs of a local .docx (body and table cells) with their run texts and existing {{ }} tags.
+        Use the run texts to pick spans for save_docx_template: a span cannot cross a run boundary."""
+        return [asdict(p) for p in docx.inspect(Path(path).expanduser())]
+
+    @tool()
+    def save_docx_template(
+        template_id: str,
+        name: str,
+        source_path: str,
+        replacements: list[dict[str, Any]],
+        roles: dict[str, str],
+        fields: dict[str, str],
+        labels: dict[str, str] | None = None,
+        description: str = "",
+    ) -> dict[str, Any]:
+        """Create a docx template from a filled .docx: each replacement {find, var, occurrence?} replaces the
+        text with {{ var }} (occurrence is 1-based across the document; omit it to replace all). Replacements
+        apply in order, so put longer spans first (".......2026" before "......"). fields maps
+        var -> default Jinja expression over roles; labels maps var -> human label shown in the fill form."""
+        if not ID_RE.match(template_id):
+            raise ValueError("Template id must be lowercase letters, digits, '-' or '_'")
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "template.docx"
+            report = docx.tokenize(Path(source_path).expanduser(), target, replacements)
+            template = app.templates.save(
+                template_id, name, TemplateKind.DOCX, roles, fields, description, source_file=target, labels=labels
+            )
+        audit("save_template", template_id)
+        return engine.describe_template(template) | {"replaced": report}
+
+    @tool()
     def save_example(template_id: str, name: str, data: dict[str, Any]) -> str:
         """Store an invented example dataset keyed by role, e.g. {"applicant": {"name": "Иван Иванов"}}."""
         app.templates.save_example(template_id, name, data)
@@ -245,6 +292,61 @@ def build_server(app: Blankey) -> MCPServer:
         payload = {"template_id": template_id, "profiles": profiles, "sign": sign, "encrypt": encrypt, "title": title}
         request_id = app.create_request(RequestKind.GENERATE, payload)
         return {"request_id": request_id, "status": "pending"}
+
+    @tool()
+    def request_fill(
+        templates: list[str],
+        profiles: dict[str, int],
+        name: str,
+        values: dict[str, str] | None = None,
+        paths: dict[str, str] | None = None,
+        fill_set_id: int | None = None,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """Open the fill form for one or more templates. profiles maps every role to a profile id. values are
+        non-personal literals per var (e.g. {"loan_amount": "34 000"}); paths pick vault fields per var
+        (e.g. {"borrower_egn": "manager.egn"}). Other vars start from the template default, or from the saved
+        fill set when fill_set_id is given. name names the fill set. Returns a request id; call wait_request."""
+        values, paths = values or {}, paths or {}
+        loaded = app.fill_templates(templates)
+        if not loaded or not name.strip():
+            raise ValueError("Pass at least one template and a name")
+        missing_roles = set(fill.roles(loaded)) - set(profiles)
+        if missing_roles:
+            raise ValueError(f"Missing profiles for roles: {', '.join(sorted(missing_roles))}")
+        fields = app.profile_fields(profiles)
+        known = fill.variables(loaded)
+        for var in [*values, *paths]:
+            if var not in known:
+                raise ValueError(f"Unknown variable {var!r}; known: {', '.join(known)}")
+        for var, path in paths.items():
+            role, _, key = path.partition(".")
+            if role not in fields or not any(i.key == key or i.key.startswith(key + ".") for i in fields[role]):
+                raise ValueError(f"{var}: no vault field {path!r}")
+        if fill_set_id is not None and fill_set_id not in {f.id for f in app.vault.list_fill_sets()}:
+            raise KeyError(f"Unknown fill set {fill_set_id}")
+        payload = {
+            "templates": templates,
+            "profiles": profiles,
+            "name": name.strip(),
+            "values": values,
+            "paths": paths,
+            "fill_set_id": fill_set_id,
+            "reason": reason or f"Fill {', '.join(t.name for t in loaded)}",
+        }
+        request_id = app.create_request(RequestKind.FILL, payload)
+        return {"request_id": request_id, "status": "pending"}
+
+    @tool()
+    def list_fill_sets() -> list[dict[str, Any]]:
+        """Saved fill sets with the source kind per var (path:role.key, value or default). No values."""
+        if not app.vault.unlocked:
+            return [asdict(f) for f in app.vault.list_fill_sets()]
+        out = []
+        for info in app.vault.list_fill_sets():
+            _, bindings = app.vault.get_fill_set(info.id)
+            out.append(asdict(info) | {"vars": {v: fill.describe_binding(b) for v, b in bindings.items()}})
+        return out
 
     @tool()
     async def wait_request(request_id: int, timeout_s: int = 300) -> dict[str, Any]:

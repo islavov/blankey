@@ -1,14 +1,18 @@
 """Application service shared by the MCP server (metadata + examples) and the UI (real values)."""
 
 import datetime
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 from blankey.config import Config
 from blankey.output import protect
 from blankey.render.preview import page_count
-from blankey.templates import TemplateStore, engine
+from blankey.templates import Template, TemplateStore, engine, fill
 from blankey.templates.bindings import profile_context
 from blankey.vault import FieldInfo, Vault
 
@@ -16,6 +20,7 @@ from blankey.vault import FieldInfo, Vault
 class RequestKind:
     PROFILE_INPUT = "profile_input"
     GENERATE = "generate"
+    FILL = "fill"
 
 
 @dataclass(slots=True)
@@ -80,6 +85,66 @@ class Blankey:
                 pkcs11_pin=options.pkcs11_pin,
                 reason=title or template.name,
             )
+        return self._store(template, rendered, content, signed, bool(options.password), profiles, title)
+
+    def fill_templates(self, template_ids: list[str]) -> list[Template]:
+        return [self.templates.get(t) for t in template_ids]
+
+    def generate_fill(self, fill_set_id: int) -> list[int]:
+        """Render every template of a fill set and store the documents (no signing or encryption)."""
+        info, bindings = self.vault.get_fill_set(fill_set_id)
+        templates = self.fill_templates(info.templates)
+        resolved = fill.resolve(templates, bindings, self.real_context(info.profiles))
+        doc_ids = []
+        for template in templates:
+            values, errors = resolved[template.id]
+            if errors:
+                raise ValueError(f"{template.name}: " + "; ".join(errors))
+            rendered = engine.render_values(template, values)
+            title = f"{template.name} ({info.name})"
+            doc_ids.append(self._store(template, rendered, rendered.content, "", False, info.profiles, title))
+        return doc_ids
+
+    def export_fill_set(self, fill_set_id: int) -> str:
+        info, bindings = self.vault.get_fill_set(fill_set_id)
+        data = {"name": info.name, "templates": info.templates, "profiles": info.profiles, "bindings": bindings}
+        self.vault.audit("user", "export_fill_set", str(fill_set_id))
+        return yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=120)
+
+    def export_fill_bundle(self, fill_set_id: int, target: Path) -> None:
+        """Zip with each template's manifest + source and the fill set as fill.yaml."""
+        info, _ = self.vault.get_fill_set(fill_set_id)
+        with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as bundle:
+            for template in self.fill_templates(info.templates):
+                for path in (template.directory / "manifest.yaml", template.source_path):
+                    bundle.write(path, f"{template.id}/{path.name}")
+            bundle.writestr("fill.yaml", self.export_fill_set(fill_set_id))
+
+    def import_fill_set(self, text: str) -> int:
+        data = yaml.safe_load(text) or {}
+        name, templates = data.get("name"), data.get("templates") or []
+        if not name or not templates:
+            raise ValueError("A fill set needs a name and templates")
+        self.fill_templates(templates)
+        profiles = {role: int(pid) for role, pid in (data.get("profiles") or {}).items()}
+        for profile_id in profiles.values():
+            self.vault.get_profile(profile_id)
+        bindings = data.get("bindings") or {}
+        fill_set_id = self.vault.save_fill_set(name, templates, profiles, bindings, self.vault.find_fill_set(name))
+        self.vault.audit("user", "import_fill_set", str(fill_set_id))
+        return fill_set_id
+
+    def _store(
+        self,
+        template: Template,
+        rendered: engine.Rendered,
+        content: bytes,
+        signed: str,
+        encrypted: bool,
+        profiles: dict[str, int],
+        title: str,
+    ) -> int:
+        template_id = template.id
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M")
         doc_id = self.vault.store_document(
             template_id=template_id,
@@ -87,7 +152,7 @@ class Blankey:
             profiles=profiles,
             pages=page_count(rendered.content) if rendered.is_pdf else 0,
             signed=signed,
-            encrypted=bool(options.password) and rendered.is_pdf,
+            encrypted=encrypted and rendered.is_pdf,
             filename=f"{template_id}-{stamp}.{rendered.extension}",
             content=content,
         )

@@ -48,6 +48,15 @@ roles, e.g. `{{ applicant.address.permanent.city }}` or `{{ loan.amount | money 
 - `typst`: `main.typ` reads `json(bytes(sys.inputs.data))`.
 - `docx`: docxtpl; converted to PDF only if LibreOffice is installed.
 
+### Filled .docx documents and fill sets
+
+Claude turns an existing filled .docx into a template with `inspect_docx` + `save_docx_template`
+(text spans become `{{ var }}` tags; use the same var names across related documents). `request_fill`
+opens a form listing every blank of one or more templates with its surrounding text; per blank you pick a
+vault field (`manager.egn`), a literal Claude proposed (non-PII only), the template default, or type a value.
+The choices are saved as a named fill set, encrypted in the vault, and can be reopened, regenerated,
+exported (YAML, or a zip with the templates) and imported from tray → "Fill sets…".
+
 ## Signing
 
 - Self-signed: a certificate is generated on first use and stored encrypted in the vault.

@@ -23,10 +23,12 @@ from PySide6.QtWidgets import (
 )
 
 from blankey.core import Blankey
+from blankey.ui.fill import FillDialog
 from blankey.ui.requests import GenerateDialog, open_request
 from blankey.ui.unlock import ensure_unlocked
 
 OPEN_DIR = Path(tempfile.gettempdir()) / "blankey-open"
+REQUEST_LABELS = {"profile_input": "Profile data", "generate": "Generate document", "fill": "Fill documents"}
 
 
 def clear_opened_documents() -> None:
@@ -185,7 +187,7 @@ class RequestsWindow(QWidget):
     def refresh(self) -> None:
         self.list.clear()
         for request in self.app.vault.list_requests("pending"):
-            kind = "Profile data" if request.kind == "profile_input" else "Generate document"
+            kind = REQUEST_LABELS.get(request.kind, request.kind)
             item = QListWidgetItem(
                 f"#{request.id} {kind} - {request.payload.get('reason') or request.payload.get('template_id', '')}"
             )
@@ -196,4 +198,96 @@ class RequestsWindow(QWidget):
         item = self.list.currentItem()
         if item:
             open_request(self.app, self.app.vault.get_request(item.data(Qt.ItemDataRole.UserRole)), self)
+            self.refresh()
+
+
+class FillSetsWindow(QWidget):
+    def __init__(self, app: Blankey):
+        super().__init__()
+        self.app = app
+        self.setWindowTitle("Blankey - fill sets")
+        self.resize(640, 380)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["#", "Name", "Templates", "Updated"])
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.doubleClicked.connect(lambda *_: self._open())
+        buttons = QHBoxLayout()
+        for label, slot in (
+            ("Open", self._open),
+            ("Generate", self._generate),
+            ("Export YAML…", self._export_yaml),
+            ("Export bundle…", self._export_bundle),
+            ("Import…", self._import),
+            ("Delete", self._delete),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(slot)
+            buttons.addWidget(button)
+        buttons.addStretch()
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.table)
+        layout.addLayout(buttons)
+        self.refresh()
+
+    def refresh(self) -> None:
+        sets = self.app.vault.list_fill_sets()
+        self.table.setRowCount(len(sets))
+        for row, info in enumerate(sets):
+            cells = [str(info.id), info.name, ", ".join(info.templates), info.updated_at.replace("T", " ")[:16]]
+            for col, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                item.setData(Qt.ItemDataRole.UserRole, info.id)
+                self.table.setItem(row, col, item)
+
+    def _selected(self):
+        row = self.table.currentRow()
+        if row < 0 or not ensure_unlocked(self.app, self):
+            return None
+        fill_set_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        return next(f for f in self.app.vault.list_fill_sets() if f.id == fill_set_id)
+
+    def _open(self) -> None:
+        if info := self._selected():
+            FillDialog(self.app, info.templates, info.profiles, info.name, fill_set_id=info.id, parent=self).exec()
+            self.refresh()
+
+    def _generate(self) -> None:
+        if info := self._selected():
+            try:
+                count = len(self.app.generate_fill(info.id))
+            except Exception as exc:
+                QMessageBox.critical(self, "Blankey", f"Generation failed: {exc}")
+                return
+            QMessageBox.information(self, "Blankey", f"Generated {count} document(s). See Documents.")
+
+    def _export_yaml(self) -> None:
+        if info := self._selected():
+            target, _ = QFileDialog.getSaveFileName(self, "Export", str(Path.home() / f"{info.name}.yaml"))
+            if target:
+                Path(target).write_text(self.app.export_fill_set(info.id), encoding="utf-8")
+
+    def _export_bundle(self) -> None:
+        if info := self._selected():
+            target, _ = QFileDialog.getSaveFileName(self, "Export", str(Path.home() / f"{info.name}.zip"))
+            if target:
+                self.app.export_fill_bundle(info.id, Path(target))
+
+    def _import(self) -> None:
+        if not ensure_unlocked(self.app, self):
+            return
+        source, _ = QFileDialog.getOpenFileName(self, "Import fill set", str(Path.home()), "YAML (*.yaml *.yml)")
+        if not source:
+            return
+        try:
+            self.app.import_fill_set(Path(source).read_text(encoding="utf-8"))
+        except (KeyError, ValueError) as exc:
+            QMessageBox.warning(self, "Blankey", f"Import failed: {exc}")
+        self.refresh()
+
+    def _delete(self) -> None:
+        info = self._selected()
+        if info and QMessageBox.question(self, "Blankey", f'Delete "{info.name}"?') == QMessageBox.StandardButton.Yes:
+            self.app.vault.delete_fill_set(info.id)
             self.refresh()

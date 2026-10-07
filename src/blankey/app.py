@@ -14,7 +14,13 @@ from blankey.ui import icons, platform
 from blankey.ui.profiles import ProfilesWindow
 from blankey.ui.requests import open_request
 from blankey.ui.unlock import SetupDialog, ensure_unlocked
-from blankey.ui.windows import DocumentsWindow, RequestsWindow, TemplatesWindow, clear_opened_documents
+from blankey.ui.windows import (
+    DocumentsWindow,
+    FillSetsWindow,
+    RequestsWindow,
+    TemplatesWindow,
+    clear_opened_documents,
+)
 
 USER_INPUT_EVENTS = {QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.Wheel}
 
@@ -72,6 +78,7 @@ class Tray(QObject):
         self.menu.addAction("Profiles…", lambda: self._show("profiles"))
         self.menu.addAction("Documents…", lambda: self._show("documents"))
         self.menu.addAction("Templates…", lambda: self._show("templates"))
+        self.menu.addAction("Fill sets…", lambda: self._show("fill_sets"))
         self.menu.addSeparator()
         running = self.mcp.is_alive() and self.mcp.server.started
         status = QAction(f"MCP: {self.app.config.mcp_url}" if running else "MCP: not running", self.menu)
@@ -98,6 +105,7 @@ class Tray(QObject):
             "documents": DocumentsWindow,
             "templates": TemplatesWindow,
             "requests": RequestsWindow,
+            "fill_sets": FillSetsWindow,
         }
         if name == "profiles" and not ensure_unlocked(self.app):
             return
@@ -182,8 +190,9 @@ class Tray(QObject):
             self.handling_requests = False
             self.last_activity = time.monotonic()
             self._refresh_icon()
-            if window := self.windows.get("documents"):
-                window.refresh()
+            for name in ("documents", "fill_sets"):
+                if window := self.windows.get(name):
+                    window.refresh()
 
     def quit(self) -> None:
         self.mcp.stop()

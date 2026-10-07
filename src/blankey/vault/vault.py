@@ -65,6 +65,15 @@ class DocumentInfo:
 
 
 @dataclass(slots=True, frozen=True)
+class FillSetInfo:
+    id: int
+    name: str
+    templates: list[str]
+    profiles: dict[str, int]
+    updated_at: str
+
+
+@dataclass(slots=True, frozen=True)
 class Request:
     id: int
     kind: str
@@ -369,6 +378,64 @@ class Vault:
 
     def delete_document(self, doc_id: int) -> None:
         self._execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+
+    # -- fill sets ---------------------------------------------------------
+    # bindings: {var: {"path": "role.key"} | {"value": "..."} | {"default": True}}; encrypted because
+    # literal values may be personal data
+
+    def save_fill_set(
+        self,
+        name: str,
+        templates: list[str],
+        profiles: dict[str, int],
+        bindings: dict[str, dict[str, Any]],
+        fill_set_id: int | None = None,
+    ) -> int:
+        dek = self._require_dek()
+        meta = (name, json.dumps(templates), json.dumps(profiles), now())
+        with self._lock, self._transaction():
+            if fill_set_id is None:
+                cur = self._execute(
+                    "INSERT INTO fill_sets (name, templates, profiles, updated_at, created_at, nonce, ciphertext) "
+                    "VALUES (?, ?, ?, ?, ?, x'', x'')",
+                    (*meta, now()),
+                )
+                fill_set_id = cur.lastrowid
+            else:
+                cur = self._execute(
+                    "UPDATE fill_sets SET name = ?, templates = ?, profiles = ?, updated_at = ? WHERE id = ?",
+                    (*meta, fill_set_id),
+                )
+                if not cur.rowcount:
+                    raise KeyError(f"Unknown fill set {fill_set_id}")
+            plain = json.dumps(bindings, ensure_ascii=False).encode()
+            nonce, ct = crypto.encrypt(dek, plain, f"fillset:{fill_set_id}".encode())
+            self._execute("UPDATE fill_sets SET nonce = ?, ciphertext = ? WHERE id = ?", (nonce, ct, fill_set_id))
+        return fill_set_id
+
+    def list_fill_sets(self) -> list[FillSetInfo]:
+        rows = self._execute("SELECT id, name, templates, profiles, updated_at FROM fill_sets ORDER BY id DESC")
+        return [self._fill_set_info(r) for r in rows.fetchall()]
+
+    def get_fill_set(self, fill_set_id: int) -> tuple[FillSetInfo, dict[str, dict[str, Any]]]:
+        dek = self._require_dek()
+        row = self._execute("SELECT * FROM fill_sets WHERE id = ?", (fill_set_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"Unknown fill set {fill_set_id}")
+        plain = crypto.decrypt(dek, row["nonce"], row["ciphertext"], f"fillset:{fill_set_id}".encode())
+        return self._fill_set_info(row), json.loads(plain)
+
+    def find_fill_set(self, name: str) -> int | None:
+        row = self._execute("SELECT id FROM fill_sets WHERE name = ?", (name,)).fetchone()
+        return row["id"] if row else None
+
+    def delete_fill_set(self, fill_set_id: int) -> None:
+        self._execute("DELETE FROM fill_sets WHERE id = ?", (fill_set_id,))
+
+    @staticmethod
+    def _fill_set_info(row) -> FillSetInfo:
+        profiles = {role: int(pid) for role, pid in json.loads(row["profiles"]).items()}
+        return FillSetInfo(row["id"], row["name"], json.loads(row["templates"]), profiles, row["updated_at"])
 
     # -- requests ----------------------------------------------------------
 

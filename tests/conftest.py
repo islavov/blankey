@@ -49,3 +49,20 @@ def form_pdf() -> bytes:
     form.radio(name="status", value="married", x=140, y=625, size=12, selected=False)
     c.save()
     return buf.getvalue()
+
+
+@pytest.fixture
+def filled_docx(tmp_path):
+    """A small filled contract: a bold label run next to plain text, dot blanks and a table."""
+    import docx
+
+    document = docx.Document()
+    document.add_paragraph("Договор № ......... / ...........2026 г.")
+    paragraph = document.add_paragraph()
+    paragraph.add_run("1. „ACME HOLDINGS“ ЕООД").bold = True
+    paragraph.add_run(", ЕИК 999000111, представлявано от John Smith, ЕГН .........., л.к. № ..........")
+    document.add_paragraph("Заем в размер на 34 000 евро.")
+    document.add_table(rows=1, cols=2).cell(0, 1).text = "John Smith"
+    path = tmp_path / "filled.docx"
+    document.save(str(path))
+    return path

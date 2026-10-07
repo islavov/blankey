@@ -13,6 +13,7 @@ from docxtpl import DocxTemplate
 
 from blankey.config import FONTS_DIR
 from blankey.render import pdf_form
+from blankey.templates import docx
 from blankey.templates.bindings import as_text, evaluate, referenced_paths, to_json
 from blankey.templates.store import Template, TemplateKind
 from blankey.vault import FieldInfo
@@ -52,6 +53,11 @@ def resolve(template: Template, context: dict[str, Any]) -> tuple[dict[str, Any]
 
 def render(template: Template, context: dict[str, Any]) -> Rendered:
     values, errors = resolve(template, context)
+    return render_values(template, values, errors)
+
+
+def render_values(template: Template, values: dict[str, Any], errors: list[str] | None = None) -> Rendered:
+    errors = list(errors or [])
     match template.kind:
         case TemplateKind.PDF_FORM:
             known = {f.name for f in pdf_form.inspect_form(template.source)}
@@ -69,8 +75,11 @@ def render(template: Template, context: dict[str, Any]) -> Rendered:
             )
             return Rendered(pdf, "pdf", errors)
         case TemplateKind.DOCX:
+            unbound = sorted(set(docx.variables(template.source_path)) - set(values))
+            if unbound:
+                errors.append(f"Tags without a value: {', '.join(unbound)}")
             doc = DocxTemplate(str(template.source_path))
-            doc.render(values, autoescape=True)
+            doc.render({k: as_text(v) for k, v in values.items()}, autoescape=True)
             with tempfile.TemporaryDirectory() as tmp:
                 docx_path = Path(tmp) / "document.docx"
                 doc.save(str(docx_path))
@@ -155,7 +164,15 @@ def check(
 
 
 def describe_template(template: Template) -> dict[str, Any]:
-    return template.manifest() | {"source": template.source_path.name}
+    out = template.manifest() | {"source": template.source_path.name}
+    if template.kind == TemplateKind.DOCX:
+        tags = docx.variables(template.source_path)
+        out["tags"] = tags
+        out["warnings"] = [
+            *(f"Tag without binding: {t}" for t in tags if t not in template.fields),
+            *(f"Binding without tag: {f}" for f in template.fields if f not in tags),
+        ]
+    return out
 
 
 def dump(data: Any) -> str:

@@ -57,7 +57,7 @@ def assert_no_pii(text: str) -> None:
         assert json.dumps(secret)[1:-1] not in text  # escaped unicode
 
 
-def test_no_tool_leaks_vault_values(app, mcp, setup):
+def test_no_tool_leaks_vault_values(app, mcp, setup, filled_docx):
     pid = setup["pid"]
     fields = {"name": "{{ applicant.name }}", "egn": "{{ applicant.egn }}"}
     outputs = [
@@ -95,6 +95,22 @@ def test_no_tool_leaks_vault_values(app, mcp, setup):
     doc_id = app.generate("t", {"applicant": pid}, GenerateOptions(sign="self-signed", signer_name=SENTINEL_NAME))
     app.vault.resolve_request(1, "done", {"document_id": doc_id})
     outputs += [call(mcp, "list_documents"), call(mcp, "get_request", request_id=1)]
+    outputs += [
+        call(mcp, "inspect_docx", path=str(filled_docx)),
+        call(
+            mcp,
+            "save_docx_template",
+            template_id="d",
+            name="D",
+            source_path=str(filled_docx),
+            replacements=[{"find": "John Smith", "var": "who"}, {"find": "34 000", "var": "amount"}],
+            roles={"applicant": "person"},
+            fields={"who": "{{ applicant.name }}"},
+        ),
+        call(mcp, "request_fill", templates=["d"], profiles={"applicant": pid}, name="f", values={"amount": "1"}),
+    ]
+    app.vault.save_fill_set("f", ["d"], {"applicant": pid}, {"amount": {"value": SENTINEL_NAME}})
+    outputs.append(call(mcp, "list_fill_sets"))
     for output in outputs:
         assert_no_pii(output)
     assert SENTINEL_NAME not in app.config.previews_dir.joinpath("t-example.pdf").read_bytes().decode("latin-1")

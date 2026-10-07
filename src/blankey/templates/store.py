@@ -26,6 +26,7 @@ class Template:
     roles: dict[str, str] = field(default_factory=dict)  # role -> description
     fields: dict[str, str] = field(default_factory=dict)  # field / variable -> Jinja expression
     description: str = ""
+    labels: dict[str, str] = field(default_factory=dict)  # variable -> human label
 
     @property
     def source_path(self) -> Path:
@@ -43,6 +44,7 @@ class Template:
             "description": self.description,
             "roles": self.roles,
             "fields": self.fields,
+            "labels": self.labels,
         }
 
 
@@ -67,6 +69,7 @@ class TemplateStore:
             roles=data.get("roles") or {},
             fields={str(k): str(v) for k, v in (data.get("fields") or {}).items()},
             description=data.get("description", ""),
+            labels={str(k): str(v) for k, v in (data.get("labels") or {}).items()},
         )
 
     def save(
@@ -79,10 +82,13 @@ class TemplateStore:
         description: str = "",
         source_file: Path | None = None,
         source_text: str | None = None,
+        labels: dict[str, str] | None = None,
     ) -> Template:
         if not ID_RE.match(template_id):
             raise ValueError("Template id must be lowercase letters, digits, '-' or '_'")
-        template = Template(template_id, name, TemplateKind(kind), self.root / template_id, roles, fields, description)
+        template = Template(
+            template_id, name, TemplateKind(kind), self.root / template_id, roles, fields, description, labels or {}
+        )
         template.directory.mkdir(parents=True, exist_ok=True)
         if source_file is not None:
             shutil.copyfile(source_file, template.source_path)
