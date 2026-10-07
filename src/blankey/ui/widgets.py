@@ -1,7 +1,7 @@
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QRectF, Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QGuiApplication, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -99,22 +99,44 @@ def accent_color(widget: QWidget | None = None) -> QColor:
     return palette.color(QPalette.ColorRole.Accent)
 
 
+def blend(color: QColor, ground: QColor, weight: float) -> QColor:
+    """Opaque mix: `weight` of `color` over `ground`."""
+    pairs = zip(color.getRgbF()[:3], ground.getRgbF()[:3], strict=True)
+    return QColor.fromRgbF(*(c * weight + g * (1 - weight) for c, g in pairs))
+
+
 def secondary_color(widget: QWidget | None = None) -> QColor:
+    """Opaque secondary text color with at least 4.5:1 contrast on the window and list backgrounds.
+    The palette's PlaceholderText is a 25% alpha label color on macOS: far too faint for content."""
     palette = widget.palette() if widget is not None else QGuiApplication.palette()
-    return palette.color(QPalette.ColorRole.PlaceholderText)
+    return blend(palette.color(QPalette.ColorRole.Text), palette.color(QPalette.ColorRole.Base), 0.62)
+
+
+class SecondaryLabel(QLabel):
+    """A label in the secondary color that follows light / dark switches."""
+
+    def __init__(self, text: str = "", smaller: bool = True):
+        super().__init__(text)
+        self.setWordWrap(True)
+        if smaller:
+            font = self.font()
+            font.setPointSizeF(font.pointSizeF() - 1)
+            self.setFont(font)
+        self._apply()
+
+    def _apply(self) -> None:
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.WindowText, secondary_color())
+        self.setPalette(palette)
+
+    def event(self, event) -> bool:
+        if event.type() == QEvent.Type.ApplicationPaletteChange:
+            self._apply()
+        return super().event(event)
 
 
 def secondary_label(text: str = "", smaller: bool = True) -> QLabel:
-    label = QLabel(text)
-    label.setWordWrap(True)
-    palette = label.palette()
-    palette.setColor(QPalette.ColorRole.WindowText, palette.color(QPalette.ColorRole.PlaceholderText))
-    label.setPalette(palette)
-    if smaller:
-        font = label.font()
-        font.setPointSizeF(font.pointSizeF() - 1)
-        label.setFont(font)
-    return label
+    return SecondaryLabel(text, smaller)
 
 
 def heading_label(text: str, delta: float = 2) -> QLabel:
@@ -203,7 +225,7 @@ class RowDelegate(QStyledItemDelegate):
         elif index.column() == 0:
             color = option.palette.color(QPalette.ColorRole.Text)
         else:
-            color = option.palette.color(QPalette.ColorRole.PlaceholderText)
+            color = secondary_color(option.widget)
         margin = style.pixelMetric(QStyle.PixelMetric.PM_HeaderMargin) + 2
         rect = option.rect.adjusted(margin, 0, -margin, 0)
         painter.save()

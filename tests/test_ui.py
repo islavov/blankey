@@ -1,13 +1,15 @@
 import pytest
 from PySide6.QtCore import QItemSelectionModel, Qt
-from PySide6.QtWidgets import QCheckBox, QMessageBox
+from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import QCheckBox, QMessageBox, QWidget
 
 from blankey.core import RequestKind
 from blankey.templates import TemplateKind
 from blankey.ui import pages
-from blankey.ui.main_window import MainWindow
+from blankey.ui.main_window import MainWindow, _sidebar_color
 from blankey.ui.profiles import ProfilesPage
 from blankey.ui.requests import GenerateDialog, ProfileInputDialog
+from blankey.ui.widgets import secondary_color
 from blankey.vault import FieldInput
 
 
@@ -148,3 +150,38 @@ def test_main_window_badges_pending_requests(qtbot, app):
         window.sidebar.item(r) for r in range(window.sidebar.count()) if window.sidebar.item(r).text() == "Requests"
     )
     assert item.data(Qt.ItemDataRole.UserRole + 1) == 1
+
+
+def _luminance(color: QColor) -> float:
+    def channel(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (channel(c) for c in color.getRgbF()[:3])
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast(a: QColor, b: QColor) -> float:
+    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+@pytest.mark.parametrize(
+    ("window", "base", "text"),
+    [
+        ("#323232", "#1e1e1e", QColor(255, 255, 255, 217)),  # macOS dark: labelColor is 85% white
+        ("#ececec", "#ffffff", QColor(0, 0, 0, 217)),
+    ],
+)
+def test_secondary_text_is_readable_in_light_and_dark(qtbot, window, base, text):
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(window))
+    palette.setColor(QPalette.ColorRole.Base, QColor(base))
+    palette.setColor(QPalette.ColorRole.Text, text)
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(text.red(), text.green(), text.blue(), 64))
+    widget = QWidget()
+    qtbot.addWidget(widget)
+    widget.setPalette(palette)
+    secondary = secondary_color(widget)
+    assert secondary.alpha() == 255
+    for ground in (QColor(window), QColor(base), _sidebar_color(palette)):
+        assert _contrast(secondary, ground) >= 4.5

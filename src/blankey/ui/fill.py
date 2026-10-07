@@ -168,7 +168,7 @@ class SourceDelegate(QStyledItemDelegate):
             "Vault": accent_color(self.dialog),
             "Claude": QColor("#8E5CD9"),
             "Value": QColor("#2A9D8F"),
-            "Default": palette.color(QPalette.ColorRole.PlaceholderText),
+            "Default": secondary_color(self.dialog),
             "Empty": warn,
         }
         small = QFont(option.font)

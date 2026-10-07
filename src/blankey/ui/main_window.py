@@ -62,14 +62,14 @@ class SidebarDelegate(QStyledItemDelegate):
             font.setPointSizeF(font.pointSizeF() - 2)
             font.setWeight(QFont.Weight.DemiBold)
             painter.setFont(font)
-            painter.setPen(palette.color(QPalette.ColorRole.PlaceholderText))
+            painter.setPen(secondary_color())
             align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
             painter.drawText(rect.adjusted(10, 8, 0, 0), align, index.data())
             painter.restore()
             return
         if option.state & QStyle.StateFlag.State_Selected:
             fill = QColor(text_color)
-            fill.setAlphaF(0.1)
+            fill.setAlphaF(0.1 if text_color.lightness() < 128 else 0.16)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(fill)
             painter.drawRoundedRect(rect, 6, 6)
@@ -91,11 +91,13 @@ class SidebarDelegate(QStyledItemDelegate):
             text = str(badge)
             width = max(18, painter.fontMetrics().horizontalAdvance(text) + 12)
             pill = QRect(rect.right() - width - 6, rect.center().y() - 9, width, 18)
+            pill_fill = QColor(text_color)
+            pill_fill.setAlphaF(0.16)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(palette.color(QPalette.ColorRole.PlaceholderText))
+            painter.setBrush(pill_fill)
             painter.drawRoundedRect(pill, 9, 9)
             painter.setFont(small)
-            painter.setPen(QColor("white"))
+            painter.setPen(text_color)
             painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, text)
         painter.restore()
 
