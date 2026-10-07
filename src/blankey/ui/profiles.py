@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from blankey.core import Blankey
 from blankey.ui.unlock import ensure_unlocked
+from blankey.ui.widgets import fit_to_screen
 from blankey.vault import FieldInput, FieldType
 from blankey.vault.fieldtypes import validate
 
@@ -26,7 +27,7 @@ class ProfilesWindow(QWidget):
         super().__init__()
         self.app = app
         self.setWindowTitle("Blankey - profiles")
-        self.resize(900, 560)
+        fit_to_screen(self, 0.7, 0.7, 1000, 620)
 
         self.profiles = QListWidget()
         self.profiles.currentItemChanged.connect(lambda *_: self._load_fields())
@@ -40,6 +41,8 @@ class ProfilesWindow(QWidget):
         self.table = QTableWidget(0, len(COLUMNS))
         self.table.setHorizontalHeaderLabels(COLUMNS)
         self.table.horizontalHeader().setStretchLastSection(True)
+        for column, width in enumerate((260, 240, 120)):
+            self.table.setColumnWidth(column, width)
         add_field = QPushButton("Add field")
         add_field.clicked.connect(lambda: self._append_row("", "", FieldType.TEXT, ""))
         remove_field = QPushButton("Remove field")

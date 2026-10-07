@@ -26,6 +26,7 @@ from blankey.core import Blankey
 from blankey.ui.fill import FillDialog
 from blankey.ui.requests import GenerateDialog, open_request
 from blankey.ui.unlock import ensure_unlocked
+from blankey.ui.widgets import fit_to_screen
 
 OPEN_DIR = Path(tempfile.gettempdir()) / "blankey-open"
 REQUEST_LABELS = {"profile_input": "Profile data", "generate": "Generate document", "fill": "Fill documents"}
@@ -41,7 +42,7 @@ class DocumentsWindow(QWidget):
         super().__init__()
         self.app = app
         self.setWindowTitle("Blankey - documents")
-        self.resize(820, 420)
+        fit_to_screen(self, 0.6, 0.55, 960, 520)
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["#", "Title", "Template", "Signature", "Password", "Created"])
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -75,6 +76,7 @@ class DocumentsWindow(QWidget):
                 item = QTableWidgetItem(text)
                 item.setData(Qt.ItemDataRole.UserRole, doc.id)
                 self.table.setItem(row, col, item)
+        self.table.resizeColumnsToContents()
 
     def _selected(self):
         row = self.table.currentRow()
@@ -115,7 +117,7 @@ class TemplatesWindow(QWidget):
         super().__init__()
         self.app = app
         self.setWindowTitle("Blankey - templates")
-        self.resize(560, 380)
+        fit_to_screen(self, 0.45, 0.5, 720, 460)
         self.list = QListWidget()
         generate = QPushButton("Generate…")
         generate.clicked.connect(self._generate)
@@ -174,7 +176,7 @@ class RequestsWindow(QWidget):
         super().__init__()
         self.app = app
         self.setWindowTitle("Blankey - requests from Claude")
-        self.resize(520, 320)
+        fit_to_screen(self, 0.45, 0.45, 720, 420)
         self.list = QListWidget()
         self.list.itemDoubleClicked.connect(lambda *_: self._open())
         open_button = QPushButton("Open")
@@ -206,7 +208,7 @@ class FillSetsWindow(QWidget):
         super().__init__()
         self.app = app
         self.setWindowTitle("Blankey - fill sets")
-        self.resize(640, 380)
+        fit_to_screen(self, 0.6, 0.55, 960, 520)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["#", "Name", "Templates", "Updated"])
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -240,6 +242,7 @@ class FillSetsWindow(QWidget):
                 item = QTableWidgetItem(text)
                 item.setData(Qt.ItemDataRole.UserRole, info.id)
                 self.table.setItem(row, col, item)
+        self.table.resizeColumnsToContents()
 
     def _selected(self):
         row = self.table.currentRow()

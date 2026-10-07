@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from blankey.core import Blankey
 from blankey.templates import fill
 from blankey.templates.bindings import as_text
+from blankey.ui.widgets import fit_to_screen
 from blankey.vault import Request
 
 EMPTY = QBrush(QColor("#c0392b"))
@@ -63,7 +64,7 @@ class FillDialog(QDialog):
             self.bindings.setdefault(var.name, fill.default_binding(var, set(self.roles)))
 
         self.setWindowTitle("Fill: " + ", ".join(t.name for t in self.templates))
-        self.resize(1100, 720)
+        fit_to_screen(self, 0.9, 0.85, 1200, 760)
         layout = QVBoxLayout(self)
         if request is not None and request.payload.get("reason"):
             reason = QLabel(request.payload["reason"])
@@ -91,11 +92,12 @@ class FillDialog(QDialog):
         self.table.setHorizontalHeaderLabels(["Field", "Context", "Source / value"])
         self.table.setWordWrap(True)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setMinimumSectionSize(34)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        self.table.setColumnWidth(2, 380)
+        self.table.setColumnWidth(2, int(self.width() * 0.4))
         for row, var in enumerate(self.vars.values()):
             label = QTableWidgetItem(var.label or var.name)
             label.setToolTip(var.name)
@@ -157,6 +159,12 @@ class FillDialog(QDialog):
                 combo.setCurrentIndex(index)
             else:
                 combo.setEditText(self.bindings[var.name].get(fill.VALUE, ""))
+            view = combo.view()
+            view.setTextElideMode(Qt.TextElideMode.ElideNone)
+            view.setMinimumWidth(min(view.sizeHintForColumn(0) + 40, self.width()))
+            combo.lineEdit().setCursorPosition(0)
+            combo.setToolTip(combo.currentText())
+            combo.currentTextChanged.connect(combo.setToolTip)
             combo.currentTextChanged.connect(lambda _, r=row: self._mark(r))
             self.table.setCellWidget(row, 2, combo)
             self._mark(row)

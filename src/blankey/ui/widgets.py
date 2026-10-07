@@ -1,4 +1,4 @@
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QGuiApplication, QPixmap
 from PySide6.QtWidgets import QCheckBox, QLabel, QLineEdit, QScrollArea, QVBoxLayout, QWidget
 
 from blankey.vault.fieldtypes import TRUE_VALUES, FieldType
@@ -26,6 +26,15 @@ def input_value(widget: QWidget) -> str:
     if isinstance(widget, QCheckBox):
         return "yes" if widget.isChecked() else ""
     return widget.text().strip()
+
+
+def fit_to_screen(widget: QWidget, width: float, height: float, min_width: int = 0, min_height: int = 0) -> None:
+    """Size a window as a fraction of the available screen, never smaller than the minimum or larger than the screen."""
+    area = (widget.screen() or QGuiApplication.primaryScreen()).availableGeometry()
+    widget.resize(
+        min(area.width(), max(min_width, int(area.width() * width))),
+        min(area.height(), max(min_height, int(area.height() * height))),
+    )
 
 
 class PagePreview(QScrollArea):

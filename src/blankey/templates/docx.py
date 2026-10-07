@@ -105,7 +105,7 @@ def variables(path: Path) -> list[str]:
     return list(found)
 
 
-def blank_contexts(path: Path, width: int = 140) -> dict[str, list[str]]:
+def blank_contexts(path: Path, width: int = 400) -> dict[str, list[str]]:
     """For each tag: the surrounding paragraph text per occurrence, the tag shown as [____] and
     other tags as [name], trimmed to about `width` characters around the blank."""
     contexts: dict[str, list[str]] = {}

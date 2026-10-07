@@ -19,7 +19,7 @@ from blankey.core import Blankey, GenerateOptions
 from blankey.render.preview import render_pages
 from blankey.ui.fill import open_fill_request
 from blankey.ui.unlock import ensure_unlocked
-from blankey.ui.widgets import PagePreview, input_value, value_input
+from blankey.ui.widgets import PagePreview, fit_to_screen, input_value, value_input
 from blankey.vault import FieldInput, FieldType, Request
 from blankey.vault.fieldtypes import validate
 
@@ -38,7 +38,7 @@ class ProfileInputDialog(QDialog):
         payload = request.payload
         self.profile_id: int | None = payload.get("profile_id")
         self.setWindowTitle("Claude asks for data")
-        self.resize(560, 0)
+        fit_to_screen(self, 0.45, 0, 720)
 
         layout = QVBoxLayout(self)
         reason = QLabel(payload.get("reason") or "")
@@ -131,6 +131,7 @@ class GenerateDialog(QDialog):
         defaults = defaults or {}
         template = app.templates.get(template_id)
         self.setWindowTitle(f"Generate: {template.name}")
+        fit_to_screen(self, 0.85, 0.85, 1100, 760)
 
         rendered = app.render_real(template_id, profiles)
         layout = QHBoxLayout(self)
