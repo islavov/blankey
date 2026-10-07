@@ -39,6 +39,7 @@ class DocumentsWindow(QWidget):
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["#", "Title", "Template", "Signature", "Password", "Created"])
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.doubleClicked.connect(lambda *_: self._open())
@@ -78,11 +79,16 @@ class DocumentsWindow(QWidget):
         doc_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
         return next(d for d in self.app.vault.list_documents() if d.id == doc_id)
 
+    def _selected_all(self):
+        rows = self.table.selectionModel().selectedRows()
+        doc_ids = {self.table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole) for index in rows}
+        return [d for d in self.app.vault.list_documents() if d.id in doc_ids]
+
     def _open(self) -> None:
-        doc = self._selected()
-        if doc is None or not ensure_unlocked(self.app, self):
+        docs = self._selected_all()
+        if not docs or not ensure_unlocked(self.app, self):
             return
-        open_documents(self.app.vault, [doc.id])
+        open_documents(self.app.vault, [d.id for d in docs])
 
     def _export(self) -> None:
         doc = self._selected()
@@ -94,11 +100,13 @@ class DocumentsWindow(QWidget):
             self.app.vault.audit("user", "export_document", str(doc.id))
 
     def _delete(self) -> None:
-        doc = self._selected()
-        if doc is None:
+        docs = self._selected_all()
+        if not docs:
             return
-        if QMessageBox.question(self, "Blankey", f'Delete "{doc.title}"?') == QMessageBox.StandardButton.Yes:
-            self.app.vault.delete_document(doc.id)
+        question = f'Delete "{docs[0].title}"?' if len(docs) == 1 else f"Delete {len(docs)} documents?"
+        if QMessageBox.question(self, "Blankey", question) == QMessageBox.StandardButton.Yes:
+            for doc in docs:
+                self.app.vault.delete_document(doc.id)
             self.refresh()
 
 

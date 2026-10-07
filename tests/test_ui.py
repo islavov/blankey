@@ -1,10 +1,12 @@
 import pytest
+from PySide6.QtCore import QItemSelectionModel
 from PySide6.QtWidgets import QCheckBox, QMessageBox
 
 from blankey.core import RequestKind
 from blankey.templates import TemplateKind
 from blankey.ui.profiles import ProfilesWindow
 from blankey.ui.requests import GenerateDialog, ProfileInputDialog
+from blankey.ui.windows import DocumentsWindow
 from blankey.vault import FieldInput
 
 
@@ -98,3 +100,21 @@ def test_profiles_window_round_trip(qtbot, app):
     window.table.item(0, 3).setText("Пловдив")
     window._save()
     assert app.vault.get_values(pid)["city"][1] == "Пловдив"
+
+
+def test_documents_window_deletes_all_selected(qtbot, app, monkeypatch):
+    ids = [app.vault.store_document("t", f"Doc {i}", {}, 0, "", False, f"d{i}.docx", b"x") for i in range(3)]
+    window = DocumentsWindow(app)
+    qtbot.addWidget(window)
+    selection = window.table.selectionModel()
+    for row in (0, 2):
+        selection.select(
+            window.table.model().index(row, 0),
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+        )
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: asked.append(args[2]) or QMessageBox.StandardButton.Yes)
+    window._delete()
+    assert asked == ["Delete 2 documents?"]
+    assert [d.id for d in app.vault.list_documents()] == [ids[1]]
+    assert window.table.rowCount() == 1
