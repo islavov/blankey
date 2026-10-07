@@ -26,12 +26,12 @@ from PySide6.QtWidgets import (
 
 from blankey.core import Blankey
 from blankey.ui import macos, platform
-from blankey.ui.pages import DocumentsPage, FillSetsPage, RequestsPage, TemplatesPage
+from blankey.ui.pages import ActivityPage, DocumentsPage, FillSetsPage, TemplatesPage
 from blankey.ui.profiles import ProfilesPage
 from blankey.ui.widgets import Page, accent_color, fit_to_screen, secondary_color
 
 SECTIONS: list[tuple[str, list[type[Page]]]] = [
-    ("Claude", [RequestsPage]),
+    ("Claude", [ActivityPage]),
     ("Library", [FillSetsPage, DocumentsPage, TemplatesPage]),
     ("Vault", [ProfilesPage]),
 ]

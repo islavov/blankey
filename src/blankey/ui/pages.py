@@ -1,4 +1,4 @@
-"""Main window pages: requests, fill sets, documents and templates."""
+"""Main window pages: Claude activity, fill sets, documents and templates."""
 
 from pathlib import Path
 
@@ -23,6 +23,7 @@ from blankey.ui.fill import FillDialog
 from blankey.ui.requests import GenerateDialog, open_request
 from blankey.ui.unlock import ensure_unlocked
 from blankey.ui.widgets import Page, confirm, filter_table, open_documents, secondary_label, style_table
+from blankey.vault import Request
 
 REQUEST_LABELS = {"profile_input": "Profile data", "generate": "Generate document", "fill": "Fill documents"}
 
@@ -81,27 +82,73 @@ class TablePage(Page):
         pass
 
 
-class RequestsPage(TablePage):
-    title = "Requests"
-    symbol = "bubble.left.and.text.bubble.right"
-    columns = ("Request", "Details", "Received")
-    empty_text = "No requests from Claude"
+def request_outcome(request: Request) -> str:
+    """One-line outcome of a request, from its metadata-only result."""
+    result = request.result or {}
+    if request.status == "pending":
+        return "Waiting for you"
+    if request.status == "cancelled" or result.get("outcome") == "cancelled":
+        return "Cancelled"
+    match request.kind:
+        case "profile_input":
+            fields = result.get("fields", [])
+            saved = sum(f.get("status") == "saved" for f in fields)
+            skipped = len(fields) - saved
+            return f"Saved {saved} field{'s' if saved != 1 else ''}" + (f", {skipped} skipped" if skipped else "")
+        case "generate":
+            extras = [e for e in (result.get("signed") and "signed", result.get("encrypted") and "password") if e]
+            return "Document generated" + (f" ({', '.join(extras)})" if extras else "")
+        case "fill":
+            documents = len(result.get("document_ids", []))
+            text = f"{documents} document{'s' if documents != 1 else ''} generated" if documents else "Fill set saved"
+            empty = len(result.get("empty", []))
+            return text + (f", {empty} empty" if empty else "")
+    return str(result.get("outcome", request.status))
+
+
+def request_details(request: Request, template_names: dict[str, str]) -> str:
+    payload = request.payload
+    if payload.get("reason"):
+        return payload["reason"]
+    match request.kind:
+        case "profile_input":
+            count = len(payload.get("fields", []))
+            return f"{count} field{'s' if count != 1 else ''}"
+        case "generate":
+            return template_names.get(payload.get("template_id", ""), payload.get("template_id", ""))
+        case "fill":
+            names = ", ".join(template_names.get(t, t) for t in payload.get("templates", []))
+            return f"{names} · {payload.get('name', '')}"
+    return ""
+
+
+class ActivityPage(TablePage):
+    """Everything Claude asked for, waiting requests first. Metadata only: no values are shown."""
+
+    title = "Activity"
+    symbol = "clock.arrow.circlepath"
+    columns = ("Request", "Details", "Outcome", "Time")
+    empty_text = "Nothing from Claude yet"
 
     def __init__(self, app: Blankey, parent: QWidget | None = None):
         super().__init__(app, parent)
         self.action("Open", "arrow.up.forward.app", self.open)
+        self.pending = 0
         self.refresh()
 
     def refresh(self) -> None:
-        requests = self.app.vault.list_requests("pending")
+        requests = sorted(self.app.vault.list_requests(), key=lambda r: (r.status != "pending", -r.id))
+        names = {t.id: t.name for t in self.app.templates.all()}
+        self.pending = sum(r.status == "pending" for r in requests)
         self.set_rows(
             [
                 (
                     r.id,
                     [
                         REQUEST_LABELS.get(r.kind, r.kind),
-                        r.payload.get("reason") or r.payload.get("template_id", ""),
-                        _when(r.created_at),
+                        request_details(r, names),
+                        request_outcome(r),
+                        _when(r.resolved_at or r.created_at),
                     ],
                 )
                 for r in requests
@@ -109,16 +156,29 @@ class RequestsPage(TablePage):
         )
 
     def subtitle(self) -> str:
-        count = self.table.rowCount()
-        return f"{count} waiting" if count else "Nothing waiting"
+        return f"{self.pending} waiting" if self.pending else "Nothing waiting"
 
     def badge(self) -> int:
-        return self.table.rowCount()
+        return self.pending
 
     def open(self) -> None:
-        if (request_id := self.current_id()) is not None:
-            open_request(self.app, self.app.vault.get_request(request_id), self.window())
-            self.refresh()
+        request_id = self.current_id()
+        if request_id is None:
+            return
+        request = self.app.vault.get_request(request_id)
+        result = request.result or {}
+        if request.status == "pending":
+            open_request(self.app, request, self.window())
+        elif not ensure_unlocked(self.app, self):
+            return
+        elif request.kind == "fill" and result.get("fill_set_id") in {f.id for f in self.app.vault.list_fill_sets()}:
+            info, _ = self.app.vault.get_fill_set(result["fill_set_id"])
+            FillDialog(
+                self.app, info.templates, info.profiles, info.name, fill_set_id=info.id, parent=self.window()
+            ).exec()
+        elif result.get("document_id") in {d.id for d in self.app.vault.list_documents()}:
+            open_documents(self.app.vault, [result["document_id"]])
+        self.refresh()
 
 
 class FillSetsPage(TablePage):

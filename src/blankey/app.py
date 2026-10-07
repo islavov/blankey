@@ -12,7 +12,7 @@ from blankey.core import Blankey
 from blankey.mcp_server import McpThread
 from blankey.ui import icons, platform
 from blankey.ui.main_window import MainWindow
-from blankey.ui.pages import RequestsPage
+from blankey.ui.pages import ActivityPage
 from blankey.ui.requests import open_request
 from blankey.ui.unlock import SetupDialog, ensure_unlocked
 from blankey.ui.widgets import clear_opened_documents
@@ -91,13 +91,13 @@ class Tray(QObject):
         self.menu.addAction("Quit", self.quit)
 
     def open_main(self) -> None:
-        """Show the main window, on the requests page when Claude is waiting."""
+        """Show the main window, on the activity page when Claude is waiting."""
         if self.main is None:
             self.main = MainWindow(self.app, on_lock=self._lock, on_quit=self.quit)
         else:
             self.main.refresh()
         if self.app.vault.list_requests("pending"):
-            self.main.show_page(RequestsPage)
+            self.main.show_page(ActivityPage)
         self.main.show()
         self.main.raise_()
         self.main.activateWindow()
@@ -213,6 +213,7 @@ def main() -> None:
     mcp = McpThread(app)
     mcp.start()
     tray = Tray(qt_app, app, mcp)
+    QTimer.singleShot(0, tray._process_requests)  # requests that arrived while the app was closed
     signal.signal(signal.SIGINT, lambda *_: tray.quit())
     # Python only runs signal handlers between bytecodes; wake it up periodically while Qt idles.
     wakeup = QTimer()

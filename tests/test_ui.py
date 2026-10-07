@@ -144,10 +144,10 @@ def test_main_window_badges_pending_requests(qtbot, app):
     app.create_request(RequestKind.PROFILE_INPUT, {"profile_id": None, "fields": [], "reason": "need data"})
     window = MainWindow(app, on_lock=lambda: None, on_quit=lambda: None)
     qtbot.addWidget(window)
-    window.show_page(pages.RequestsPage)
+    window.show_page(pages.ActivityPage)
     assert window.subtitle_label.text() == "1 waiting"
     item = next(
-        window.sidebar.item(r) for r in range(window.sidebar.count()) if window.sidebar.item(r).text() == "Requests"
+        window.sidebar.item(r) for r in range(window.sidebar.count()) if window.sidebar.item(r).text() == "Activity"
     )
     assert item.data(Qt.ItemDataRole.UserRole + 1) == 1
 
@@ -185,3 +185,26 @@ def test_secondary_text_is_readable_in_light_and_dark(qtbot, window, base, text)
     assert secondary.alpha() == 255
     for ground in (QColor(window), QColor(base), _sidebar_color(palette)):
         assert _contrast(secondary, ground) >= 4.5
+
+
+def test_activity_lists_waiting_first_with_outcomes(qtbot, app):
+    vault = app.vault
+    profile = vault.create_request("profile_input", {"fields": [{"key": "a"}, {"key": "b"}], "reason": ""})
+    vault.resolve_request(
+        profile, "done", {"fields": [{"key": "a", "status": "saved"}, {"key": "b", "status": "skipped"}]}
+    )
+    fill = vault.create_request("fill", {"templates": ["t"], "name": "delta", "reason": ""})
+    vault.resolve_request(fill, "done", {"outcome": "generated", "document_ids": [1, 2], "empty": ["x"]})
+    cancelled = vault.create_request("generate", {"template_id": "t", "reason": "Sign it"})
+    vault.resolve_request(cancelled, "cancelled", {"outcome": "cancelled"})
+    vault.create_request("fill", {"templates": ["t"], "name": "next", "reason": "Fill the decision"})
+    page = pages.ActivityPage(app)
+    qtbot.addWidget(page)
+    rows = [[page.table.item(r, c).text() for c in range(3)] for r in range(page.table.rowCount())]
+    assert rows == [
+        ["Fill documents", "Fill the decision", "Waiting for you"],
+        ["Generate document", "Sign it", "Cancelled"],
+        ["Fill documents", "t · delta", "2 documents generated, 1 empty"],
+        ["Profile data", "2 fields", "Saved 1 field, 1 skipped"],
+    ]
+    assert page.badge() == 1 and page.subtitle() == "1 waiting"
