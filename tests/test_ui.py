@@ -247,3 +247,44 @@ def test_activity_is_hidden_while_locked(qtbot, app):
     assert page.table.rowCount() == 0
     assert page.badge() == 1
     assert "Unlock" in page.empty_label.text()
+
+
+def test_template_cards_keep_their_width_in_a_narrow_window(qtbot, app, filled_docx, tmp_path):
+    from blankey.templates import docx
+
+    target = tmp_path / "t.docx"
+    docx.tokenize(filled_docx, target, [{"find": "34 000", "var": "amount"}])
+    long_name = "Договор за паричен заем – Acme Holdings ЕООД и управител John Smith, вариант с поръчител"
+    app.templates.save("loan", long_name, TemplateKind.DOCX, {}, {}, source_file=target)
+    window = MainWindow(app, on_lock=lambda: None, on_quit=lambda: None)
+    qtbot.addWidget(window)
+    window.show_page(pages.TemplatesPage)
+    window.resize(820, 600)
+    window.show()
+    qtbot.waitExposed(window)
+    page = window.current_page()
+    assert page.list_area.width() >= 300
+    rect = page.list.visualItemRect(page.list.item(0))
+    assert rect.height() < 140  # two lines of name at most
+
+
+def test_switching_templates_keeps_the_split(qtbot, app, filled_docx, tmp_path):
+    from blankey.templates import docx
+
+    target = tmp_path / "t.docx"
+    docx.tokenize(filled_docx, target, [{"find": "34 000", "var": "amount"}])
+    app.templates.save("a", "Кратко", TemplateKind.DOCX, {}, {}, source_file=target)
+    app.templates.save("b", "Много дълго име на шаблон " * 6, TemplateKind.DOCX, {}, {}, source_file=target)
+    window = MainWindow(app, on_lock=lambda: None, on_quit=lambda: None)
+    qtbot.addWidget(window)
+    window.show_page(pages.TemplatesPage)
+    window.resize(1100, 700)
+    window.show()
+    qtbot.waitExposed(window)
+    page = window.current_page()
+    widths = []
+    for row in (0, 1, 0, 1):
+        page.list.setCurrentRow(row)
+        qtbot.wait(20)
+        widths.append((page.list_area.width(), page.preview.width()))
+    assert len(set(widths)) == 1

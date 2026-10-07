@@ -382,6 +382,9 @@ class TemplatePreview(QWidget):
         super().__init__(parent)
         self.setAutoFillBackground(True)
         self.heading = heading_label("")
+        # wraps instead of widening: a long name must not change the preview's minimum width
+        self.heading.setWordWrap(True)
+        self.heading.setMinimumWidth(1)
         self.info = secondary_label()
         self.browser = QTextBrowser()
         self.browser.setFrameShape(QFrame.Shape.NoFrame)
@@ -397,6 +400,7 @@ class TemplatePreview(QWidget):
             "p { margin-top: 0; margin-bottom: 8px; }"
         )
         self.pages = PagePreview([])
+        self.pages.setMinimumSize(0, 0)
         self.pages.setFrameShape(QFrame.Shape.NoFrame)
         self.message = secondary_label("Select a template to see it", smaller=False)
         self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -416,15 +420,16 @@ class TemplatePreview(QWidget):
         self.copy_button = QPushButton("Copy ID")
         self.copy_button.setToolTip("Copy the template ID to give to Claude")
         self.copy_button.setVisible(False)
-        title_row = QHBoxLayout()
-        title_row.setSpacing(10)
-        title_row.addWidget(self.heading)
-        title_row.addWidget(self.id_label)
-        title_row.addStretch()
-        title_row.addWidget(self.copy_button)
-        layout.addLayout(title_row)
-        layout.addWidget(self.info)
-        layout.addSpacing(10)
+        self.info.setWordWrap(False)
+        self.info.setMinimumWidth(1)
+        details = QHBoxLayout()
+        details.setSpacing(12)
+        details.addWidget(self.id_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        details.addWidget(self.info, 1, Qt.AlignmentFlag.AlignVCenter)
+        details.addWidget(self.copy_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.heading)
+        layout.addLayout(details)
+        layout.addSpacing(8)
         layout.addWidget(backdrop, 1)
 
     def clear(self) -> None:
@@ -454,6 +459,7 @@ class TemplatePreview(QWidget):
             self.stack.setCurrentWidget(self.message)
             return
         pages = PagePreview(pngs)
+        pages.setMinimumSize(0, 0)
         pages.setFrameShape(QFrame.Shape.NoFrame)
         self.stack.replaceWidget(self.pages, pages)
         self.pages.deleteLater()
@@ -492,19 +498,38 @@ class TemplateCardDelegate(QStyledItemDelegate):
         small.setPointSizeF(base.pointSizeF() - 1)
         return name, mono, small
 
-    def _name_rect(self, option: QStyleOptionViewItem, text: str) -> QRect:
+    @staticmethod
+    def _wrap(text: str, metrics: QFontMetrics, width: int) -> list[str]:
+        """Word-wrap into at most two lines, the second elided."""
+        lines, line = [], ""
+        for word in text.split():
+            candidate = f"{line} {word}".strip()
+            if metrics.horizontalAdvance(candidate) <= width or not line:
+                line = candidate
+            else:
+                lines.append(line)
+                line = word
+        lines.append(line)
+        if len(lines) > 2:
+            lines = [lines[0], " ".join(lines[1:])]
+        return [metrics.elidedText(part, Qt.TextElideMode.ElideRight, width) for part in lines]
+
+    def _layout(self, option: QStyleOptionViewItem, text: str) -> tuple[QRect, list[str]]:
+        """Name block and its lines; widths come from the list's viewport, valid in sizeHint too."""
         name, _, _ = self._fonts(option.font)
-        left = option.rect.left() + 10 + self.PAD + self.ICON + 10
-        width = option.rect.right() - 10 - self.PAD - left
-        bound = QFontMetrics(name).boundingRect(QRect(0, 0, width, 1000), Qt.TextFlag.TextWordWrap, text)
-        lines = min(2, max(1, round(bound.height() / QFontMetrics(name).lineSpacing())))
-        return QRect(left, option.rect.top() + 5 + self.PAD, width, lines * QFontMetrics(name).lineSpacing())
+        view_width = option.widget.viewport().width() if option.widget is not None else option.rect.width()
+        left = 10 + self.PAD + self.ICON + 10
+        width = max(80, view_width - left - 10 - self.PAD)
+        metrics = QFontMetrics(name)
+        lines = self._wrap(text, metrics, width)
+        top = option.rect.top() + 5 + self.PAD
+        return QRect(option.rect.left() + left, top, width, len(lines) * metrics.lineSpacing()), lines
 
     def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
-        name_rect = self._name_rect(option, index.data())
+        name_rect, _ = self._layout(option, index.data())
         _, mono, small = self._fonts(option.font)
         height = name_rect.height() + QFontMetrics(mono).height() + QFontMetrics(small).height() + 8
-        return QSize(option.rect.width(), height + 2 * self.PAD + 10)
+        return QSize(0, height + 2 * self.PAD + 10)
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
         painter.save()
@@ -522,32 +547,22 @@ class TemplateCardDelegate(QStyledItemDelegate):
         painter.setBrush(fill)
         painter.drawRoundedRect(QRectF(card).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
 
+        name_font, mono, small = self._fonts(option.font)
+        name_rect, lines = self._layout(option, index.data())
+        metrics = QFontMetrics(name_font)
         symbol = "doc.text" if index.data(KIND_ROLE) == TemplateKind.DOCX else "doc.richtext"
         glyph = macos.symbol_pixmap(symbol, accent, self.ICON * 0.8)
         if glyph is not None:
             w, h = glyph.width() / glyph.devicePixelRatio(), glyph.height() / glyph.devicePixelRatio()
-            painter.drawPixmap(QRectF(card.left() + self.PAD, card.top() + self.PAD, w, h), glyph, QRectF(glyph.rect()))
+            x = card.left() + self.PAD + (self.ICON - w) / 2
+            y = name_rect.top() + (metrics.height() - h) / 2  # centered on the first line of the name
+            painter.drawPixmap(QRectF(x, y, w, h), glyph, QRectF(glyph.rect()))
 
-        name_font, mono, small = self._fonts(option.font)
-        name_rect = self._name_rect(option, index.data())
         painter.setFont(name_font)
         painter.setPen(text)
-        metrics = QFontMetrics(name_font)
-        words, lines, line = index.data().split(), [], ""
-        for word in words:
-            candidate = f"{line} {word}".strip()
-            if metrics.horizontalAdvance(candidate) <= name_rect.width() or not line:
-                line = candidate
-            else:
-                lines.append(line)
-                line = word
-        lines.append(line)
-        if len(lines) > 2:
-            lines = [lines[0], " ".join(lines[1:])]
         for number, part in enumerate(lines):
-            shown = metrics.elidedText(part, Qt.TextElideMode.ElideRight, name_rect.width())
             painter.drawText(
-                name_rect.left(), name_rect.top() + metrics.ascent() + number * metrics.lineSpacing(), shown
+                name_rect.left(), name_rect.top() + metrics.ascent() + number * metrics.lineSpacing(), part
             )
 
         y = name_rect.bottom() + 6
@@ -594,9 +609,14 @@ class TemplatesPage(Page):
         splitter = QSplitter()
         splitter.addWidget(self.list_area)
         splitter.addWidget(self.preview)
+        # the cards keep their width; the preview gives way first and can collapse
+        self.list_area.setMinimumWidth(300)
+        self.preview.setMinimumWidth(0)
+        splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([340, 900])
-        splitter.setChildrenCollapsible(False)
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, True)
+        splitter.setSizes([360, 900])
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(splitter)
