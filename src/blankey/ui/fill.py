@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from blankey.core import Blankey
 from blankey.templates import fill
 from blankey.templates.bindings import as_text
-from blankey.ui.widgets import fit_to_screen
+from blankey.ui.widgets import fit_to_screen, open_documents
 from blankey.vault import Request
 
 EMPTY = QBrush(QColor("#c0392b"))
@@ -228,6 +228,7 @@ class FillDialog(QDialog):
             QMessageBox.critical(self, "Blankey", f"Generation failed: {exc}")
             return
         self._resolve("generated", document_ids)
+        open_documents(self.app.vault, document_ids)
         self.accept()
 
     def _resolve(self, outcome: str, document_ids: list[int] | None = None) -> None:

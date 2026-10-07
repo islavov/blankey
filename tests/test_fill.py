@@ -2,6 +2,7 @@ import asyncio
 import io
 import sqlite3
 import zipfile
+from pathlib import Path
 
 import docx
 import pytest
@@ -146,7 +147,7 @@ def test_default_binding():
     assert fill.default_binding(fill.FillVar("x"), {"manager"}) == {"value": ""}
 
 
-def test_request_fill_validates_and_hides_values(qtbot, app, template, profiles, filled_docx):
+def test_request_fill_validates_and_hides_values(qtbot, app, template, profiles, filled_docx, opened_urls):
     mcp = build_server(app)
 
     def call(tool, **arguments):
@@ -192,6 +193,8 @@ def test_request_fill_validates_and_hides_values(qtbot, app, template, profiles,
     result = app.vault.get_request(request.id).result
     assert result["outcome"] == "generated" and len(result["document_ids"]) == 1
     assert result["empty"] == []
+    assert len(opened_urls) == 1 and opened_urls[0].endswith(".docx")
+    assert "Договор № 17" in text_of(Path(opened_urls[0]).read_bytes())
     assert "Договор № 17" in text_of(app.vault.load_document(result["document_ids"][0]))
     listed = call("list_fill_sets").model_dump_json()
     assert "7501020018" not in listed and "Тест" not in listed and '"loan_amount":"value"' in listed.replace(" ", "")

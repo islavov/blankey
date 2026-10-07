@@ -14,12 +14,12 @@ from blankey.ui import icons, platform
 from blankey.ui.profiles import ProfilesWindow
 from blankey.ui.requests import open_request
 from blankey.ui.unlock import SetupDialog, ensure_unlocked
+from blankey.ui.widgets import clear_opened_documents
 from blankey.ui.windows import (
     DocumentsWindow,
     FillSetsWindow,
     RequestsWindow,
     TemplatesWindow,
-    clear_opened_documents,
 )
 
 USER_INPUT_EVENTS = {QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.Wheel}

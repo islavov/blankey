@@ -22,6 +22,16 @@ def memory_keyring(monkeypatch):
     return store
 
 
+@pytest.fixture(autouse=True)
+def opened_urls(monkeypatch):
+    """Record files the UI would open with the default app instead of launching it."""
+    from PySide6.QtGui import QDesktopServices
+
+    opened = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()))
+    return opened
+
+
 @pytest.fixture
 def app(tmp_path):
     blankey = Blankey(load_config(tmp_path / "data"))

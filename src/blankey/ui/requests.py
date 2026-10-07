@@ -19,7 +19,7 @@ from blankey.core import Blankey, GenerateOptions
 from blankey.render.preview import render_pages
 from blankey.ui.fill import open_fill_request
 from blankey.ui.unlock import ensure_unlocked
-from blankey.ui.widgets import PagePreview, fit_to_screen, input_value, value_input
+from blankey.ui.widgets import PagePreview, fit_to_screen, input_value, open_documents, value_input
 from blankey.vault import FieldInput, FieldType, Request
 from blankey.vault.fieldtypes import validate
 
@@ -230,6 +230,7 @@ class GenerateDialog(QDialog):
                     "encrypted": doc.encrypted,
                 },
             )
+        open_documents(self.app.vault, [doc_id])
         self.accept()
 
     def reject(self) -> None:

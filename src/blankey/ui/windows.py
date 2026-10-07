@@ -1,6 +1,5 @@
 """Documents, templates and pending-requests windows."""
 
-import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
@@ -26,15 +25,9 @@ from blankey.core import Blankey
 from blankey.ui.fill import FillDialog
 from blankey.ui.requests import GenerateDialog, open_request
 from blankey.ui.unlock import ensure_unlocked
-from blankey.ui.widgets import fit_to_screen
+from blankey.ui.widgets import fit_to_screen, open_documents
 
-OPEN_DIR = Path(tempfile.gettempdir()) / "blankey-open"
 REQUEST_LABELS = {"profile_input": "Profile data", "generate": "Generate document", "fill": "Fill documents"}
-
-
-def clear_opened_documents() -> None:
-    for path in OPEN_DIR.glob("*"):
-        path.unlink(missing_ok=True)
 
 
 class DocumentsWindow(QWidget):
@@ -89,10 +82,7 @@ class DocumentsWindow(QWidget):
         doc = self._selected()
         if doc is None or not ensure_unlocked(self.app, self):
             return
-        OPEN_DIR.mkdir(mode=0o700, exist_ok=True)
-        path = OPEN_DIR / doc.filename
-        path.write_bytes(self.app.vault.load_document(doc.id))
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        open_documents(self.app.vault, [doc.id])
 
     def _export(self) -> None:
         doc = self._selected()
@@ -259,11 +249,11 @@ class FillSetsWindow(QWidget):
     def _generate(self) -> None:
         if info := self._selected():
             try:
-                count = len(self.app.generate_fill(info.id))
+                document_ids = self.app.generate_fill(info.id)
             except Exception as exc:
                 QMessageBox.critical(self, "Blankey", f"Generation failed: {exc}")
                 return
-            QMessageBox.information(self, "Blankey", f"Generated {count} document(s). See Documents.")
+            open_documents(self.app.vault, document_ids)
 
     def _export_yaml(self) -> None:
         if info := self._selected():

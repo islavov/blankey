@@ -1,7 +1,14 @@
-from PySide6.QtGui import QGuiApplication, QPixmap
+import tempfile
+from pathlib import Path
+
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
 from PySide6.QtWidgets import QCheckBox, QLabel, QLineEdit, QScrollArea, QVBoxLayout, QWidget
 
+from blankey.vault import Vault
 from blankey.vault.fieldtypes import TRUE_VALUES, FieldType
+
+OPEN_DIR = Path(tempfile.gettempdir()) / "blankey-open"
 
 PLACEHOLDERS = {
     FieldType.DATE: "DD.MM.YYYY",
@@ -26,6 +33,21 @@ def input_value(widget: QWidget) -> str:
     if isinstance(widget, QCheckBox):
         return "yes" if widget.isChecked() else ""
     return widget.text().strip()
+
+
+def open_documents(vault: Vault, doc_ids: list[int]) -> None:
+    """Decrypt into a private temp folder (cleared on lock and quit) and open with the default app."""
+    OPEN_DIR.mkdir(mode=0o700, exist_ok=True)
+    filenames = {d.id: d.filename for d in vault.list_documents()}
+    for doc_id in doc_ids:
+        path = OPEN_DIR / filenames[doc_id]
+        path.write_bytes(vault.load_document(doc_id))
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+
+def clear_opened_documents() -> None:
+    for path in OPEN_DIR.glob("*"):
+        path.unlink(missing_ok=True)
 
 
 def fit_to_screen(widget: QWidget, width: float, height: float, min_width: int = 0, min_height: int = 0) -> None:
