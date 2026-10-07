@@ -7,6 +7,8 @@ from pathlib import Path
 import docx
 import pytest
 import yaml
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLineEdit
 
 from blankey.core import RequestKind
 from blankey.mcp_server import build_server
@@ -214,3 +216,27 @@ def test_fill_dialog_cancel_and_save(qtbot, app, template, profiles):
     reopened = FillDialog(app, [], {}, "n")
     qtbot.addWidget(reopened)
     assert reopened.fill_set_id == result["fill_set_id"]
+
+
+def test_source_menu_and_typing(qtbot, app, template, profiles):
+    dialog = FillDialog(app, ["loan"], profiles, "menu", values={"loan_amount": "34 000"})
+    qtbot.addWidget(dialog)
+    dialog.show()
+    row = list(dialog.vars).index("loan_amount")
+    actions = [a for a in dialog.source_menu(row).actions() if not a.isSeparator()]
+    texts = [a.text() for a in actions]
+    assert texts[0] == "Claude  —  34 000"
+    assert [a.text() for a in actions if a.isChecked()] == ["Claude  —  34 000"]
+    assert "manager.egn  —  7501020018" in texts
+    assert texts[-1] == "Type a value…"
+
+    next(a for a in actions if a.text().startswith("manager.egn")).trigger()
+    assert dialog.current_bindings()["loan_amount"] == {"path": "manager.egn"}
+
+    dialog.start_typing(row)
+    editor = dialog.table.findChild(QLineEdit)
+    assert editor is not None and editor.text() == ""
+    editor.setText("50 000")
+    qtbot.keyClick(editor, Qt.Key.Key_Return)
+    qtbot.waitUntil(lambda: dialog.current_bindings()["loan_amount"] == {"value": "50 000"})
+    assert dialog.describe_row(row)[:3] == ("Value", "", "50 000")

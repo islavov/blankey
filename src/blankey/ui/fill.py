@@ -4,7 +4,7 @@ import html
 import json
 from typing import Any
 
-from PySide6.QtCore import QModelIndex, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QModelIndex, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette, QTextDocument
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QStyle,
     QStyledItemDelegate,
@@ -140,7 +141,7 @@ class ContextDelegate(QStyledItemDelegate):
 
 
 class SourceDelegate(QStyledItemDelegate):
-    """A pop-up button look: a source chip, the vault path and the value. Edits through a combo box."""
+    """A pop-up button look: a source chip, the vault path and the value. Typed values edit in place."""
 
     def __init__(self, dialog: "FillDialog"):
         super().__init__(dialog.table)
@@ -151,7 +152,7 @@ class SourceDelegate(QStyledItemDelegate):
         option.text = ""
         option.widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
         kind, path, value, empty = self.dialog.describe_row(index.row())
-        box = QRect(option.rect.left() + 8, option.rect.top() + 6, option.rect.width() - 16, 26)
+        box = source_box(option.rect)
         palette = option.palette
         warn = warn_color(self.dialog)
         painter.save()
@@ -204,36 +205,26 @@ class SourceDelegate(QStyledItemDelegate):
         return QSize(420, 38)
 
     def createEditor(self, parent: QWidget, option: QStyleOptionViewItem, index: QModelIndex) -> QWidget:
-        combo = QComboBox(parent)
-        combo.setEditable(True)
-        combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        for text, key in index.data(OPTIONS_ROLE):
-            combo.addItem(text, key)
-        view = combo.view()
-        view.setTextElideMode(Qt.TextElideMode.ElideNone)
-        view.setMinimumWidth(min(view.sizeHintForColumn(0) + 40, self.dialog.width()))
-        combo.activated.connect(lambda *_: self.commitData.emit(combo))
-        combo.activated.connect(lambda *_: self.closeEditor.emit(combo))
-        QTimer.singleShot(0, combo.showPopup)
-        return combo
+        """Only typed values use an editor; picking a source goes through FillDialog.source_menu."""
+        edit = QLineEdit(parent)
+        edit.setPlaceholderText("Type a value")
+        edit.setAttribute(Qt.WidgetAttribute.WA_MacShowFocusRect, False)
+        return edit
 
-    def setEditorData(self, editor: QComboBox, index: QModelIndex) -> None:
-        key = index.data(BINDING_ROLE)
-        position = editor.findData(key)
-        if position >= 0:
-            editor.setCurrentIndex(position)
-        else:
-            editor.setEditText(json.loads(key).get(fill.VALUE, ""))
-        editor.lineEdit().setCursorPosition(0)
+    def setEditorData(self, editor: QLineEdit, index: QModelIndex) -> None:
+        editor.setText(json.loads(index.data(BINDING_ROLE)).get(fill.VALUE, ""))
+        editor.selectAll()
 
-    def setModelData(self, editor: QComboBox, model, index: QModelIndex) -> None:
-        text = editor.currentText()
-        position = editor.findText(text)
-        key = editor.itemData(position) if position >= 0 else _key({fill.VALUE: text.strip()})
-        model.setData(index, key, BINDING_ROLE)
+    def setModelData(self, editor: QLineEdit, model, index: QModelIndex) -> None:
+        model.setData(index, _key({fill.VALUE: editor.text().strip()}), BINDING_ROLE)
 
     def updateEditorGeometry(self, editor: QWidget, option: QStyleOptionViewItem, index: QModelIndex) -> None:
-        editor.setGeometry(option.rect.adjusted(6, 4, -6, -4))
+        editor.setGeometry(source_box(option.rect))
+
+
+def source_box(rect: QRect) -> QRect:
+    """The pop-up button drawn inside a source cell."""
+    return QRect(rect.left() + 8, rect.top() + 6, rect.width() - 16, 26)
 
 
 class FillDialog(QDialog):
@@ -319,13 +310,10 @@ class FillDialog(QDialog):
         self.table.setHorizontalHeaderLabels(["Field", "In the document", "Source and value"])
         style_table(self.table, editable=True)
         self.table.setWordWrap(True)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.setEditTriggers(
-            QAbstractItemView.EditTrigger.SelectedClicked
-            | QAbstractItemView.EditTrigger.DoubleClicked
-            | QAbstractItemView.EditTrigger.EditKeyPressed
-        )
-        self.table.clicked.connect(lambda index: index.column() == SOURCE and self.table.edit(index))
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.clicked.connect(lambda index: index.column() == SOURCE and self.show_source_menu(index.row()))
+        self.table.installEventFilter(self)
         self.table.setItemDelegateForColumn(FIELD, FieldDelegate(self))
         self.table.setItemDelegateForColumn(CONTEXT, ContextDelegate(self))
         self.table.setItemDelegateForColumn(SOURCE, SourceDelegate(self))
@@ -377,30 +365,72 @@ class FillDialog(QDialog):
         profiles = self.profiles()
         self.context = self.app.real_context(profiles)
         self.vault_values = {}
-        path_items = []
+        path_sections = []
         for role, profile_id in profiles.items():
+            section = []
             for key, (_, value) in sorted(self.app.vault.get_values(profile_id).items()):
                 self.vault_values[f"{role}.{key}"] = value
-                path_items.append((f"{role}.{key}  —  {value or '(empty)'}", _key({fill.PATH: f"{role}.{key}"})))
+                section.append((f"{role}.{key}  —  {value or '(empty)'}", _key({fill.PATH: f"{role}.{key}"})))
+            if section:
+                path_sections.append(section)
         self.table.blockSignals(True)
         for row, var in enumerate(self.var_list):
-            options = []
+            first = []
             expressions = set(var.defaults.values())
             if expressions:
                 expression = next(iter(expressions)) if len(expressions) == 1 else "per template"
                 value = self._value({fill.DEFAULT: True}, var)
-                options.append((f"Default  {expression}  —  {as_text(value)}", _key({fill.DEFAULT: True})))
-            literals = dict.fromkeys(
-                v for v in (self.claude_values.get(var.name), self.bindings[var.name].get(fill.VALUE)) if v
-            )
-            options += [(literal, _key({fill.VALUE: literal})) for literal in literals]
-            options += path_items
+                first.append((f"Template default  {expression}  —  {as_text(value)}", _key({fill.DEFAULT: True})))
+            claude = self.claude_values.get(var.name)
+            typed = self.bindings[var.name].get(fill.VALUE)
+            if claude:
+                first.append((f"Claude  —  {claude}", _key({fill.VALUE: claude})))
+            if typed and typed != claude:
+                first.append((f"Typed  —  {typed}", _key({fill.VALUE: typed})))
+            options = [first, *path_sections] if first else path_sections
             item = self.table.item(row, SOURCE)
             item.setData(OPTIONS_ROLE, options)
             item.setData(BINDING_ROLE, _key(self.bindings[var.name]))
         self.table.blockSignals(False)
         self._changed()
         QTimer.singleShot(0, self.table.resizeRowsToContents)
+
+    def source_menu(self, row: int) -> QMenu:
+        """Native pop-up menu of sources for a row: defaults and literals, one section per role, then typing."""
+        menu = QMenu(self)
+        current = self.table.item(row, SOURCE).data(BINDING_ROLE)
+        for number, section in enumerate(self.table.item(row, SOURCE).data(OPTIONS_ROLE)):
+            if number:
+                menu.addSeparator()
+            for text, key in section:
+                action = menu.addAction(text)
+                action.setCheckable(True)
+                action.setChecked(key == current)
+                action.triggered.connect(lambda _=False, k=key: self.table.item(row, SOURCE).setData(BINDING_ROLE, k))
+        menu.addSeparator()
+        menu.addAction("Type a value…", lambda: self.start_typing(row))
+        return menu
+
+    def show_source_menu(self, row: int) -> None:
+        index = self.table.model().index(row, SOURCE)
+        box = source_box(self.table.visualRect(index))
+        menu = self.source_menu(row)
+        menu.setMinimumWidth(box.width())
+        menu.exec(self.table.viewport().mapToGlobal(box.bottomLeft()))
+
+    def start_typing(self, row: int) -> None:
+        index = self.table.model().index(row, SOURCE)
+        self.table.setCurrentIndex(index)
+        self.table.edit(index)
+
+    def eventFilter(self, watched, event) -> bool:
+        # only when the table itself has focus: a Return that finishes typing propagates here too
+        if watched is self.table and event.type() == QEvent.Type.KeyPress and self.table.hasFocus():
+            index = self.table.currentIndex()
+            if index.isValid() and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+                self.show_source_menu(index.row())
+                return True
+        return super().eventFilter(watched, event)
 
     def _changed(self) -> None:
         empty = len(self.empty_vars())
