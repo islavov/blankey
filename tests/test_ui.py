@@ -1,6 +1,6 @@
 import pytest
 from PySide6.QtCore import QItemSelectionModel, Qt
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QGuiApplication, QPalette
 from PySide6.QtWidgets import QCheckBox, QMessageBox, QWidget
 
 from blankey.core import RequestKind
@@ -223,6 +223,16 @@ def test_templates_page_previews_docx_and_deletes(qtbot, app, filled_docx, tmp_p
     assert "used by: delta" in page.preview.info.text()
     assert "amount" in page.preview.browser.toPlainText()
     assert not page.generate_action.isVisible()
+    item = page.list.item(0)
+    assert (item.text(), item.data(Qt.ItemDataRole.UserRole)) == ("Договор", "loan")
+    assert item.data(Qt.ItemDataRole.UserRole + 1) == "Word  ·  1 blank  ·  1 fill set"
+    assert page.preview.id_label.text() == "loan"
+    page.copy_id()
+    assert QGuiApplication.clipboard().text() == "loan"
+    page.filter("nothing")
+    assert item.isHidden()
+    page.filter("loa")
+    assert not item.isHidden()
     monkeypatch.setattr(pages, "confirm", lambda *args: True)
     page._delete()
     assert app.templates.all() == []
