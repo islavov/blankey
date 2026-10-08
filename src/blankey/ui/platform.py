@@ -47,7 +47,19 @@ def bring_to_front() -> None:
         _ns_app_call(b"activateIgnoringOtherApps:", ctypes.c_bool, True)
 
 
+def app_bundle_executable() -> Path | None:
+    """The .app's executable when running from a macOS app bundle (Briefcase puts the code inside it)."""
+    for parent in Path(__file__).resolve().parents:
+        if parent.suffix == ".app":
+            executable = parent / "Contents" / "MacOS" / parent.stem
+            return executable if executable.exists() else None
+    return None
+
+
 def launch_command() -> list[str]:
+    """How to start Blankey: the app binary when bundled, else this Python with -m."""
+    if executable := app_bundle_executable():
+        return [str(executable)]
     if getattr(sys, "frozen", False):
         return [sys.executable]
     return [sys.executable, "-m", "blankey"]

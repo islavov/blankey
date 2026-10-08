@@ -3,6 +3,8 @@ name = "blankey"
 version = "0.1.0"
 description = "Local encrypted PII vault and document templating with an MCP server"
 readme = "README.md"
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE"]
 authors = [
     { name = "Ivelin", email = "hello@blankey.io" }
 ]
@@ -13,14 +15,13 @@ dependencies = [
     "docxtpl>=0.20.2",
     "keyring>=25.7.0",
     "mcp[cli]>=2.3.0",
-    "pikepdf>=10.16.0",
     "platformdirs>=4.12.3",
     "pyhanko[pkcs11]>=0.37.0",
     "pyobjc-framework-cocoa>=12.2.2 ; sys_platform == 'darwin'",
     "pyobjc-framework-localauthentication>=12.2.2 ; sys_platform == 'darwin'",
     "pypdf>=6.19.0",
     "pypdfium2>=5.13.0",
-    "pyside6>=6.11.2",
+    "pyside6-essentials>=6.11.2",
     "pyyaml>=6.0.3",
     "reportlab>=5.0.1",
     "typst>=0.15.0",
@@ -35,10 +36,41 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "briefcase>=0.4.5",
     "pytest>=9.1.1",
     "pytest-qt>=4.5.0",
     "ruff>=0.16.10",
 ]
+
+[tool.briefcase]
+project_name = "Blankey"
+bundle = "bg.blankey"
+
+[tool.briefcase.app.blankey]
+formal_name = "Blankey"
+description = "Local encrypted PII vault and document templating with an MCP server"
+sources = ["src/blankey"]
+icon = "resources/blankey"
+
+[tool.briefcase.app.blankey.macOS]
+universal_build = false  # Apple Silicon only
+min_os_version = "13.0"
+cleanup_paths = [
+    "**/app_packages/PyObjCTest",
+    "**/app_packages/PySide6/Qt/lib/QtQuick*.framework",
+    "**/app_packages/PySide6/Qt/lib/QtQml*.framework",
+    "**/app_packages/PySide6/Qt/lib/QtDesigner*.framework",
+    "**/app_packages/PySide6/Qt/lib/QtShaderTools.framework",
+    "**/app_packages/PySide6/Qt/qml",
+    "**/app_packages/PySide6/Qt/translations",
+    "**/app_packages/PySide6/*.app",
+    "**/app_packages/PySide6/Qt*Quick*",
+    "**/app_packages/PySide6/QtQml*",
+    "**/app_packages/PySide6/include",
+    "**/app_packages/PySide6/typesystems",
+    "**/app_packages/PySide6/glue",
+]
+info."LSUIElement" = true  # menu bar app; the Dock icon appears while the main window is open
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

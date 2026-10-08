@@ -305,3 +305,16 @@ def test_unlocking_from_the_window_keeps_it_open(qtbot, app, monkeypatch):
     assert window.lock_button.text() == "Lock" and window.lock_label.text() == "Vault unlocked"
     window.lock_button.click()
     assert locked == [True]
+
+
+def test_launch_command_inside_an_app_bundle(tmp_path, monkeypatch):
+    from blankey.ui import platform
+
+    executable = tmp_path / "Blankey.app" / "Contents" / "MacOS" / "Blankey"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("")
+    module = tmp_path / "Blankey.app" / "Contents" / "Resources" / "app" / "blankey" / "ui" / "platform.py"
+    monkeypatch.setattr(platform, "__file__", str(module))
+    assert platform.launch_command() == [str(executable)]
+    monkeypatch.setattr(platform, "__file__", str(tmp_path / "src" / "blankey" / "ui" / "platform.py"))
+    assert platform.launch_command()[1:] == ["-m", "blankey"]

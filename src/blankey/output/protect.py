@@ -1,4 +1,4 @@
-"""PDF encryption (pikepdf) and signing (pyHanko: self-signed or PKCS#11 / QES)."""
+"""PDF encryption (pypdf, AES-256) and signing (pyHanko: self-signed or PKCS#11 / QES)."""
 
 import datetime
 import io
@@ -6,7 +6,6 @@ import secrets
 from dataclasses import dataclass
 from typing import Self
 
-import pikepdf
 from asn1crypto import keys, x509
 from cryptography import x509 as cx509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -15,6 +14,7 @@ from cryptography.x509.oid import NameOID
 from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
 from pyhanko.sign import pkcs11, signers
 from pyhanko_certvalidator.registry import SimpleCertificateStore
+from pypdf import PdfReader, PdfWriter
 
 SELF_SIGNED_SECRET = "selfsigned"
 
@@ -55,9 +55,10 @@ def create_self_signed(common_name: str, years: int = 10) -> SelfSigned:
 
 
 def encrypt(pdf: bytes, password: str) -> bytes:
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(pdf)))
+    writer.encrypt(user_password=password, owner_password=secrets.token_urlsafe(24), algorithm="AES-256")
     out = io.BytesIO()
-    with pikepdf.open(io.BytesIO(pdf)) as doc:
-        doc.save(out, encryption=pikepdf.Encryption(user=password, owner=secrets.token_urlsafe(24), R=6))
+    writer.write(out)
     return out.getvalue()
 
 

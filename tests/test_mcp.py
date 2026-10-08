@@ -3,10 +3,10 @@ import base64
 import io
 import json
 
-import pikepdf
 import pytest
 from pyhanko.pdf_utils.reader import PdfFileReader
 from pyhanko.sign.validation import validate_pdf_signature
+from pypdf import PdfReader
 
 from blankey.core import GenerateOptions, RequestKind
 from blankey.mcp_server import build_server
@@ -192,10 +192,10 @@ def test_generate_signed_and_encrypted(app, setup):
     info = app.vault.list_documents()[0]
     assert (info.signed, info.encrypted, info.pages) == ("self-signed", True, 1)
     content = app.vault.load_document(doc_id)
-    with pytest.raises(pikepdf.PasswordError):
-        pikepdf.open(io.BytesIO(content))
-    with pikepdf.open(io.BytesIO(content), password="pdf-pass") as pdf:
-        assert len(pdf.pages) == 1
+    encrypted = PdfReader(io.BytesIO(content))
+    assert encrypted.is_encrypted
+    assert not encrypted.decrypt("wrong")
+    assert encrypted.decrypt("pdf-pass") and len(encrypted.pages) == 1
     reader = PdfFileReader(io.BytesIO(content))
     reader.decrypt("pdf-pass")
     status = validate_pdf_signature(reader.embedded_signatures[0])

@@ -16,6 +16,23 @@ uv run ruff check && uv run ruff format
 The app lives in the menu bar / system tray. Data is stored in the per-user data directory
 (`~/Library/Application Support/Blankey` on macOS): `vault.db`, `templates/`, `previews/`, `config.toml`.
 
+## Mac app (demo build)
+
+```bash
+uv run python scripts/make_icons.py          # only when the icon changes
+uv run briefcase create macOS && uv run briefcase build macOS
+uv run briefcase package macOS --adhoc-sign  # -> dist/Blankey-<version>.dmg
+```
+
+After code changes: `uv run briefcase update macOS` before build/package. The app needs Apple Silicon and
+macOS 13 or newer. It is ad-hoc signed (no Apple Developer ID), so macOS blocks the first launch:
+
+1. Open the DMG and drag Blankey to Applications.
+2. Open Blankey once; macOS says it cannot verify the developer. Open System Settings → Privacy & Security and
+   click "Open Anyway" (or run `xattr -dr com.apple.quarantine /Applications/Blankey.app`).
+3. Blankey lives in the menu bar. First launch creates the vault (password + recovery key).
+4. Connect Claude from the menu: "Connect Claude Desktop" or "Copy Claude Code command".
+
 ## Connect Claude
 
 The server listens on `http://127.0.0.1:8765/mcp` without authentication. It only accepts local
