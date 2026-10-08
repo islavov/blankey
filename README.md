@@ -51,7 +51,7 @@ connections, the SDK rejects foreign Host/Origin headers (DNS rebinding), and no
 - Field keys, labels, types and value lengths are plaintext metadata. That is all MCP can read.
 - MCP tools render templates only with example data. Real documents are rendered in the app,
   after the user approves the request, and stored encrypted. Only metadata goes back to Claude.
-- Requests from Claude (`request_profile_input`, `request_generate`, `request_fill`) open a dialog in the app;
+- Requests from Claude (`request_profile_input`, `request_fill`) open a dialog in the app;
   Claude blocks on `wait_request` until the user saves, approves or cancels.
 - Request payloads and results are sealed to a request key pair (X25519 + AES-GCM): stored while the vault
   is locked, readable only after unlocking. The Activity page needs an unlocked vault.
@@ -80,7 +80,7 @@ Claude turns an existing filled .docx into a template with `inspect_docx` + `sav
 (text spans become `{{ var }}` tags; use the same var names across related documents). `request_fill`
 opens a form listing every blank of one or more templates with its surrounding text; per blank you pick a
 vault field (`manager.egn`), a literal Claude proposed (non-PII only), the template default, or type a value.
-The choices are saved as a named fill set, encrypted in the vault, and can be reopened, regenerated,
+Documents are always generated from a fill set. The choices are saved as a named fill set, encrypted in the vault, and can be reopened, regenerated,
 exported (YAML, or a zip with the templates) and imported from tray → "Fill sets…".
 
 ## Signing

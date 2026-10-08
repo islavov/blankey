@@ -81,7 +81,7 @@ def test_no_tool_leaks_vault_values(app, mcp, setup, filled_docx):
         call(mcp, "save_example", template_id="t", name="ex", data={"applicant": {"name": "Пример"}}),
         call(mcp, "render_example", template_id="t", example="ex"),
         call(mcp, "check_bindings", template_id="t", profiles={"applicant": pid}),
-        call(mcp, "request_generate", template_id="t", profiles={"applicant": pid}, sign="self-signed"),
+        call(mcp, "request_fill", templates=["t"], profiles={"applicant": pid}, name="leak"),
         call(
             mcp,
             "request_profile_input",
@@ -93,8 +93,9 @@ def test_no_tool_leaks_vault_values(app, mcp, setup, filled_docx):
         call(mcp, "get_request", request_id=1),
         call(mcp, "wait_request", request_id=1, timeout_s=0),
     ]
-    doc_id = app.generate("t", {"applicant": pid}, GenerateOptions(sign="self-signed", signer_name=SENTINEL_NAME))
-    app.vault.resolve_request(1, "done", {"document_id": doc_id})
+    fill_set_id = app.vault.save_fill_set("leak", ["t"], {"applicant": pid}, {})
+    [doc_id] = app.generate_fill(fill_set_id, GenerateOptions(sign="self-signed", signer_name=SENTINEL_NAME))
+    app.vault.resolve_request(1, "done", {"fill_set_id": fill_set_id, "document_ids": [doc_id]})
     outputs += [call(mcp, "list_documents"), call(mcp, "get_request", request_id=1)]
     outputs += [
         call(mcp, "inspect_docx", path=str(filled_docx)),
@@ -162,7 +163,7 @@ def test_wait_request_returns_profile_input_result(app, mcp, setup):
     assert '"saved"' in result and '"length":9' in result.replace(" ", "")
 
 
-def test_request_generate_validates_roles(mcp, setup):
+def test_request_fill_validates_roles(mcp, setup):
     call(
         mcp,
         "save_template",
@@ -174,10 +175,10 @@ def test_request_generate_validates_roles(mcp, setup):
         source_path=setup["source"],
     )
     with pytest.raises(Exception, match="Missing profiles"):
-        asyncio.run(mcp.call_tool("request_generate", {"template_id": "t", "profiles": {}}))
+        asyncio.run(mcp.call_tool("request_fill", {"templates": ["t"], "profiles": {}, "name": "n"}))
 
 
-def test_generate_signed_and_encrypted(app, setup):
+def test_generate_fill_signed_and_encrypted(app, setup):
     app.templates.save(
         "t",
         "T",
@@ -186,9 +187,9 @@ def test_generate_signed_and_encrypted(app, setup):
         {"name": "{{ applicant.name }}"},
         source_file=__import__("pathlib").Path(setup["source"]),
     )
-    doc_id = app.generate(
-        "t", {"applicant": setup["pid"]}, GenerateOptions(sign="self-signed", password="pdf-pass", signer_name="Me")
-    )
+    fill_set_id = app.vault.save_fill_set("signed", ["t"], {"applicant": setup["pid"]}, {})
+    options = GenerateOptions(sign="self-signed", password="pdf-pass", signer_name="Me")
+    [doc_id] = app.generate_fill(fill_set_id, options)
     info = app.vault.list_documents()[0]
     assert (info.signed, info.encrypted, info.pages) == ("self-signed", True, 1)
     content = app.vault.load_document(doc_id)

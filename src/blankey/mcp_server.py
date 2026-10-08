@@ -36,7 +36,8 @@ Workflow:
 5. check_bindings against real profiles: reports missing/empty keys, overflow (fit_ratio > 1) and
    missing glyphs, without revealing values.
 6. request_profile_input to ask the user to type missing data into the app, then wait_request.
-7. request_generate to ask the user to approve, sign and/or encrypt the real document, then wait_request.
+7. request_fill to have the user fill the template into a named fill set and generate the real document.
+   Documents are always generated from a fill set.
 The user exports real documents from the app; you only get their metadata.
 
 Filled .docx documents (contracts, decisions...):
@@ -59,7 +60,7 @@ Flat PDFs (no form fields, e.g. exports or scans):
    placed where values go (right of / below their printed labels), plus fields (name -> Jinja expression) and labels.
    It returns the pages with the boxes outlined: check them and call again with corrected boxes (source_path can
    be omitted then; the original flat PDF is kept). A check box gets "X" when its expression is truthy text.
-3. save_example + render_example, then request_fill / request_generate as for any PDF form.
+3. save_example + render_example, then request_fill as for any PDF form.
 """
 
 TOOL_TIMEOUT_MAX = 1800
@@ -357,28 +358,6 @@ def build_server(app: Blankey) -> MCPServer:
             "reason": reason,
         }
         request_id = app.create_request(RequestKind.PROFILE_INPUT, payload)
-        return {"request_id": request_id, "status": "pending"}
-
-    @tool()
-    def request_generate(
-        template_id: str,
-        profiles: dict[str, int],
-        sign: str = "none",
-        encrypt: bool = False,
-        title: str = "",
-    ) -> dict[str, Any]:
-        """Ask the user to generate the real document. sign: none | self-signed | qes. With encrypt=true the
-        user sets the password in the app. Returns a request id; call wait_request for the outcome."""
-        template = app.templates.get(template_id)
-        missing_roles = set(template.roles) - set(profiles)
-        if missing_roles:
-            raise ValueError(f"Missing profiles for roles: {', '.join(sorted(missing_roles))}")
-        for profile_id in profiles.values():
-            app.vault.get_profile(profile_id)
-        if sign not in {"none", "self-signed", "qes"}:
-            raise ValueError("sign must be none, self-signed or qes")
-        payload = {"template_id": template_id, "profiles": profiles, "sign": sign, "encrypt": encrypt, "title": title}
-        request_id = app.create_request(RequestKind.GENERATE, payload)
         return {"request_id": request_id, "status": "pending"}
 
     @tool()

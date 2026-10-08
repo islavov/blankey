@@ -15,11 +15,7 @@ from PySide6.QtGui import (
     QPalette,
 )
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QFileDialog,
-    QFormLayout,
     QFrame,
     QHBoxLayout,
     QListWidget,
@@ -45,7 +41,7 @@ from blankey.templates import Template, TemplateKind, docx, engine
 from blankey.templates.bindings import example_context
 from blankey.ui import macos
 from blankey.ui.fill import FillDialog
-from blankey.ui.requests import GenerateDialog, open_request
+from blankey.ui.requests import open_request
 from blankey.ui.unlock import ensure_unlocked
 from blankey.ui.widgets import (
     Page,
@@ -622,7 +618,7 @@ class TemplatesPage(Page):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(splitter)
 
-        self.generate_action = self.action("Generate", "play", self.open)
+        self.fill_action = self.action("Fill", "doc.text.fill", self.open)
         copy = self.action("Copy ID", "doc.on.clipboard", self.copy_id)
         self.preview.copy_button.clicked.connect(self.copy_id)
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
@@ -682,7 +678,7 @@ class TemplatesPage(Page):
 
     def _show_selected(self) -> None:
         template = self._current()
-        self.generate_action.setVisible(template is not None and template.kind != TemplateKind.DOCX)
+        self.fill_action.setEnabled(template is not None)
         if template is None:
             self.preview.clear()
             return
@@ -719,26 +715,9 @@ class TemplatesPage(Page):
             self.refresh()
 
     def open(self) -> None:
-        """Generate a PDF template with the signing / encryption options (docx is filled through fill sets)."""
+        """Fill the template into a new fill set; documents are only generated from fill sets."""
         template = self._current()
-        if template is None or template.kind == TemplateKind.DOCX or not ensure_unlocked(self.app, self):
+        if template is None or not ensure_unlocked(self.app, self):
             return
-        dialog = QDialog(self.window())
-        dialog.setWindowTitle("Profiles")
-        dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        form = QFormLayout(dialog)
-        combos = {}
-        for role, description in template.roles.items():
-            combo = QComboBox()
-            for profile in self.app.vault.list_profiles():
-                combo.addItem(profile.name, profile.id)
-            combo.setToolTip(description)
-            form.addRow(role, combo)
-            combos[role] = combo
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        form.addRow(buttons)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            profiles = {role: combo.currentData() for role, combo in combos.items()}
-            GenerateDialog(self.app, template.id, profiles, parent=self.window()).exec()
+        FillDialog(self.app, [template.id], {}, parent=self.window()).exec()
+        self.refresh()

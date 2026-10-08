@@ -8,7 +8,7 @@ from blankey.templates import TemplateKind
 from blankey.ui import pages
 from blankey.ui.main_window import MainWindow, _sidebar_color
 from blankey.ui.profiles import ProfilesPage
-from blankey.ui.requests import GenerateDialog, ProfileInputDialog
+from blankey.ui.requests import ProfileInputDialog
 from blankey.ui.widgets import secondary_color
 from blankey.vault import FieldInput
 from tests.conftest import PASSWORD
@@ -77,22 +77,6 @@ def test_profile_input_cancel(qtbot, app):
     qtbot.addWidget(dialog)
     dialog.reject()
     assert app.vault.get_request(request_id).result == {"outcome": "cancelled"}
-
-
-def test_generate_dialog_resolves_request(qtbot, app, template):
-    pid = app.vault.create_profile("Иван", "person")
-    app.vault.set_values(pid, [FieldInput("name", "Иван Иванов")])
-    payload = {"template_id": "t", "profiles": {"applicant": pid}, "sign": "self-signed", "encrypt": True}
-    request_id = app.create_request(RequestKind.GENERATE, payload)
-    dialog = GenerateDialog(app, "t", {"applicant": pid}, payload, app.vault.get_request(request_id))
-    qtbot.addWidget(dialog)
-    assert dialog.encrypt.isChecked() and dialog.sign.currentData() == "self-signed"
-    dialog.password.setText("secret")
-    dialog.password_repeat.setText("secret")
-    dialog._generate()
-    result = app.vault.get_request(request_id).result
-    assert result["outcome"] == "generated"
-    assert (result["signed"], result["encrypted"], result["pages"]) == ("self-signed", True, 1)
 
 
 def test_profiles_page_round_trip(qtbot, app):
@@ -223,7 +207,7 @@ def test_templates_page_previews_docx_and_deletes(qtbot, app, filled_docx, tmp_p
     assert page.preview.heading.text() == "Договор"
     assert "used by: delta" in page.preview.info.text()
     assert "amount" in page.preview.browser.toPlainText()
-    assert not page.generate_action.isVisible()
+    assert page.fill_action.isEnabled()
     item = page.list.item(0)
     assert (item.text(), item.data(Qt.ItemDataRole.UserRole)) == ("Договор", "loan")
     assert item.data(Qt.ItemDataRole.UserRole + 1) == "Word  ·  1 blank  ·  1 fill set"

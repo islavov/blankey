@@ -19,7 +19,6 @@ from blankey.vault import FieldInfo, Vault
 
 class RequestKind:
     PROFILE_INPUT = "profile_input"
-    GENERATE = "generate"
     FILL = "fill"
 
 
@@ -61,9 +60,6 @@ class Blankey:
     def real_context(self, profiles: dict[str, int]) -> dict[str, Any]:
         return {role: profile_context(self.vault.get_values(pid)) for role, pid in profiles.items()}
 
-    def render_real(self, template_id: str, profiles: dict[str, int]) -> engine.Rendered:
-        return engine.render(self.templates.get(template_id), self.real_context(profiles))
-
     def self_signed_identity(self, common_name: str) -> protect.SelfSigned:
         raw = self.vault.get_secret(protect.SELF_SIGNED_SECRET)
         if raw is not None:
@@ -72,26 +68,12 @@ class Blankey:
         self.vault.put_secret(protect.SELF_SIGNED_SECRET, identity.dump())
         return identity
 
-    def generate(self, template_id: str, profiles: dict[str, int], options: GenerateOptions, title: str = "") -> int:
-        template = self.templates.get(template_id)
-        rendered = self.render_real(template_id, profiles)
-        content, signed = rendered.content, ""
-        if rendered.is_pdf:
-            content, signed = protect.protect(
-                content,
-                password=options.password,
-                self_signed=self.self_signed_identity(options.signer_name) if options.sign == "self-signed" else None,
-                pkcs11_lib=self.config.pkcs11_lib if options.sign == "qes" else None,
-                pkcs11_pin=options.pkcs11_pin,
-                reason=title or template.name,
-            )
-        return self._store(template, rendered, content, signed, bool(options.password), profiles, title)
-
     def fill_templates(self, template_ids: list[str]) -> list[Template]:
         return [self.templates.get(t) for t in template_ids]
 
-    def generate_fill(self, fill_set_id: int) -> list[int]:
-        """Render every template of a fill set and store the documents (no signing or encryption)."""
+    def generate_fill(self, fill_set_id: int, options: GenerateOptions | None = None) -> list[int]:
+        """Render every template of a fill set and store the documents. PDFs are signed / encrypted per options."""
+        options = options or GenerateOptions()
         info, bindings = self.vault.get_fill_set(fill_set_id)
         templates = self.fill_templates(info.templates)
         resolved = fill.resolve(templates, bindings, self.real_context(info.profiles))
@@ -102,7 +84,20 @@ class Blankey:
                 raise ValueError(f"{template.name}: " + "; ".join(errors))
             rendered = engine.render_values(template, values)
             title = f"{template.name} ({info.name})"
-            doc_ids.append(self._store(template, rendered, rendered.content, "", False, info.profiles, title))
+            content, signed = rendered.content, ""
+            if rendered.is_pdf:
+                content, signed = protect.protect(
+                    content,
+                    password=options.password,
+                    self_signed=self.self_signed_identity(options.signer_name)
+                    if options.sign == "self-signed"
+                    else None,
+                    pkcs11_lib=self.config.pkcs11_lib if options.sign == "qes" else None,
+                    pkcs11_pin=options.pkcs11_pin,
+                    reason=title,
+                )
+            encrypted = bool(options.password)
+            doc_ids.append(self._store(template, rendered, content, signed, encrypted, info.profiles, title))
         return doc_ids
 
     def export_fill_set(self, fill_set_id: int) -> str:
