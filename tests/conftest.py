@@ -76,3 +76,15 @@ def filled_docx(tmp_path):
     path = tmp_path / "filled.docx"
     document.save(str(path))
     return path
+
+
+@pytest.fixture
+def flat_pdf() -> bytes:
+    """A flat page with printed labels and no form fields."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(595, 842))
+    c.drawString(40, 790, "Name:")
+    c.drawString(40, 750, "EGN:")
+    c.drawString(40, 710, "Married")
+    c.save()
+    return buf.getvalue()

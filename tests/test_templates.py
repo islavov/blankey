@@ -130,3 +130,48 @@ def test_field_crops_and_printed_labels(form_pdf):
     assert abs(image.height - (y1 - y0 + preview.CROP_ABOVE + preview.CROP_BELOW)) <= 1
     labels = preview.field_labels(form_pdf, fields)
     assert labels["name"] == "Name" and labels["egn"] == "EGN"
+
+
+BOXES = [
+    {"name": "name", "page": 1, "rect": [90, 785, 400, 803]},
+    {"name": "egn", "page": 1, "rect": [90, 745, 210, 761], "max_len": 10, "comb": True},
+    {"name": "married", "page": 1, "rect": [100, 706, 112, 718], "type": "check"},
+]
+
+
+def test_add_fields_turns_a_flat_pdf_into_a_form(flat_pdf):
+    form = pdf_form.add_fields(flat_pdf, BOXES)
+    fields = {f.name: f for f in pdf_form.inspect_form(form)}
+    assert fields["name"].rects == [[90.0, 785.0, 400.0, 803.0]] and not fields["name"].comb
+    assert (fields["egn"].max_len, fields["egn"].comb) == (10, True)
+    assert (fields["married"].max_len, fields["married"].comb) == (1, True)
+    filled = pdf_form.fill_form(form, {"name": "Иван Петров", "egn": "7501020018", "married": "X"})
+    text = text_of(filled)
+    assert "Иван Петров" in text and "X" in text
+    assert pdf_form.inspect_form(filled) == []  # flattened
+
+
+def test_add_fields_rejects_bad_boxes(flat_pdf):
+    bad = [
+        {"name": "1x", "page": 1, "rect": [0, 0, 10, 10]},
+        {"name": "a", "page": 2, "rect": [0, 0, 10, 10]},
+        {"name": "b", "page": 1, "rect": [10, 10, 5, 5]},
+        {"name": "c", "page": 1, "rect": [500, 800, 700, 900]},
+        {"name": "c", "page": 1, "rect": [0, 0, 10, 10], "type": "radio"},
+    ]
+    with pytest.raises(ValueError) as error:
+        pdf_form.add_fields(flat_pdf, bad)
+    message = str(error.value)
+    for expected in ("name must be", "page must be 1..1", "x1 > x0", "outside the page", "duplicate", "text or check"):
+        assert expected in message
+
+
+def test_layout_lines_and_grid(flat_pdf):
+    from blankey.render import preview
+
+    lines = preview.layout_lines(flat_pdf, 1)
+    assert [line["text"] for line in lines] == ["Name:", "EGN:", "Married"]
+    x0, y0, x1, y1 = lines[0]["rect"]
+    assert x1 > x0
+    assert 39 < x0 < 42 and 788 < y0 < 791 and y1 > y0
+    assert preview.grid_page(flat_pdf, 1).startswith(b"\x89PNG")

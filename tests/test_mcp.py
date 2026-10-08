@@ -10,6 +10,7 @@ from pyhanko.sign.validation import validate_pdf_signature
 
 from blankey.core import GenerateOptions, RequestKind
 from blankey.mcp_server import build_server
+from blankey.render import pdf_form
 from blankey.vault import FieldInput, FieldType
 from tests.conftest import PASSWORD
 
@@ -97,6 +98,7 @@ def test_no_tool_leaks_vault_values(app, mcp, setup, filled_docx):
     outputs += [call(mcp, "list_documents"), call(mcp, "get_request", request_id=1)]
     outputs += [
         call(mcp, "inspect_docx", path=str(filled_docx)),
+        call(mcp, "inspect_pdf_layout", path=setup["source"]),
         call(
             mcp,
             "save_docx_template",
@@ -216,3 +218,44 @@ def test_vault_locked_check_still_reports_metadata(app, mcp, setup):
     assert '"vault_unlocked":false' in result.replace(" ", "")
     assert "applicant.email" in result
     app.vault.unlock(PASSWORD)
+
+
+def test_flat_pdf_becomes_a_template(app, mcp, flat_pdf, tmp_path):
+    source = tmp_path / "flat.pdf"
+    source.write_bytes(flat_pdf)
+    layout = call(mcp, "inspect_pdf_layout", path=str(source))
+    assert '"Name:"' in layout and '"height": 842' in layout
+    assert len(images(mcp, "inspect_pdf_layout", path=str(source))) == 1
+
+    boxes = [
+        {"name": "name", "page": 1, "rect": [90, 785, 400, 803]},
+        {"name": "married", "page": 1, "rect": [100, 706, 112, 718], "type": "check"},
+    ]
+    arguments = {
+        "template_id": "flat",
+        "name": "Flat",
+        "boxes": boxes,
+        "roles": {"applicant": "person"},
+        "fields": {"name": "{{ applicant.name }}", "married": "{{ 'X' if applicant.married }}", "ghost": "x"},
+        "source_path": str(source),
+    }
+    summary = call(mcp, "save_pdf_overlay_template", **arguments)
+    assert "Binding without field: ghost" in summary
+    assert len(images(mcp, "save_pdf_overlay_template", **arguments)) == 1
+    template = app.templates.get("flat")
+    assert (template.directory / "flat.pdf").read_bytes() == flat_pdf
+    assert [b["name"] for b in template.boxes] == ["name", "married"]
+
+    moved = [{"name": "name", "page": 1, "rect": [95, 785, 400, 803]}]
+    call(mcp, "save_pdf_overlay_template", **(arguments | {"boxes": moved, "source_path": None}))
+    fields = pdf_form.inspect_form(app.templates.get("flat").source)
+    assert [(f.name, f.rects) for f in fields] == [("name", [[95.0, 785.0, 400.0, 803.0]])]  # rebuilt, not stacked
+
+    rendered = call(mcp, "render_example", template_id="flat", example={"applicant": {"name": "Пример Примеров"}})
+    assert "warnings" in rendered
+    with pytest.raises(Exception, match="page must be"):
+        asyncio.run(
+            mcp.call_tool(
+                "save_pdf_overlay_template", arguments | {"boxes": [{"name": "x", "page": 9, "rect": [0, 0, 1, 1]}]}
+            )
+        )

@@ -51,6 +51,15 @@ Filled .docx documents (contracts, decisions...):
    terms, dates, city) in values, and vault paths in paths. Never put personal data in values: ask for it
    with request_profile_input instead. wait_request returns the fill set id and document ids.
 4. list_fill_sets shows saved fill sets (sources only); request_fill with fill_set_id reopens one.
+
+Flat PDFs (no form fields, e.g. exports or scans):
+1. inspect_pdf_layout: pages with a coordinate grid (PDF points, origin bottom-left) and the printed text lines
+   with their boxes.
+2. save_pdf_overlay_template with boxes [{name, page, rect: [x0, y0, x1, y1], type: text|check, max_len?, comb?}]
+   placed where values go (right of / below their printed labels), plus fields (name -> Jinja expression) and labels.
+   It returns the pages with the boxes outlined: check them and call again with corrected boxes (source_path can
+   be omitted then; the original flat PDF is kept). A check box gets "X" when its expression is truthy text.
+3. save_example + render_example, then request_fill / request_generate as for any PDF form.
 """
 
 TOOL_TIMEOUT_MAX = 1800
@@ -141,6 +150,85 @@ def build_server(app: Blankey) -> MCPServer:
         for page in annotate_pages or []:
             out.append(Image(data=preview.annotate_fields(pdf, fields, page), format="png"))
         return out
+
+    @tool(structured_output=False)
+    def inspect_pdf_layout(path: str, pages: list[int] | None = None, dpi: int = 80) -> list[Any]:
+        """Read a local (flat or scanned) PDF to place form boxes: per page its size in points, printed text lines
+        with [x0, y0, x1, y1] boxes (PDF points, origin bottom-left) and existing form fields, plus each page as an
+        image with a coordinate grid (lines every 50 pt, labels every 100 pt). Default pages: all."""
+        pdf = Path(path).expanduser().read_bytes()
+        sizes = preview.page_sizes(pdf)
+        selected = pages or list(range(1, len(sizes) + 1))
+        for page in selected:
+            if not 1 <= page <= len(sizes):
+                raise ValueError(f"page must be 1..{len(sizes)}")
+        info = {
+            "pages": [
+                {
+                    "page": page,
+                    "width": round(sizes[page - 1][0], 1),
+                    "height": round(sizes[page - 1][1], 1),
+                    "lines": preview.layout_lines(pdf, page),
+                }
+                for page in selected
+            ],
+            "form_fields": [asdict(f) for f in pdf_form.inspect_form(pdf)],
+        }
+        return [engine.dump(info)] + [Image(data=preview.grid_page(pdf, page, dpi), format="png") for page in selected]
+
+    @tool(structured_output=False)
+    def save_pdf_overlay_template(
+        template_id: str,
+        name: str,
+        boxes: list[dict[str, Any]],
+        roles: dict[str, str],
+        fields: dict[str, str],
+        source_path: str | None = None,
+        labels: dict[str, str] | None = None,
+        description: str = "",
+    ) -> list[Any]:
+        """Make a PDF form template from a flat PDF: each box {name, page, rect: [x0, y0, x1, y1], type: text|check,
+        max_len?, comb?} (PDF points, origin bottom-left) becomes a form field named `name`. fields maps those names
+        to Jinja expressions over roles; labels maps them to human labels for the fill form. Omit source_path to
+        rebuild from the flat PDF saved earlier (replaces all boxes). Returns the template and its pages with the
+        boxes outlined, to check placement."""
+        if not ID_RE.match(template_id):
+            raise ValueError("Template id must be lowercase letters, digits, '-' or '_'")
+        if source_path:
+            flat = Path(source_path).expanduser().read_bytes()
+        else:
+            saved = app.templates.root / template_id / "flat.pdf"
+            if not saved.exists():
+                raise ValueError("Pass source_path: no flat PDF saved for this template yet")
+            flat = saved.read_bytes()
+        form = pdf_form.add_fields(flat, boxes)
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "form.pdf"
+            target.write_bytes(form)
+            template = app.templates.save(
+                template_id,
+                name,
+                TemplateKind.PDF_FORM,
+                roles,
+                fields,
+                description,
+                source_file=target,
+                labels=labels,
+                boxes=boxes,
+            )
+        (template.directory / "flat.pdf").write_bytes(flat)
+        audit("save_template", template_id)
+        names = [b["name"] for b in boxes]
+        warnings = [f"Box without binding: {n}" for n in names if n not in fields]
+        known = set(names) | {f.name for f in pdf_form.inspect_form(flat)}
+        warnings += [f"Binding without field: {f}" for f in fields if f not in known]
+        summary = engine.describe_template(template) | {"warnings": warnings}
+        all_fields = pdf_form.inspect_form(form)
+        images = [
+            Image(data=preview.annotate_fields(form, all_fields, page), format="png")
+            for page in sorted({b["page"] for b in boxes})
+        ]
+        return [engine.dump(summary), *images]
 
     @tool()
     def save_template(

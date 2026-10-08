@@ -6,12 +6,13 @@ and radio buttons keep their native widgets and are switched via /AS.
 """
 
 import io
+import re
 import unicodedata
 from dataclasses import dataclass, field
 from functools import cache
 
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import ArrayObject, DictionaryObject, NameObject
+from pypdf.generic import ArrayObject, DictionaryObject, FloatObject, NameObject, NumberObject, TextStringObject
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
@@ -24,6 +25,7 @@ DEFAULT_SIZE = 9.0
 MIN_SIZE = 5.0
 PADDING = 2.0
 COMB_FLAG = 1 << 24
+FIELD_NAME_RE = re.compile(r"^[A-Za-z_]\w*$")
 OFF_VALUES = {"", "false", "none", "0", "off", "/off"}
 
 
@@ -228,3 +230,87 @@ def _set_button(annot: DictionaryObject, value: str) -> None:
         owner[NameObject("/V")] = NameObject(on)
     elif "/Off" in annot.get("/AP", {}).get("/N", {}):
         annot[NameObject("/AS")] = NameObject("/Off")
+
+
+# -- forms on demand: turn a flat PDF into an AcroForm -------------------------------------------------------
+
+BOX_TYPES = {"text", "check"}
+DEFAULT_APPEARANCE = "/Helv 0 Tf 0 g"
+
+
+def validate_boxes(pdf: bytes, boxes: list[dict]) -> list[str]:
+    """Problems with boxes: unknown page, empty or off-page rect, bad or duplicate name, bad type."""
+    reader = PdfReader(io.BytesIO(pdf))
+    existing = {f.name for f in inspect_form(pdf)}
+    problems, seen = [], set()
+    for number, box in enumerate(boxes, start=1):
+        name = str(box.get("name", ""))
+        where = f"box {number} ({name or 'unnamed'})"
+        if not FIELD_NAME_RE.match(name):
+            problems.append(f"{where}: name must be letters, digits or _ and start with a letter or _")
+        elif name in seen or name in existing:
+            problems.append(f"{where}: duplicate field name")
+        seen.add(name)
+        if box.get("type", "text") not in BOX_TYPES:
+            problems.append(f"{where}: type must be text or check")
+        page = box.get("page")
+        if not isinstance(page, int) or not 1 <= page <= len(reader.pages):
+            problems.append(f"{where}: page must be 1..{len(reader.pages)}")
+            continue
+        rect = box.get("rect") or []
+        if len(rect) != 4 or not all(isinstance(v, int | float) for v in rect):
+            problems.append(f"{where}: rect must be [x0, y0, x1, y1] in PDF points")
+            continue
+        x0, y0, x1, y1 = rect
+        media = reader.pages[page - 1].mediabox
+        if not (x1 > x0 and y1 > y0):
+            problems.append(f"{where}: rect must have x1 > x0 and y1 > y0 (origin bottom-left)")
+        elif x0 < float(media.left) or y0 < float(media.bottom) or x1 > float(media.right) or y1 > float(media.top):
+            problems.append(f"{where}: rect is outside the page ({float(media.width):g} x {float(media.height):g} pt)")
+    return problems
+
+
+def add_fields(pdf: bytes, boxes: list[dict]) -> bytes:
+    """Add one text field per box: {name, page, rect, type: text|check, max_len?, comb?}. A check box is a
+    one-cell comb field, so "X" lands centered. Existing fields are kept."""
+    if problems := validate_boxes(pdf, boxes):
+        raise ValueError("Invalid boxes:\n" + "\n".join(problems))
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(pdf)))
+    root = writer._root_object
+    if "/AcroForm" not in root:
+        root[NameObject("/AcroForm")] = writer._add_object(DictionaryObject())
+    acroform = root["/AcroForm"].get_object()
+    fields = acroform.get("/Fields")
+    if fields is None:
+        fields = ArrayObject()
+        acroform[NameObject("/Fields")] = fields
+    acroform[NameObject("/DA")] = TextStringObject(DEFAULT_APPEARANCE)
+    for box in boxes:
+        page = writer.pages[box["page"] - 1]
+        check = box.get("type", "text") == "check"
+        max_len = 1 if check else box.get("max_len")
+        comb = check or bool(box.get("comb") and max_len)
+        widget = DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Annot"),
+                NameObject("/Subtype"): NameObject("/Widget"),
+                NameObject("/FT"): NameObject("/Tx"),
+                NameObject("/T"): TextStringObject(box["name"]),
+                NameObject("/Rect"): ArrayObject(FloatObject(v) for v in box["rect"]),
+                NameObject("/F"): NumberObject(4),
+                NameObject("/DA"): TextStringObject(DEFAULT_APPEARANCE),
+            }
+        )
+        if max_len:
+            widget[NameObject("/MaxLen")] = NumberObject(int(max_len))
+        if comb:
+            widget[NameObject("/Ff")] = NumberObject(COMB_FLAG)
+        ref = writer._add_object(widget)
+        widget[NameObject("/P")] = page.indirect_reference
+        if "/Annots" not in page:
+            page[NameObject("/Annots")] = ArrayObject()
+        page["/Annots"].get_object().append(ref)
+        fields.append(ref)
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()

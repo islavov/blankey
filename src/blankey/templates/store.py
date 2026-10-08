@@ -27,6 +27,7 @@ class Template:
     fields: dict[str, str] = field(default_factory=dict)  # field / variable -> Jinja expression
     description: str = ""
     labels: dict[str, str] = field(default_factory=dict)  # variable -> human label
+    boxes: list[dict[str, Any]] = field(default_factory=list)  # fields drawn on a flat PDF (see flat.pdf)
 
     @property
     def source_path(self) -> Path:
@@ -45,7 +46,7 @@ class Template:
             "roles": self.roles,
             "fields": self.fields,
             "labels": self.labels,
-        }
+        } | ({"boxes": self.boxes} if self.boxes else {})
 
 
 class TemplateStore:
@@ -70,6 +71,7 @@ class TemplateStore:
             fields={str(k): str(v) for k, v in (data.get("fields") or {}).items()},
             description=data.get("description", ""),
             labels={str(k): str(v) for k, v in (data.get("labels") or {}).items()},
+            boxes=data.get("boxes") or [],
         )
 
     def save(
@@ -83,11 +85,20 @@ class TemplateStore:
         source_file: Path | None = None,
         source_text: str | None = None,
         labels: dict[str, str] | None = None,
+        boxes: list[dict[str, Any]] | None = None,
     ) -> Template:
         if not ID_RE.match(template_id):
             raise ValueError("Template id must be lowercase letters, digits, '-' or '_'")
         template = Template(
-            template_id, name, TemplateKind(kind), self.root / template_id, roles, fields, description, labels or {}
+            template_id,
+            name,
+            TemplateKind(kind),
+            self.root / template_id,
+            roles,
+            fields,
+            description,
+            labels or {},
+            boxes or [],
         )
         template.directory.mkdir(parents=True, exist_ok=True)
         if source_file is not None:

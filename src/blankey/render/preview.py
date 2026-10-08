@@ -8,6 +8,10 @@ from blankey.render.pdf_form import FormField
 DEFAULT_DPI = 80
 
 
+def page_sizes(pdf: bytes) -> list[tuple[float, float]]:
+    return [(page.get_width(), page.get_height()) for page in pdfium.PdfDocument(pdf)]
+
+
 def page_count(pdf: bytes) -> int:
     return len(pdfium.PdfDocument(pdf))
 
@@ -110,3 +114,44 @@ def field_labels(pdf: bytes, fields: list[FormField], limit: int = 60) -> dict[s
                 labels[f.name] = found if len(found) <= limit else found[: limit - 1].rstrip() + "…"
                 break
     return labels
+
+
+GRID_STEP, GRID_LABEL_STEP = 50, 100  # points
+
+
+def layout_lines(pdf: bytes, page: int, limit: int = 300) -> list[dict]:
+    """Printed text on a 1-based page as lines with [x0, y0, x1, y1] in PDF points (origin bottom-left)."""
+    text = pdfium.PdfDocument(pdf)[page - 1].get_textpage()
+    lines = []
+    for i in range(min(text.count_rects(), limit)):
+        left, bottom, right, top = text.get_rect(i)
+        found = " ".join(text.get_text_bounded(left=left, bottom=bottom, right=right, top=top).split())
+        if found:
+            lines.append({"text": found, "rect": [round(left, 1), round(bottom, 1), round(right, 1), round(top, 1)]})
+    return lines
+
+
+def grid_page(pdf: bytes, page: int, dpi: int = 80) -> bytes:
+    """The page with a coordinate grid in PDF points (origin bottom-left) for placing boxes, also on scans."""
+    doc = pdfium.PdfDocument(pdf)
+    doc.init_forms()
+    pdf_page = doc[page - 1]
+    width, height = pdf_page.get_width(), pdf_page.get_height()
+    scale = dpi / 72
+    image = pdf_page.render(scale=scale, may_draw_forms=True).to_pil().convert("RGBA")
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    for x in range(0, int(width) + 1, GRID_STEP):
+        strong = x % GRID_LABEL_STEP == 0
+        draw.line([(x * scale, 0), (x * scale, image.height)], fill=(220, 30, 30, 110 if strong else 50))
+        if strong:
+            draw.text((x * scale + 2, 2), str(x), fill=(220, 30, 30, 255))
+    for y in range(0, int(height) + 1, GRID_STEP):
+        strong = y % GRID_LABEL_STEP == 0
+        top = (height - y) * scale
+        draw.line([(0, top), (image.width, top)], fill=(220, 30, 30, 110 if strong else 50))
+        if strong:
+            draw.text((2, top - 12), str(y), fill=(220, 30, 30, 255))
+    buf = io.BytesIO()
+    Image.alpha_composite(image, overlay).convert("RGB").save(buf, format="PNG", optimize=True)
+    return buf.getvalue()

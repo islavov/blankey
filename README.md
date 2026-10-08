@@ -50,6 +50,13 @@ roles, e.g. `{{ applicant.address.permanent.city }}` or `{{ loan.amount | money 
 - `typst`: `main.typ` reads `json(bytes(sys.inputs.data))`.
 - `docx`: docxtpl; converted to PDF only if LibreOffice is installed.
 
+### Flat PDFs
+
+PDFs without form fields (exports, scans) become `pdf_form` templates through Claude: `inspect_pdf_layout`
+shows each page with a coordinate grid and the printed text positions, and `save_pdf_overlay_template` takes the
+flat PDF plus boxes (`{name, page, rect, type: text|check}` in PDF points) and field bindings, adds real form fields
+and returns the pages with the boxes outlined. The original is kept as `flat.pdf`, so boxes can be corrected later.
+
 ### Filled .docx documents and fill sets
 
 Claude turns an existing filled .docx into a template with `inspect_docx` + `save_docx_template`
