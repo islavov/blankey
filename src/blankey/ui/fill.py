@@ -4,8 +4,8 @@ import html
 import json
 from typing import Any
 
-from PySide6.QtCore import QEvent, QModelIndex, QRect, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette, QTextDocument
+from PySide6.QtCore import QEvent, QModelIndex, QRect, QRectF, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPalette, QPixmap, QTextDocument
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -48,6 +48,7 @@ OPTIONS_ROLE = Qt.ItemDataRole.UserRole + 1
 VAR_ROLE = Qt.ItemDataRole.UserRole + 2
 FIELD, SOURCE, CONTEXT = range(3)
 CHOOSE = "Choose a source…"
+CROP_MAX_HEIGHT = 110
 
 
 def _dark(widget: QWidget) -> bool:
@@ -125,18 +126,42 @@ class ContextDelegate(QStyledItemDelegate):
         doc.setTextWidth(width)
         return doc
 
+    def _crop_size(self, pixmap: QPixmap, width: int) -> QSize:
+        """Scaled to the column, never enlarged, at most CROP_MAX_HEIGHT high."""
+        w, h = pixmap.width() / pixmap.devicePixelRatio(), pixmap.height() / pixmap.devicePixelRatio()
+        scale = min(1, width / w, CROP_MAX_HEIGHT / h)
+        return QSize(round(w * scale), round(h * scale))
+
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         self.initStyleOption(option, index)
         option.text = ""
         option.widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
         rect = option.rect.adjusted(10, 8, -10, -8)
         painter.save()
-        painter.translate(rect.topLeft())
-        self._document(option, index, rect.width()).drawContents(painter)
+        pixmap = self.dialog.crops.get(index.row())
+        if pixmap is not None:
+            size = self._crop_size(pixmap, rect.width())
+            target = QRect(rect.topLeft(), size)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            clip = QPainterPath()
+            clip.addRoundedRect(QRectF(target), 6, 6)
+            painter.setClipPath(clip)
+            painter.drawPixmap(target, pixmap)
+            painter.setClipping(False)
+            painter.setPen(option.palette.color(QPalette.ColorRole.Mid))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(QRectF(target).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
+        else:
+            painter.translate(rect.topLeft())
+            self._document(option, index, rect.width()).drawContents(painter)
         painter.restore()
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
         width = max(200, self.dialog.table.columnWidth(CONTEXT) - 20)
+        pixmap = self.dialog.crops.get(index.row())
+        if pixmap is not None:
+            return QSize(width, self._crop_size(pixmap, width).height() + 16)
         return QSize(width, int(self._document(option, index, width).size().height()) + 16)
 
 
@@ -259,6 +284,12 @@ class FillDialog(QDialog):
         self.roles = fill.roles(self.templates)
         self.vars = fill.variables(self.templates)
         self.var_list = list(self.vars.values())
+        self.crops: dict[int, QPixmap] = {}
+        for row, var in enumerate(self.var_list):
+            if var.crops:
+                pixmap = QPixmap()
+                pixmap.loadFromData(var.crops[0][1], "PNG")
+                self.crops[row] = pixmap
         for var in self.var_list:
             self.bindings.setdefault(var.name, fill.default_binding(var, set(self.roles)))
         self.context: dict[str, Any] = {}

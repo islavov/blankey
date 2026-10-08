@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from blankey.render import pdf_form, preview
 from blankey.templates import docx
 from blankey.templates.bindings import as_text, evaluate, referenced_paths
 from blankey.templates.store import Template, TemplateKind
@@ -18,6 +19,7 @@ class FillVar:
     label: str = ""
     contexts: list[tuple[str, str]] = field(default_factory=list)  # (template name, context)
     defaults: dict[str, str] = field(default_factory=dict)  # template id -> expression
+    crops: list[tuple[str, bytes]] = field(default_factory=list)  # (template name, PNG of the page around it)
 
 
 def roles(templates: list[Template]) -> dict[str, str]:
@@ -32,15 +34,25 @@ def variables(templates: list[Template]) -> dict[str, FillVar]:
     """Union of variables in template order; a variable shared by several templates appears once."""
     out: dict[str, FillVar] = {}
     for template in templates:
+        crops: dict[str, bytes] = {}
+        printed: dict[str, str] = {}
         if template.kind == TemplateKind.DOCX:
             names = docx.variables(template.source_path)
             contexts = docx.blank_contexts(template.source_path)
+        elif template.kind == TemplateKind.PDF_FORM:
+            names = list(template.fields)
+            form_fields = [f for f in pdf_form.inspect_form(template.source) if f.name in template.fields]
+            crops = preview.field_crops(template.source, form_fields)
+            printed = preview.field_labels(template.source, form_fields)
+            contexts = {name: [text] for name, text in printed.items()}
         else:
             names, contexts = list(template.fields), {}
         for name in [*names, *(f for f in template.fields if f not in names)]:
             var = out.setdefault(name, FillVar(name))
-            var.label = var.label or template.labels.get(name, "")
+            var.label = var.label or template.labels.get(name, "") or printed.get(name, "")
             var.contexts += [(template.name, c) for c in contexts.get(name, [])]
+            if name in crops:
+                var.crops.append((template.name, crops[name]))
             if name in template.fields:
                 var.defaults[template.id] = template.fields[name]
     return out

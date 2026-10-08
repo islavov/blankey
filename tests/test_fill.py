@@ -249,3 +249,14 @@ def test_docx_to_html_shows_blanks_as_chips(template):
     assert "<b>1. " in html
     assert "<table" in html and "<td>" in html
     assert "{{" not in html
+
+
+def test_pdf_form_rows_show_the_page_around_each_field(qtbot, app, form_pdf, tmp_path):
+    source = tmp_path / "form.pdf"
+    source.write_bytes(form_pdf)
+    app.templates.save("pdf", "PDF", TemplateKind.PDF_FORM, {"a": "x"}, {"name": "{{ a.name }}"}, source_file=source)
+    [var] = fill.variables([app.templates.get("pdf")]).values()
+    assert var.label == "Name" and len(var.crops) == 1
+    dialog = FillDialog(app, ["pdf"], {}, "pdf-fill")
+    qtbot.addWidget(dialog)
+    assert 0 in dialog.crops and not dialog.crops[0].isNull()

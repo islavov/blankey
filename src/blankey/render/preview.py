@@ -1,7 +1,7 @@
 import io
 
 import pypdfium2 as pdfium
-from PIL import ImageDraw
+from PIL import Image, ImageDraw
 
 from blankey.render.pdf_form import FormField
 
@@ -42,3 +42,71 @@ def annotate_fields(pdf: bytes, fields: list[FormField], page: int, dpi: int = 1
     buf = io.BytesIO()
     image.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
+
+
+CROP_LEFT, CROP_RIGHT, CROP_BELOW, CROP_ABOVE = 200, 40, 10, 24  # points around a field
+CROP_RIGHT_SMALL = 120  # checkbox-like boxes usually have their label to the right
+FIELD_OUTLINE = (0, 102, 204)
+
+
+def field_crops(pdf: bytes, fields: list[FormField], dpi: int = 110) -> dict[str, bytes]:
+    """A low-res snippet of the page around each field (first widget), with the field outlined.
+    Works on the rendered page, so it needs no text layer."""
+    doc = pdfium.PdfDocument(pdf)
+    doc.init_forms()
+    scale = dpi / 72
+    pages: dict[int, tuple] = {}
+    crops = {}
+    for f in fields:
+        if not f.rects:
+            continue
+        if f.page not in pages:
+            page = doc[f.page - 1]
+            image = page.render(scale=scale, may_draw_forms=True).to_pil().convert("RGBA")
+            pages[f.page] = (image, page.get_width(), page.get_height())
+        image, width, height = pages[f.page]
+        x0, y0, x1, y1 = f.rects[0]
+        band = (
+            max(0, x0 - CROP_LEFT) * scale,
+            max(0, height - (y1 + CROP_ABOVE)) * scale,
+            min(width, x1 + (CROP_RIGHT_SMALL if x1 - x0 < 20 else CROP_RIGHT)) * scale,
+            min(height, height - (y0 - CROP_BELOW)) * scale,
+        )
+        crop = image.crop(tuple(round(v) for v in band))
+        overlay = Image.new("RGBA", crop.size, (0, 0, 0, 0))
+        box = (
+            x0 * scale - band[0],
+            (height - y1) * scale - band[1],
+            x1 * scale - band[0],
+            (height - y0) * scale - band[1],
+        )
+        ImageDraw.Draw(overlay).rectangle(box, fill=(*FIELD_OUTLINE, 40), outline=(*FIELD_OUTLINE, 255), width=2)
+        buf = io.BytesIO()
+        Image.alpha_composite(crop, overlay).convert("RGB").save(buf, format="PNG", optimize=True)
+        crops[f.name] = buf.getvalue()
+    return crops
+
+
+def field_labels(pdf: bytes, fields: list[FormField], limit: int = 60) -> dict[str, str]:
+    """Nearby printed text as a label: right of small boxes (checkbox style), else above, else left of the field.
+    Empty for scans without a text layer."""
+    doc = pdfium.PdfDocument(pdf)
+    text_pages = {}
+    labels = {}
+    for f in fields:
+        if not f.rects:
+            continue
+        if f.page not in text_pages:
+            text_pages[f.page] = doc[f.page - 1].get_textpage()
+        text = text_pages[f.page]
+        x0, y0, x1, y1 = f.rects[0]
+        right = (x1 + 2, y0 - 1, x1 + 60, y1 + 1)
+        above = (x0 - 10, y1, x1 + 10, y1 + 14)
+        left = (max(0, x0 - 200), y0 - 1, x0, y1 + 1)
+        order = [right, above, left] if x1 - x0 < 20 else [above, left]
+        for box_left, bottom, box_right, top in order:
+            found = " ".join(text.get_text_bounded(left=box_left, bottom=bottom, right=box_right, top=top).split())
+            if found:
+                labels[f.name] = found if len(found) <= limit else found[: limit - 1].rstrip() + "…"
+                break
+    return labels
