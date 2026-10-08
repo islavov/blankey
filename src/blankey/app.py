@@ -6,10 +6,11 @@ from PySide6.QtCore import QEvent, QObject, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon
 
-from blankey import biometric, bridge
+from blankey import biometric
 from blankey.config import load_config
 from blankey.core import Blankey
-from blankey.mcp_server import McpThread
+from blankey.mcp import bridge
+from blankey.mcp.thread import McpThread
 from blankey.ui import icons, platform
 from blankey.ui.main_window import MainWindow
 from blankey.ui.pages import ActivityPage
@@ -71,7 +72,7 @@ class Tray(QObject):
         label = f"Open Blankey ({pending} from Claude)" if pending else "Open Blankey"
         self.menu.addAction(label, self.open_main)
         self.menu.addSeparator()
-        running = self.mcp.is_alive() and self.mcp.server.started
+        running = self.mcp.running
         status = QAction(f"MCP: {self.app.config.mcp_url}" if running else "MCP: not running", self.menu)
         status.setEnabled(False)
         self.menu.addAction(status)
@@ -188,9 +189,6 @@ class Tray(QObject):
 
 
 def main() -> None:
-    if sys.argv[1:] == ["mcp"]:
-        bridge.main()
-        return
     qt_app = QApplication(sys.argv)
     qt_app.setApplicationName("Blankey")
     qt_app.setQuitOnLastWindowClosed(False)

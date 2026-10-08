@@ -8,9 +8,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import typst
-from docxtpl import DocxTemplate
-
 from blankey.config import FONTS_DIR
 from blankey.render import pdf_form
 from blankey.templates import docx
@@ -67,6 +64,8 @@ def render_values(template: Template, values: dict[str, Any], errors: list[str] 
             text_values = {k: as_text(v) for k, v in values.items() if k in known}
             return Rendered(pdf_form.fill_form(template.source, text_values), "pdf", errors)
         case TemplateKind.TYPST:
+            import typst  # loaded on first use: large and rarely needed
+
             pdf = typst.compile(
                 str(template.source_path),
                 root=str(template.directory),
@@ -78,6 +77,8 @@ def render_values(template: Template, values: dict[str, Any], errors: list[str] 
             unbound = sorted(set(docx.variables(template.source_path)) - set(values))
             if unbound:
                 errors.append(f"Tags without a value: {', '.join(unbound)}")
+            from docxtpl import DocxTemplate
+
             doc = DocxTemplate(str(template.source_path))
             doc.render({k: as_text(v) for k, v in values.items()}, autoescape=True)
             with tempfile.TemporaryDirectory() as tmp:

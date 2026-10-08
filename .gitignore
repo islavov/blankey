@@ -7,3 +7,4 @@ dist/
 build/
 logs/
 .DS_Store
+.idea/

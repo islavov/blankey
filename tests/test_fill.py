@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLineEdit
 
 from blankey.core import RequestKind
-from blankey.mcp_server import build_server
+from blankey.mcp.server import build_server
 from blankey.templates import TemplateKind, engine, fill
 from blankey.templates import docx as docx_template
 from blankey.ui.fill import FillDialog

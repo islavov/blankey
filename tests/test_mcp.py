@@ -9,7 +9,7 @@ from pyhanko.sign.validation import validate_pdf_signature
 from pypdf import PdfReader
 
 from blankey.core import GenerateOptions, RequestKind
-from blankey.mcp_server import build_server
+from blankey.mcp.server import build_server
 from blankey.render import pdf_form
 from blankey.vault import FieldInput, FieldType
 from tests.conftest import PASSWORD
@@ -260,3 +260,14 @@ def test_flat_pdf_becomes_a_template(app, mcp, flat_pdf, tmp_path):
                 "save_pdf_overlay_template", arguments | {"boxes": [{"name": "x", "page": 9, "rect": [0, 0, 1, 1]}]}
             )
         )
+
+
+def test_bridge_starts_without_qt_or_the_server():
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, blankey.__main__, blankey.mcp.bridge; "
+        "print([m for m in ('PySide6', 'mcp', 'pyhanko', 'typst', 'uvicorn') if m in sys.modules])"
+    )
+    assert subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout == "[]\n"

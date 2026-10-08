@@ -14,8 +14,7 @@ import urllib.error
 import urllib.request
 from email.message import Message
 
-from blankey.config import load_config
-from blankey.mcp_server import HEALTH_PATH, HEALTH_TEXT
+from blankey.config import HEALTH_PATH, HEALTH_TEXT, load_config
 from blankey.ui.platform import launch_command
 
 STARTUP_TIMEOUT_S = 20

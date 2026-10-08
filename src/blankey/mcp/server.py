@@ -4,7 +4,6 @@ import asyncio
 import functools
 import inspect
 import tempfile
-import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -15,6 +14,7 @@ from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from starlette.responses import PlainTextResponse
 
+from blankey.config import HEALTH_PATH, HEALTH_TEXT
 from blankey.core import Blankey, RequestKind
 from blankey.render import pdf_form, preview
 from blankey.templates import TemplateKind, docx, engine, fill
@@ -64,8 +64,6 @@ Flat PDFs (no form fields, e.g. exports or scans):
 """
 
 TOOL_TIMEOUT_MAX = 1800
-HEALTH_PATH = "/health"
-HEALTH_TEXT = "blankey"
 EXPECTED_ERRORS = (KeyError, ValueError, FileNotFoundError, VaultLocked)
 
 
@@ -454,19 +452,11 @@ def _request_view(request) -> dict[str, Any]:
     }
 
 
-class McpThread(threading.Thread):
-    def __init__(self, app: Blankey):
-        super().__init__(name="blankey-mcp", daemon=True)
-        # localhost only; the SDK adds Host/Origin checks against DNS rebinding. JSON responses keep the
-        # stdio bridge (blankey mcp) a plain request/response proxy.
-        asgi = build_server(app).streamable_http_app(json_response=True)
-        asgi.add_route(HEALTH_PATH, lambda request: PlainTextResponse(HEALTH_TEXT))
-        self.server = uvicorn.Server(
-            uvicorn.Config(asgi, host="127.0.0.1", port=app.config.port, log_level="warning", lifespan="on")
-        )
-
-    def run(self) -> None:
-        self.server.run()
-
-    def stop(self) -> None:
-        self.server.should_exit = True
+def create_server(app: Blankey) -> uvicorn.Server:
+    # localhost only; the SDK adds Host/Origin checks against DNS rebinding. JSON responses keep the
+    # stdio bridge (blankey mcp) a plain request/response proxy.
+    asgi = build_server(app).streamable_http_app(json_response=True)
+    asgi.add_route(HEALTH_PATH, lambda request: PlainTextResponse(HEALTH_TEXT))
+    return uvicorn.Server(
+        uvicorn.Config(asgi, host="127.0.0.1", port=app.config.port, log_level="warning", lifespan="on")
+    )

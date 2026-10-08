@@ -5,16 +5,18 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
 from blankey.config import Config
-from blankey.output import protect
 from blankey.render.preview import page_count
 from blankey.templates import Template, TemplateStore, engine, fill
 from blankey.templates.bindings import profile_context
 from blankey.vault import FieldInfo, Vault
+
+if TYPE_CHECKING:
+    from blankey.output.protect import SelfSigned
 
 
 class RequestKind:
@@ -60,7 +62,9 @@ class Blankey:
     def real_context(self, profiles: dict[str, int]) -> dict[str, Any]:
         return {role: profile_context(self.vault.get_values(pid)) for role, pid in profiles.items()}
 
-    def self_signed_identity(self, common_name: str) -> protect.SelfSigned:
+    def self_signed_identity(self, common_name: str) -> "SelfSigned":
+        from blankey.output import protect  # pyHanko is loaded only for signing
+
         raw = self.vault.get_secret(protect.SELF_SIGNED_SECRET)
         if raw is not None:
             return protect.SelfSigned.load(raw)
@@ -85,7 +89,9 @@ class Blankey:
             rendered = engine.render_values(template, values)
             title = f"{template.name} ({info.name})"
             content, signed = rendered.content, ""
-            if rendered.is_pdf:
+            if rendered.is_pdf and (options.password or options.sign != "none"):
+                from blankey.output import protect
+
                 content, signed = protect.protect(
                     content,
                     password=options.password,

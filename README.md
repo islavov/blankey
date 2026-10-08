@@ -19,12 +19,12 @@ The app lives in the menu bar / system tray. Data is stored in the per-user data
 ## Mac app (demo build)
 
 ```bash
-uv run python scripts/make_icons.py          # only when the icon changes
-uv run briefcase create macOS && uv run briefcase build macOS
-uv run briefcase package macOS --adhoc-sign  # -> dist/Blankey-<version>.dmg
+uv run python scripts/make_icons.py  # only when the icon changes
+scripts/build_mac.sh                 # -> dist/Blankey-<version>.dmg
 ```
 
-After code changes: `uv run briefcase update macOS` before build/package. The app needs Apple Silicon and
+The script runs Briefcase and precompiles all Python bytecode into the bundle before signing; the signed app
+cannot write `.pyc` files itself, so without it every launch compiles from source. The app needs Apple Silicon and
 macOS 13 or newer. It is ad-hoc signed (no Apple Developer ID), so macOS blocks the first launch:
 
 1. Open the DMG and drag Blankey to Applications.

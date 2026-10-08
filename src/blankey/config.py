@@ -7,6 +7,8 @@ from platformdirs import user_data_path
 APP_NAME = "Blankey"
 ASSETS_DIR = Path(__file__).parent / "assets"
 FONTS_DIR = ASSETS_DIR / "fonts"
+HEALTH_PATH = "/health"
+HEALTH_TEXT = "blankey"
 
 
 @dataclass(slots=True)
