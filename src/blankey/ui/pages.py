@@ -591,9 +591,8 @@ class TemplatesPage(Page):
         self.list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.list.setUniformItemSizes(False)
         self.list.setResizeMode(QListWidget.ResizeMode.Adjust)
-        cards = self.list.palette()
-        cards.setColor(QPalette.ColorRole.Base, cards.color(QPalette.ColorRole.Window))
-        self.list.setPalette(cards)
+        # show the window background behind the cards; a copied palette would freeze it on appearance changes
+        self.list.viewport().setAutoFillBackground(False)
         self.list.currentItemChanged.connect(lambda *_: self._show_selected())
         self.empty_label = secondary_label(self.empty_text, smaller=False)
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
