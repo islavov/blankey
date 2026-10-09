@@ -114,21 +114,10 @@ def test_typst_template(app):
     assert "Иван Иванов" in text_of(rendered.content)
 
 
-def test_field_crops_and_printed_labels(form_pdf):
-    from PIL import Image
-
+def test_printed_labels(form_pdf):
     from blankey.render import preview
 
-    fields = pdf_form.inspect_form(form_pdf)
-    crops = preview.field_crops(form_pdf, fields, dpi=72)
-    assert set(crops) == {f.name for f in fields}
-    name = next(f for f in fields if f.name == "name")
-    x0, y0, x1, y1 = name.rects[0]
-    image = Image.open(io.BytesIO(crops["name"]))
-    expected_width = min(595, x1 + preview.CROP_RIGHT) - max(0, x0 - preview.CROP_LEFT)
-    assert abs(image.width - expected_width) <= 1
-    assert abs(image.height - (y1 - y0 + preview.CROP_ABOVE + preview.CROP_BELOW)) <= 1
-    labels = preview.field_labels(form_pdf, fields)
+    labels = preview.field_labels(form_pdf, pdf_form.inspect_form(form_pdf))
     assert labels["name"] == "Name" and labels["egn"] == "EGN"
 
 

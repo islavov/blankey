@@ -1,11 +1,10 @@
-"""Fill form: every blank of one or more templates with its context and a choice of source."""
+"""Fill form: every blank of one or more templates with a choice of source, next to a preview of the documents."""
 
-import html
 import json
 from typing import Any
 
-from PySide6.QtCore import QEvent, QModelIndex, QRect, QRectF, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPalette, QPixmap, QTextDocument
+from PySide6.QtCore import QEvent, QModelIndex, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -17,6 +16,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QSplitter,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 from blankey.core import Blankey
 from blankey.templates import fill
 from blankey.templates.bindings import as_text
-from blankey.templates.docx import BLANK
+from blankey.ui.fill_preview import FillPreview
 from blankey.ui.widgets import (
     HeaderStrip,
     accent_color,
@@ -46,9 +46,9 @@ from blankey.vault import Request
 BINDING_ROLE = Qt.ItemDataRole.UserRole
 OPTIONS_ROLE = Qt.ItemDataRole.UserRole + 1
 VAR_ROLE = Qt.ItemDataRole.UserRole + 2
-FIELD, SOURCE, CONTEXT = range(3)
+FIELD, SOURCE = range(2)
 CHOOSE = "Choose a source…"
-CROP_MAX_HEIGHT = 110
+TYPE_VALUE = "Type a value…"
 
 
 def _dark(widget: QWidget) -> bool:
@@ -101,68 +101,6 @@ class FieldDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
         return QSize(200, QFontMetrics(option.font).height() * 2 + 20)
-
-
-class ContextDelegate(QStyledItemDelegate):
-    """The paragraph around the blank, wrapped, with the blank itself highlighted."""
-
-    def __init__(self, dialog: "FillDialog"):
-        super().__init__(dialog.table)
-        self.dialog = dialog
-
-    def _document(self, option: QStyleOptionViewItem, index: QModelIndex, width: int) -> QTextDocument:
-        empty = self.dialog.is_empty_row(index.row())
-        color = warn_color(self.dialog) if empty else accent_color(self.dialog)
-        muted = secondary_color(self.dialog).name()
-        blank = (
-            f'<span style="color:{color.name()}; background-color:{_tint(color, 0.14).name(QColor.NameFormat.HexArgb)};'
-            f' font-weight:600">&nbsp;____&nbsp;</span>'
-        )
-        text = html.escape(index.data() or "").replace(html.escape(BLANK), blank)
-        doc = QTextDocument()
-        doc.setDefaultFont(option.font)
-        doc.setDocumentMargin(0)
-        doc.setHtml(f'<div style="color:{muted}">{text}</div>')
-        doc.setTextWidth(width)
-        return doc
-
-    def _crop_size(self, pixmap: QPixmap, width: int) -> QSize:
-        """Scaled to the column, never enlarged, at most CROP_MAX_HEIGHT high."""
-        w, h = pixmap.width() / pixmap.devicePixelRatio(), pixmap.height() / pixmap.devicePixelRatio()
-        scale = min(1, width / w, CROP_MAX_HEIGHT / h)
-        return QSize(round(w * scale), round(h * scale))
-
-    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
-        self.initStyleOption(option, index)
-        option.text = ""
-        option.widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
-        rect = option.rect.adjusted(10, 8, -10, -8)
-        painter.save()
-        pixmap = self.dialog.crops.get(index.row())
-        if pixmap is not None:
-            size = self._crop_size(pixmap, rect.width())
-            target = QRect(rect.topLeft(), size)
-            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            clip = QPainterPath()
-            clip.addRoundedRect(QRectF(target), 6, 6)
-            painter.setClipPath(clip)
-            painter.drawPixmap(target, pixmap)
-            painter.setClipping(False)
-            painter.setPen(option.palette.color(QPalette.ColorRole.Mid))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(QRectF(target).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
-        else:
-            painter.translate(rect.topLeft())
-            self._document(option, index, rect.width()).drawContents(painter)
-        painter.restore()
-
-    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
-        width = max(200, self.dialog.table.columnWidth(CONTEXT) - 20)
-        pixmap = self.dialog.crops.get(index.row())
-        if pixmap is not None:
-            return QSize(width, self._crop_size(pixmap, width).height() + 16)
-        return QSize(width, int(self._document(option, index, width).size().height()) + 16)
 
 
 class SourceDelegate(QStyledItemDelegate):
@@ -284,12 +222,6 @@ class FillDialog(QDialog):
         self.roles = fill.roles(self.templates)
         self.vars = fill.variables(self.templates)
         self.var_list = list(self.vars.values())
-        self.crops: dict[int, QPixmap] = {}
-        for row, var in enumerate(self.var_list):
-            if var.crops:
-                pixmap = QPixmap()
-                pixmap.loadFromData(var.crops[0][1], "PNG")
-                self.crops[row] = pixmap
         for var in self.var_list:
             self.bindings.setdefault(var.name, fill.default_binding(var, set(self.roles)))
         self.context: dict[str, Any] = {}
@@ -337,37 +269,43 @@ class FillDialog(QDialog):
         layout.addWidget(self.summary)
         layout.addWidget(separator())
 
-        self.table = QTableWidget(len(self.var_list), 3)
-        self.table.setHorizontalHeaderLabels(["Field", "Source and value", "In the document"])
+        self.table = QTableWidget(len(self.var_list), 2)
+        self.table.setHorizontalHeaderLabels(["Field", "Source and value"])
         style_table(self.table, editable=True)
-        self.table.setWordWrap(True)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.verticalHeader().setDefaultSectionSize(QFontMetrics(self.table.font()).height() * 2 + 20)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.clicked.connect(lambda index: index.column() == SOURCE and self.show_source_menu(index.row()))
         self.table.installEventFilter(self)
         self.table.setItemDelegateForColumn(FIELD, FieldDelegate(self))
-        self.table.setItemDelegateForColumn(CONTEXT, ContextDelegate(self))
         self.table.setItemDelegateForColumn(SOURCE, SourceDelegate(self))
         header_view = self.table.horizontalHeader()
         header_view.setStretchLastSection(False)
         header_view.setSectionResizeMode(FIELD, QHeaderView.ResizeMode.Interactive)
-        header_view.setSectionResizeMode(CONTEXT, QHeaderView.ResizeMode.Stretch)
-        header_view.setSectionResizeMode(SOURCE, QHeaderView.ResizeMode.Interactive)
+        header_view.setSectionResizeMode(SOURCE, QHeaderView.ResizeMode.Stretch)
         self.table.setColumnWidth(FIELD, 220)
-        self.table.setColumnWidth(SOURCE, int(self.width() * 0.38))
-        header_view.sectionResized.connect(lambda *_: QTimer.singleShot(0, self.table.resizeRowsToContents))
         for row, var in enumerate(self.var_list):
             label = QTableWidgetItem(var.label or var.name)
             label.setData(VAR_ROLE, var.name)
-            context = QTableWidgetItem(var.contexts[0][1] if var.contexts else "")
-            context.setToolTip("\n\n".join(f"{t}: {c}" for t, c in var.contexts))
-            for item in (label, context):
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            label.setToolTip("\n\n".join(f"{t}: {c}" for t, c in var.contexts))
+            label.setFlags(label.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, FIELD, label)
-            self.table.setItem(row, CONTEXT, context)
             self.table.setItem(row, SOURCE, QTableWidgetItem())
         self.table.itemChanged.connect(lambda item: item.column() == SOURCE and self._changed())
-        layout.addWidget(self.table, 1)
+        self.preview = FillPreview(self.templates)
+        self.preview.field_clicked.connect(self._select_var)
+        self.preview_timer = QTimer(self, singleShot=True, interval=250)
+        self.preview_timer.timeout.connect(self._update_preview)
+        self.table.currentCellChanged.connect(
+            lambda row, *_: row >= 0 and self.preview.highlight(self.var_list[row].name)
+        )
+        splitter = QSplitter()
+        splitter.addWidget(self.table)
+        splitter.addWidget(self.preview)
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([self.width() // 2, self.width() // 2])
+        layout.addWidget(splitter, 1)
         layout.addWidget(separator())
 
         footer = QHBoxLayout()
@@ -384,8 +322,26 @@ class FillDialog(QDialog):
         footer.addWidget(buttons)
         layout.addLayout(footer)
         self._rebuild_sources()
+        self.preview_timer.stop()
+        self._update_preview()
+        if self.var_list:
+            self.table.setCurrentCell(0, SOURCE)
 
     # -- sources -------------------------------------------------------------
+
+    def _select_var(self, name: str) -> None:
+        if name in self.vars:
+            row = list(self.vars).index(name)
+            self.table.setCurrentCell(row, self.table.currentColumn() if self.table.currentColumn() >= 0 else 0)
+            self.table.scrollToItem(self.table.item(row, FIELD))
+
+    def _update_preview(self) -> None:
+        resolved = fill.resolve(self.templates, self.current_bindings(), self.context)
+        self.preview.set_values({template_id: values for template_id, (values, _) in resolved.items()})
+
+    def _show_in_preview(self, row: int, *_) -> None:
+        if row >= 0:
+            self.preview.highlight(self.var_list[row].name)
 
     def profiles(self) -> dict[str, int]:
         return {role: combo.currentData() for role, combo in self.profile_combos.items() if combo.currentData()}
@@ -424,11 +380,12 @@ class FillDialog(QDialog):
             item.setData(BINDING_ROLE, _key(self.bindings[var.name]))
         self.table.blockSignals(False)
         self._changed()
-        QTimer.singleShot(0, self.table.resizeRowsToContents)
 
     def source_menu(self, row: int) -> QMenu:
-        """Native pop-up menu of sources for a row: defaults and literals, one section per role, then typing."""
+        """Native pop-up menu of sources for a row: typing first, then defaults and literals, one section per role."""
         menu = QMenu(self)
+        menu.addAction(TYPE_VALUE, lambda: self.start_typing(row))
+        menu.addSeparator()
         current = self.table.item(row, SOURCE).data(BINDING_ROLE)
         for number, section in enumerate(self.table.item(row, SOURCE).data(OPTIONS_ROLE)):
             if number:
@@ -438,8 +395,6 @@ class FillDialog(QDialog):
                 action.setCheckable(True)
                 action.setChecked(key == current)
                 action.triggered.connect(lambda _=False, k=key: self.table.item(row, SOURCE).setData(BINDING_ROLE, k))
-        menu.addSeparator()
-        menu.addAction("Type a value…", lambda: self.start_typing(row))
         return menu
 
     def show_source_menu(self, row: int) -> None:
@@ -468,6 +423,8 @@ class FillDialog(QDialog):
         total = len(self.var_list)
         self.summary.setText(f"{total} fields · {empty} empty" if empty else f"{total} fields · all filled")
         self.table.viewport().update()
+        if hasattr(self, "preview_timer"):
+            self.preview_timer.start()
 
     def _binding(self, row: int) -> dict[str, Any]:
         return json.loads(self.table.item(row, SOURCE).data(BINDING_ROLE))

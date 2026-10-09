@@ -48,49 +48,6 @@ def annotate_fields(pdf: bytes, fields: list[FormField], page: int, dpi: int = 1
     return buf.getvalue()
 
 
-CROP_LEFT, CROP_RIGHT, CROP_BELOW, CROP_ABOVE = 200, 40, 10, 24  # points around a field
-CROP_RIGHT_SMALL = 120  # checkbox-like boxes usually have their label to the right
-FIELD_OUTLINE = (0, 102, 204)
-
-
-def field_crops(pdf: bytes, fields: list[FormField], dpi: int = 110) -> dict[str, bytes]:
-    """A low-res snippet of the page around each field (first widget), with the field outlined.
-    Works on the rendered page, so it needs no text layer."""
-    doc = pdfium.PdfDocument(pdf)
-    doc.init_forms()
-    scale = dpi / 72
-    pages: dict[int, tuple] = {}
-    crops = {}
-    for f in fields:
-        if not f.rects:
-            continue
-        if f.page not in pages:
-            page = doc[f.page - 1]
-            image = page.render(scale=scale, may_draw_forms=True).to_pil().convert("RGBA")
-            pages[f.page] = (image, page.get_width(), page.get_height())
-        image, width, height = pages[f.page]
-        x0, y0, x1, y1 = f.rects[0]
-        band = (
-            max(0, x0 - CROP_LEFT) * scale,
-            max(0, height - (y1 + CROP_ABOVE)) * scale,
-            min(width, x1 + (CROP_RIGHT_SMALL if x1 - x0 < 20 else CROP_RIGHT)) * scale,
-            min(height, height - (y0 - CROP_BELOW)) * scale,
-        )
-        crop = image.crop(tuple(round(v) for v in band))
-        overlay = Image.new("RGBA", crop.size, (0, 0, 0, 0))
-        box = (
-            x0 * scale - band[0],
-            (height - y1) * scale - band[1],
-            x1 * scale - band[0],
-            (height - y0) * scale - band[1],
-        )
-        ImageDraw.Draw(overlay).rectangle(box, fill=(*FIELD_OUTLINE, 40), outline=(*FIELD_OUTLINE, 255), width=2)
-        buf = io.BytesIO()
-        Image.alpha_composite(crop, overlay).convert("RGB").save(buf, format="PNG", optimize=True)
-        crops[f.name] = buf.getvalue()
-    return crops
-
-
 def field_labels(pdf: bytes, fields: list[FormField], limit: int = 60) -> dict[str, str]:
     """Nearby printed text as a label: right of small boxes (checkbox style), else above, else left of the field.
     Empty for scans without a text layer."""
@@ -114,6 +71,21 @@ def field_labels(pdf: bytes, fields: list[FormField], limit: int = 60) -> dict[s
                 labels[f.name] = found if len(found) <= limit else found[: limit - 1].rstrip() + "…"
                 break
     return labels
+
+
+def find_text(pdf: bytes, needles: dict[str, str]) -> dict[str, list[tuple[int, tuple]]]:
+    """Where each needle is printed: name -> [(1-based page, (x0, y0, x1, y1) in points, origin bottom-left)].
+    A needle broken across lines yields one rectangle per line."""
+    found: dict[str, list[tuple[int, tuple]]] = {}
+    for number, page in enumerate(pdfium.PdfDocument(pdf), start=1):
+        text = page.get_textpage()
+        for name, needle in needles.items():
+            searcher = text.search(needle, match_case=True)
+            while (match := searcher.get_next()) is not None:
+                index, count = match
+                for i in range(text.count_rects(index, count)):
+                    found.setdefault(name, []).append((number, text.get_rect(i)))
+    return found
 
 
 GRID_STEP, GRID_LABEL_STEP = 50, 100  # points

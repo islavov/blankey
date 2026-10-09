@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (
     QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
-    QTextBrowser,
     QToolTip,
     QVBoxLayout,
     QWidget,
@@ -51,6 +50,7 @@ from blankey.ui.widgets import (
     filter_table,
     heading_label,
     open_documents,
+    paper_browser,
     secondary_color,
     secondary_label,
     style_table,
@@ -379,19 +379,7 @@ class TemplatePreview(QWidget):
         self.heading.setWordWrap(True)
         self.heading.setMinimumWidth(1)
         self.info = secondary_label()
-        self.browser = QTextBrowser()
-        self.browser.setFrameShape(QFrame.Shape.NoFrame)
-        self.browser.setOpenLinks(False)
-        paper = self.browser.palette()
-        paper.setColor(QPalette.ColorRole.Base, QColor("white"))
-        paper.setColor(QPalette.ColorRole.Text, QColor("#1d1d1f"))
-        self.browser.setPalette(paper)
-        self.browser.document().setDocumentMargin(56)
-        self.browser.document().setDefaultFont(QFont("Times New Roman", 12))
-        self.browser.document().setDefaultStyleSheet(
-            ".blank { background-color: #dcebff; color: #0b4fa8; font-weight: 600; }"
-            "p { margin-top: 0; margin-bottom: 8px; }"
-        )
+        self.browser = paper_browser()
         self.pages = PagePreview([])
         self.pages.setMinimumSize(0, 0)
         self.pages.setFrameShape(QFrame.Shape.NoFrame)

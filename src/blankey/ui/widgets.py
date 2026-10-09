@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableWidget,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -89,6 +90,29 @@ class PagePreview(QScrollArea):
             layout.addWidget(label)
         self.setWidget(container)
         self.setMinimumSize(720, 600)
+
+
+PAPER_CSS = (
+    "a { text-decoration: none; }"
+    ".blank { background-color: #dcebff; color: #0b4fa8; font-weight: 600; }"
+    ".empty { background-color: #ffe8d6; color: #b24a00; }"
+    "p { margin-top: 0; margin-bottom: 8px; }"
+)
+
+
+def paper_browser() -> QTextBrowser:
+    """A read-only white page for document previews; it stays white in dark mode, like paper."""
+    browser = QTextBrowser()
+    browser.setFrameShape(QFrame.Shape.NoFrame)
+    browser.setOpenLinks(False)
+    paper = browser.palette()
+    paper.setColor(QPalette.ColorRole.Base, QColor("white"))
+    paper.setColor(QPalette.ColorRole.Text, QColor("#1d1d1f"))
+    browser.setPalette(paper)
+    browser.document().setDocumentMargin(56)
+    browser.document().setDefaultFont(QFont("Times New Roman", 12))
+    browser.document().setDefaultStyleSheet(PAPER_CSS)
+    return browser
 
 
 # -- native-looking building blocks ------------------------------------------------

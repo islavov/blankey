@@ -225,10 +225,9 @@ def test_source_menu_and_typing(qtbot, app, template, profiles):
     row = list(dialog.vars).index("loan_amount")
     actions = [a for a in dialog.source_menu(row).actions() if not a.isSeparator()]
     texts = [a.text() for a in actions]
-    assert texts[0] == "Claude  —  34 000"
+    assert texts[:2] == ["Type a value…", "Claude  —  34 000"]
     assert [a.text() for a in actions if a.isChecked()] == ["Claude  —  34 000"]
     assert "manager.egn  —  7501020018" in texts
-    assert texts[-1] == "Type a value…"
 
     next(a for a in actions if a.text().startswith("manager.egn")).trigger()
     assert dialog.current_bindings()["loan_amount"] == {"path": "manager.egn"}
@@ -244,19 +243,113 @@ def test_source_menu_and_typing(qtbot, app, template, profiles):
 
 def test_docx_to_html_shows_blanks_as_chips(template):
     html = docx_template.to_html(template.source_path, {"loan_amount": "Сума & <лихва>"})
-    assert '<span class="blank">&nbsp;Сума &amp; &lt;лихва&gt;&nbsp;</span>' in html
-    assert '<span class="blank">&nbsp;company_name&nbsp;</span>' in html
+    link = '<a href="field:loan_amount" name="blank-loan_amount">'
+    assert link + '<span class="blank b-loan_amount">&nbsp;Сума &amp; &lt;лихва&gt;&nbsp;</span></a>' in html
+    assert '<span class="blank b-company_name">&nbsp;company_name&nbsp;</span>' in html
     assert "<b>1. " in html
     assert "<table" in html and "<td>" in html
     assert "{{" not in html
 
+    filled = docx_template.to_html(template.source_path, {}, {"loan_amount": "34 000 & 5%", "company_name": " "})
+    assert '<span class="blank b-loan_amount">&nbsp;34 000 &amp; 5%&nbsp;</span>' in filled
+    assert '<span class="blank b-company_name empty">&nbsp;company_name&nbsp;</span>' in filled
 
-def test_pdf_form_rows_show_the_page_around_each_field(qtbot, app, form_pdf, tmp_path):
+
+def _pdf_template(app, form_pdf, tmp_path):
     source = tmp_path / "form.pdf"
     source.write_bytes(form_pdf)
     app.templates.save("pdf", "PDF", TemplateKind.PDF_FORM, {"a": "x"}, {"name": "{{ a.name }}"}, source_file=source)
+
+
+def _select(dialog, var: str) -> None:
+    dialog.table.setCurrentCell(list(dialog.vars).index(var), 0)
+
+
+def test_preview_highlights_the_selected_field_on_the_pdf(qtbot, app, form_pdf, tmp_path):
+    _pdf_template(app, form_pdf, tmp_path)
     [var] = fill.variables([app.templates.get("pdf")]).values()
-    assert var.label == "Name" and len(var.crops) == 1
+    assert var.label == "Name"
     dialog = FillDialog(app, ["pdf"], {}, "pdf-fill")
     qtbot.addWidget(dialog)
-    assert 0 in dialog.crops and not dialog.crops[0].isNull()
+    dialog.show()
+    page = dialog.preview.pages[0]
+    [view] = [v for v in page.views if "name" in v.rects]
+    assert view.active == "name"  # the first row is selected when the form opens
+    center = view.field_rects("name")[0].center().toPoint()
+    image = view.grab().toImage()
+    ratio = image.devicePixelRatio()
+    pixel = image.pixelColor(int(center.x() * ratio), int(center.y() * ratio))
+    accent = dialog.palette().color(dialog.palette().ColorRole.Accent)
+    assert pixel != Qt.GlobalColor.white and abs(pixel.hue() - accent.hue()) < 20
+
+
+def test_preview_highlights_docx_blanks_and_switches_documents(qtbot, app, template, form_pdf, tmp_path):
+    _pdf_template(app, form_pdf, tmp_path)
+    dialog = FillDialog(app, ["loan", "pdf"], {}, "both")
+    qtbot.addWidget(dialog)
+    dialog.show()
+    docx_page, pdf_page = dialog.preview.pages
+    assert dialog.preview.tabs.isVisible() and dialog.preview.tabs.count() == 2
+    _select(dialog, "loan_amount")
+    assert dialog.preview.stack.currentWidget() is docx_page
+    assert ".b-loan_amount" in docx_page.browser.document().defaultStyleSheet()
+    _select(dialog, "name")
+    assert dialog.preview.stack.currentWidget() is pdf_page and dialog.preview.tabs.currentIndex() == 1
+
+
+def test_preview_finds_typst_values_on_the_page(qtbot, app):
+    source = "#let data = json(bytes(sys.inputs.data))\n= Декларация\nДолуподписаният #data.name, ЕГН #data.egn\n"
+    app.templates.save(
+        "decl",
+        "Декларация",
+        TemplateKind.TYPST,
+        {"applicant": "person"},
+        {"name": "{{ applicant.name }}", "egn": "{{ applicant.egn }}"},
+        source_text=source,
+    )
+    dialog = FillDialog(app, ["decl"], {}, "typst")
+    qtbot.addWidget(dialog)
+    dialog.show()
+    [page] = dialog.preview.pages
+    assert page.names == {"name", "egn"}
+    _select(dialog, "egn")
+    [view] = page.views
+    assert view.active == "egn" and view.field_rects("egn")[0].width() > 0
+
+
+def test_preview_shows_values_and_clicks_select_the_field(qtbot, app, template, profiles, form_pdf, tmp_path):
+    from PySide6.QtCore import QPoint, QUrl
+
+    _pdf_template(app, form_pdf, tmp_path)
+    dialog = FillDialog(app, ["loan", "pdf"], profiles, "live", values={"loan_amount": "34 000"})
+    qtbot.addWidget(dialog)
+    dialog.show()
+    docx_page, pdf_page = dialog.preview.pages
+    assert "34 000" in docx_page.browser.toPlainText()
+    dialog.set_binding(list(dialog.vars).index("loan_amount"), {"value": "50 000"})
+    qtbot.waitUntil(lambda: "50 000" in docx_page.browser.toPlainText())
+
+    docx_page.browser.anchorClicked.emit(QUrl("field:loan_amount"))
+    assert dialog.var_list[dialog.table.currentRow()].name == "loan_amount"
+
+    _select(dialog, "name")  # shows the PDF tab
+    view = next(v for v in pdf_page.views if "name" in v.rects)
+    _select(dialog, "loan_amount")
+    center = view.field_rects("name")[0].center().toPoint()
+    qtbot.mouseClick(view, Qt.MouseButton.LeftButton, pos=QPoint(center.x(), center.y()))
+    assert dialog.var_list[dialog.table.currentRow()].name == "name"
+
+
+def test_typst_preview_finds_filled_values(qtbot, app):
+    source = "#let data = json(bytes(sys.inputs.data))\nГрад #data.city, адрес #data.address, град #data.city\n"
+    app.templates.save(
+        "addr", "Адрес", TemplateKind.TYPST, {}, {"city": "София", "address": "ул. Витоша 1"}, source_text=source
+    )
+    dialog = FillDialog(app, ["addr"], {}, "typst-live")
+    qtbot.addWidget(dialog)
+    dialog.show()
+    [page] = dialog.preview.pages
+    [view] = page.views
+    assert len(view.rects["city"]) == 2 and len(view.rects["address"]) == 1
+    xs = sorted(rect[0] for rect in view.rects["city"])
+    assert xs[0] < view.rects["address"][0][0] < xs[1]

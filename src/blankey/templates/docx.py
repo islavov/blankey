@@ -130,9 +130,18 @@ def blank_contexts(path: Path, width: int = 400) -> dict[str, list[str]]:
 ALIGN = {WD_ALIGN_PARAGRAPH.CENTER: "center", WD_ALIGN_PARAGRAPH.RIGHT: "right", WD_ALIGN_PARAGRAPH.JUSTIFY: "justify"}
 
 
-def _run_html(run, labels: dict[str, str]) -> str:
+def _chip(var: str, labels: dict[str, str], values: dict[str, str] | None) -> str:
+    """A blank as a link to field:{var} named blank-{var}, so a preview can scroll to it, highlight it through the
+    b-{var} class and react to clicks. It shows the value when one is given, else the label (class "empty")."""
+    value = (values or {}).get(var, "").strip()
+    text = html.escape(value or labels.get(var) or var)
+    classes = f"blank b-{var}" if value or values is None else f"blank b-{var} empty"
+    return f'<a href="field:{var}" name="blank-{var}"><span class="{classes}">&nbsp;{text}&nbsp;</span></a>'
+
+
+def _run_html(run, labels: dict[str, str], values: dict[str, str] | None) -> str:
     text = html.escape(run.text)
-    text = TAG_RE.sub(lambda m: f'<span class="blank">&nbsp;{html.escape(labels.get(m[1]) or m[1])}&nbsp;</span>', text)
+    text = TAG_RE.sub(lambda m: _chip(m[1], labels, values), text)
     if run.bold:
         text = f"<b>{text}</b>"
     if run.italic:
@@ -144,8 +153,8 @@ def _run_html(run, labels: dict[str, str]) -> str:
     return text
 
 
-def _paragraph_html(paragraph: Paragraph, labels: dict[str, str]) -> str:
-    body = "".join(_run_html(run, labels) for run in paragraph.runs) or "&nbsp;"
+def _paragraph_html(paragraph: Paragraph, labels: dict[str, str], values: dict[str, str] | None) -> str:
+    body = "".join(_run_html(run, labels, values) for run in paragraph.runs) or "&nbsp;"
     align = ALIGN.get(paragraph.alignment)
     style = paragraph.style.name if paragraph.style is not None else ""
     if style.startswith(("Heading", "Title")):
@@ -153,15 +162,15 @@ def _paragraph_html(paragraph: Paragraph, labels: dict[str, str]) -> str:
     return f'<p align="{align}">{body}</p>' if align else f"<p>{body}</p>"
 
 
-def to_html(path: Path, labels: dict[str, str] | None = None) -> str:
-    """The document body as simple HTML for a read-only preview; {{ var }} tags become
-    <span class="blank"> chips showing the variable's label."""
+def to_html(path: Path, labels: dict[str, str] | None = None, values: dict[str, str] | None = None) -> str:
+    """The document body as simple HTML for a read-only preview; {{ var }} tags become chips (see _chip) showing
+    the value from `values`, or the variable's label."""
     labels = labels or {}
     document = docx.Document(str(path))
     parts = []
     for child in document.element.body.iterchildren():
         if child.tag == qn("w:p"):
-            parts.append(_paragraph_html(Paragraph(child, document), labels))
+            parts.append(_paragraph_html(Paragraph(child, document), labels, values))
         elif child.tag == qn("w:tbl"):
             rows = []
             for row in Table(child, document).rows:
@@ -170,7 +179,9 @@ def to_html(path: Path, labels: dict[str, str] | None = None) -> str:
                     if id(cell._tc) in seen:
                         continue
                     seen.add(id(cell._tc))
-                    cells.append("<td>" + "".join(_paragraph_html(p, labels) for p in cell.paragraphs) + "</td>")
+                    cells.append(
+                        "<td>" + "".join(_paragraph_html(p, labels, values) for p in cell.paragraphs) + "</td>"
+                    )
                 rows.append("<tr>" + "".join(cells) + "</tr>")
             parts.append('<table width="100%" cellpadding="4">' + "".join(rows) + "</table>")
     return "\n".join(parts)
