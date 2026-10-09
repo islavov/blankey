@@ -224,3 +224,22 @@ def test_opens_a_vault_written_by_the_previous_db_layer(tmp_path):
     request = vault.get_request(request.id)
     assert (request.payload, request.result) == ({"reason": "Попълни"}, {"outcome": "saved"})
     vault.close()
+
+
+def test_free_port_skips_a_port_in_use(tmp_path):
+    import socket
+
+    from blankey.config import free_port, load_config, port_available
+
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        taken = busy.getsockname()[1]
+        assert not port_available(taken)
+        port = free_port(taken)
+        assert port != taken and port_available(port)
+
+    config = load_config(tmp_path / "data")
+    config.port = port
+    config.save()
+    assert load_config(tmp_path / "data").port == port

@@ -1,3 +1,4 @@
+import socket
 import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -57,3 +58,26 @@ def load_config(data_dir: Path | None = None) -> Config:
     config.templates_dir.mkdir(exist_ok=True)
     config.previews_dir.mkdir(exist_ok=True)
     return config
+
+
+PORT_SEARCH = 50  # ports tried after the configured one before asking the OS for any free port
+
+
+def port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as uvicorn binds, so TIME_WAIT does not count
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def free_port(preferred: int) -> int:
+    """The preferred port when it is free, else the next free one above it, else any port the OS hands out."""
+    for port in range(preferred, min(preferred + PORT_SEARCH, 65536)):
+        if port_available(port):
+            return port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]

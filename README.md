@@ -31,18 +31,22 @@ macOS 13 or newer. It is ad-hoc signed (no Apple Developer ID), so macOS blocks 
 2. Open Blankey once; macOS says it cannot verify the developer. Open System Settings → Privacy & Security and
    click "Open Anyway" (or run `xattr -dr com.apple.quarantine /Applications/Blankey.app`).
 3. Blankey lives in the menu bar. First launch creates the vault (password + recovery key).
-4. Connect Claude from the menu: "Connect Claude Desktop" or "Copy Claude Code command".
+4. Connect an agent from the menu bar: Connect MCP → Configure Claude Desktop, or copy a connect command.
 
 ## Connect Claude
 
 The server listens on `http://127.0.0.1:8765/mcp` without authentication. It only accepts local
 connections, the SDK rejects foreign Host/Origin headers (DNS rebinding), and no tool returns personal data.
 
-- **Claude Desktop**: tray menu → "Connect Claude Desktop", then restart Claude Desktop. This adds
+All under menu bar → Connect MCP:
+
+- **Claude Desktop**: "Configure Claude Desktop", then restart Claude Desktop. This adds
   `blankey mcp` (a stdio bridge to the running app, which starts the app if needed) to
   `claude_desktop_config.json`.
 - **Claude Code**: `claude mcp add --transport http blankey http://127.0.0.1:8765/mcp`
-  (tray menu → "Copy Claude Code command").
+  ("Copy Claude Code connect command").
+- **Codex**: `codex mcp add blankey --url http://127.0.0.1:8765/mcp` ("Copy Codex connect command").
+- **Other clients**: "Copy MCP address" copies the HTTP endpoint.
 
 ## How the PII boundary works
 

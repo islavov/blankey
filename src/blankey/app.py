@@ -7,7 +7,7 @@ from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon
 
 from blankey import biometric
-from blankey.config import load_config
+from blankey.config import free_port, load_config
 from blankey.core import Blankey
 from blankey.mcp import bridge
 from blankey.mcp.thread import McpThread
@@ -73,11 +73,17 @@ class Tray(QObject):
         self.menu.addAction(label, self.open_main)
         self.menu.addSeparator()
         running = self.mcp.running
-        status = QAction(f"MCP: {self.app.config.mcp_url}" if running else "MCP: not running", self.menu)
+        status = QAction(f"MCP up: {self.app.config.mcp_url}" if running else "MCP down", self.menu)
         status.setEnabled(False)
         self.menu.addAction(status)
-        self.menu.addAction("Connect Claude Desktop", self._connect_claude_desktop)
-        self.menu.addAction("Copy Claude Code command", self._copy_mcp_command)
+        connect = self.menu.addMenu("Connect MCP")
+        connect.addAction("Copy MCP address", lambda: self._copy(self.app.config.mcp_url, "Address copied."))
+        connect.addAction(
+            "Copy Claude Code connect command", lambda: self._copy(self.claude_code_command(), "Command copied.")
+        )
+        connect.addAction("Copy Codex connect command", lambda: self._copy(self.codex_command(), "Command copied."))
+        connect.addAction("Configure Claude Desktop", self._connect_claude_desktop)
+        self.menu.addSeparator()
         label = "Unlock with Touch ID" if biometric.available() else "Unlock with keychain"
         keyring_action = QAction(label, self.menu, checkable=True)
         keyring_action.setChecked(vault.keyring_enabled)
@@ -104,9 +110,15 @@ class Tray(QObject):
         self.main.activateWindow()
         self._refresh_icon()
 
-    def _copy_mcp_command(self) -> None:
-        QGuiApplication.clipboard().setText(f"claude mcp add --transport http blankey {self.app.config.mcp_url}")
-        self.tray.showMessage("Blankey", "Command copied.", QSystemTrayIcon.MessageIcon.Information, 3000)
+    def claude_code_command(self) -> str:
+        return f"claude mcp add --transport http blankey {self.app.config.mcp_url}"
+
+    def codex_command(self) -> str:
+        return f"codex mcp add blankey --url {self.app.config.mcp_url}"
+
+    def _copy(self, text: str, message: str) -> None:
+        QGuiApplication.clipboard().setText(text)
+        self.tray.showMessage("Blankey", message, QSystemTrayIcon.MessageIcon.Information, 3000)
 
     def _connect_claude_desktop(self) -> None:
         try:
@@ -200,6 +212,11 @@ def main() -> None:
     if bridge.server_running(config.mcp_url):
         QMessageBox.information(None, "Blankey", "Blankey is already running. Look for the B icon in the menu bar.")
         sys.exit(0)
+    moved_from = None
+    if (port := free_port(config.port)) != config.port:
+        # saved, so the stdio bridge and the copied connect commands use the new address from now on
+        moved_from, config.port = config.port, port
+        config.save()
     platform.hide_dock_icon()
 
     app = Blankey(config)
@@ -213,6 +230,12 @@ def main() -> None:
     mcp = McpThread(app)
     mcp.start()
     tray = Tray(qt_app, app, mcp)
+    if moved_from is not None:
+        message = (
+            f"Port {moved_from} is in use, so the MCP server moved to {config.mcp_url}. "
+            "Copy the connect command again for Claude Code or Codex."
+        )
+        tray.tray.showMessage("Blankey", message, QSystemTrayIcon.MessageIcon.Warning, 10_000)
     QTimer.singleShot(0, tray._process_requests)  # requests that arrived while the app was closed
     signal.signal(signal.SIGINT, lambda *_: tray.quit())
     # Python only runs signal handlers between bytecodes; wake it up periodically while Qt idles.
