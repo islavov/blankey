@@ -23,8 +23,6 @@ jobs:
         include:
           - name: macos-arm64
             runner: macos-15
-          - name: macos-x86_64
-            runner: macos-15-intel
           - name: windows-x86_64
             runner: windows-latest
           - name: linux-x86_64
@@ -34,11 +32,11 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.release.tag_name || github.sha }}
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
 
       - name: Check the tag matches the version
         run: |

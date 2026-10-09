@@ -53,7 +53,7 @@ sources = ["src/blankey"]
 icon = "resources/blankey"
 
 [tool.briefcase.app.blankey.macOS]
-universal_build = false  # one build per architecture: the release workflow runs on an Apple Silicon and an Intel runner
+universal_build = false  # Apple Silicon only
 min_os_version = "13.0"
 cleanup_paths = [
     "**/app_packages/PyObjCTest",
