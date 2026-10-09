@@ -1,14 +1,10 @@
 import asyncio
 import base64
-import io
 import json
 
 import pytest
-from pyhanko.pdf_utils.reader import PdfFileReader
-from pyhanko.sign.validation import validate_pdf_signature
-from pypdf import PdfReader
 
-from blankey.core import GenerateOptions, RequestKind
+from blankey.core import RequestKind
 from blankey.mcp.server import build_server
 from blankey.render import pdf_form
 from blankey.vault import FieldInput, FieldType
@@ -94,7 +90,7 @@ def test_no_tool_leaks_vault_values(app, mcp, setup, filled_docx):
         call(mcp, "wait_request", request_id=1, timeout_s=0),
     ]
     fill_set_id = app.vault.save_fill_set("leak", ["t"], {"applicant": pid}, {})
-    [doc_id] = app.generate_fill(fill_set_id, GenerateOptions(sign="self-signed", signer_name=SENTINEL_NAME))
+    [doc_id] = app.generate_fill(fill_set_id)
     app.vault.resolve_request(1, "done", {"fill_set_id": fill_set_id, "document_ids": [doc_id]})
     outputs += [call(mcp, "list_documents"), call(mcp, "get_request", request_id=1)]
     outputs += [
@@ -178,31 +174,6 @@ def test_request_fill_validates_roles(mcp, setup):
         asyncio.run(mcp.call_tool("request_fill", {"templates": ["t"], "profiles": {}, "name": "n"}))
 
 
-def test_generate_fill_signed_and_encrypted(app, setup):
-    app.templates.save(
-        "t",
-        "T",
-        "pdf_form",
-        {"applicant": "person"},
-        {"name": "{{ applicant.name }}"},
-        source_file=__import__("pathlib").Path(setup["source"]),
-    )
-    fill_set_id = app.vault.save_fill_set("signed", ["t"], {"applicant": setup["pid"]}, {})
-    options = GenerateOptions(sign="self-signed", password="pdf-pass", signer_name="Me")
-    [doc_id] = app.generate_fill(fill_set_id, options)
-    info = app.vault.list_documents()[0]
-    assert (info.signed, info.encrypted, info.pages) == ("self-signed", True, 1)
-    content = app.vault.load_document(doc_id)
-    encrypted = PdfReader(io.BytesIO(content))
-    assert encrypted.is_encrypted
-    assert not encrypted.decrypt("wrong")
-    assert encrypted.decrypt("pdf-pass") and len(encrypted.pages) == 1
-    reader = PdfFileReader(io.BytesIO(content))
-    reader.decrypt("pdf-pass")
-    status = validate_pdf_signature(reader.embedded_signatures[0])
-    assert status.intact and status.valid  # self-signed: integrity ok, not trusted
-
-
 def test_vault_locked_check_still_reports_metadata(app, mcp, setup):
     call(
         mcp,
@@ -268,6 +239,6 @@ def test_bridge_starts_without_qt_or_the_server():
 
     code = (
         "import sys, blankey.__main__, blankey.mcp.bridge; "
-        "print([m for m in ('PySide6', 'mcp', 'pyhanko', 'typst', 'uvicorn') if m in sys.modules])"
+        "print([m for m in ('PySide6', 'mcp', 'docxtpl', 'typst', 'uvicorn') if m in sys.modules])"
     )
     assert subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout == "[]\n"

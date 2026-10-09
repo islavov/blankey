@@ -83,10 +83,9 @@ vault field (`manager.egn`), a literal Claude proposed (non-PII only), the templ
 Documents are always generated from a fill set. The choices are saved as a named fill set, encrypted in the vault, and can be reopened, regenerated,
 exported (YAML, or a zip with the templates) and imported from tray → "Fill sets…".
 
-## Signing
-
-- Self-signed: a certificate is generated on first use and stored encrypted in the vault.
-- QES: set `pkcs11_lib` in `config.toml` to the card driver (e.g. the B-Trust / StampIT PKCS#11 library).
-  Encryption is applied first and the signature is added incrementally, so both stay valid.
-
 Linux: the tray needs StatusNotifier support (GNOME: AppIndicator extension).
+
+## License
+
+MIT. See [LICENSE](LICENSE). The bundled Noto fonts are under the SIL Open Font License
+(`src/blankey/assets/fonts/OFL.txt`).

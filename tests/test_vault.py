@@ -74,7 +74,7 @@ def test_ciphertext_cannot_be_moved_between_fields(app):
 
 
 def test_documents_round_trip(app):
-    doc_id = app.vault.store_document("t", "Title", {"applicant": 1}, 1, "", False, "t.pdf", b"%PDF-data")
+    doc_id = app.vault.store_document("t", "Title", {"applicant": 1}, 1, "t.pdf", b"%PDF-data")
     assert app.vault.load_document(doc_id) == b"%PDF-data"
     assert app.vault.list_documents()[0].filename == "t.pdf"
 

@@ -60,8 +60,6 @@ class DocumentInfo:
     title: str
     profiles: dict[str, int]
     pages: int
-    signed: str
-    encrypted: bool
     filename: str
     created_at: str
 
@@ -341,8 +339,6 @@ class Vault:
         title: str,
         profiles: dict[str, int],
         pages: int,
-        signed: str,
-        encrypted: bool,
         filename: str,
         content: bytes,
     ) -> int:
@@ -351,10 +347,10 @@ class Vault:
             cur = self._execute(
                 """
                 INSERT INTO documents
-                    (template_id, title, profiles, pages, signed, encrypted, filename, created_at, nonce, ciphertext)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, x'', x'')
+                    (template_id, title, profiles, pages, filename, created_at, nonce, ciphertext)
+                VALUES (?, ?, ?, ?, ?, ?, x'', x'')
                 """,
-                (template_id, title, json.dumps(profiles), pages, signed, int(encrypted), filename, now()),
+                (template_id, title, json.dumps(profiles), pages, filename, now()),
             )
             doc_id = cur.lastrowid
             nonce, ct = crypto.encrypt(dek, content, f"document:{doc_id}".encode())
@@ -363,8 +359,7 @@ class Vault:
 
     def list_documents(self) -> list[DocumentInfo]:
         rows = self._execute(
-            "SELECT id, template_id, title, profiles, pages, signed, encrypted, filename, created_at "
-            "FROM documents ORDER BY id DESC"
+            "SELECT id, template_id, title, profiles, pages, filename, created_at FROM documents ORDER BY id DESC"
         ).fetchall()
         return [
             DocumentInfo(
@@ -373,8 +368,6 @@ class Vault:
                 r["title"],
                 json.loads(r["profiles"]),
                 r["pages"],
-                r["signed"],
-                bool(r["encrypted"]),
                 r["filename"],
                 r["created_at"],
             )

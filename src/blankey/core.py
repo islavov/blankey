@@ -3,9 +3,8 @@
 import datetime
 import zipfile
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import yaml
 
@@ -15,21 +14,10 @@ from blankey.templates import Template, TemplateStore, engine, fill
 from blankey.templates.bindings import profile_context
 from blankey.vault import FieldInfo, Vault
 
-if TYPE_CHECKING:
-    from blankey.output.protect import SelfSigned
-
 
 class RequestKind:
     PROFILE_INPUT = "profile_input"
     FILL = "fill"
-
-
-@dataclass(slots=True)
-class GenerateOptions:
-    sign: str = "none"  # none | self-signed | qes
-    password: str | None = None
-    pkcs11_pin: str | None = None
-    signer_name: str = ""
 
 
 class Blankey:
@@ -62,22 +50,11 @@ class Blankey:
     def real_context(self, profiles: dict[str, int]) -> dict[str, Any]:
         return {role: profile_context(self.vault.get_values(pid)) for role, pid in profiles.items()}
 
-    def self_signed_identity(self, common_name: str) -> "SelfSigned":
-        from blankey.output import protect  # pyHanko is loaded only for signing
-
-        raw = self.vault.get_secret(protect.SELF_SIGNED_SECRET)
-        if raw is not None:
-            return protect.SelfSigned.load(raw)
-        identity = protect.create_self_signed(common_name or "Blankey")
-        self.vault.put_secret(protect.SELF_SIGNED_SECRET, identity.dump())
-        return identity
-
     def fill_templates(self, template_ids: list[str]) -> list[Template]:
         return [self.templates.get(t) for t in template_ids]
 
-    def generate_fill(self, fill_set_id: int, options: GenerateOptions | None = None) -> list[int]:
-        """Render every template of a fill set and store the documents. PDFs are signed / encrypted per options."""
-        options = options or GenerateOptions()
+    def generate_fill(self, fill_set_id: int) -> list[int]:
+        """Render every template of a fill set and store the documents."""
         info, bindings = self.vault.get_fill_set(fill_set_id)
         templates = self.fill_templates(info.templates)
         resolved = fill.resolve(templates, bindings, self.real_context(info.profiles))
@@ -88,22 +65,7 @@ class Blankey:
                 raise ValueError(f"{template.name}: " + "; ".join(errors))
             rendered = engine.render_values(template, values)
             title = f"{template.name} ({info.name})"
-            content, signed = rendered.content, ""
-            if rendered.is_pdf and (options.password or options.sign != "none"):
-                from blankey.output import protect
-
-                content, signed = protect.protect(
-                    content,
-                    password=options.password,
-                    self_signed=self.self_signed_identity(options.signer_name)
-                    if options.sign == "self-signed"
-                    else None,
-                    pkcs11_lib=self.config.pkcs11_lib if options.sign == "qes" else None,
-                    pkcs11_pin=options.pkcs11_pin,
-                    reason=title,
-                )
-            encrypted = bool(options.password)
-            doc_ids.append(self._store(template, rendered, content, signed, encrypted, info.profiles, title))
+            doc_ids.append(self._store(template, rendered, info.profiles, title))
         return doc_ids
 
     def export_fill_set(self, fill_set_id: int) -> str:
@@ -139,9 +101,6 @@ class Blankey:
         self,
         template: Template,
         rendered: engine.Rendered,
-        content: bytes,
-        signed: str,
-        encrypted: bool,
         profiles: dict[str, int],
         title: str,
     ) -> int:
@@ -152,10 +111,8 @@ class Blankey:
             title=title or template.name,
             profiles=profiles,
             pages=page_count(rendered.content) if rendered.is_pdf else 0,
-            signed=signed,
-            encrypted=encrypted and rendered.is_pdf,
             filename=f"{template_id}-{stamp}.{rendered.extension}",
-            content=content,
+            content=rendered.content,
         )
         self.vault.audit("user", "generate", f"template={template_id} document={doc_id}")
         return doc_id

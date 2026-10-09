@@ -129,8 +129,7 @@ def request_outcome(request: Request) -> str:
             skipped = len(fields) - saved
             return f"Saved {saved} field{'s' if saved != 1 else ''}" + (f", {skipped} skipped" if skipped else "")
         case "generate":
-            extras = [e for e in (result.get("signed") and "signed", result.get("encrypted") and "password") if e]
-            return "Document generated" + (f" ({', '.join(extras)})" if extras else "")
+            return "Document generated"
         case "fill":
             documents = len(result.get("document_ids", []))
             text = f"{documents} document{'s' if documents != 1 else ''} generated" if documents else "Fill set saved"
@@ -317,7 +316,7 @@ class FillSetsPage(TablePage):
 class DocumentsPage(TablePage):
     title = "Documents"
     symbol = "doc.text"
-    columns = ("Title", "Template", "Kind", "Protection", "Created")
+    columns = ("Title", "Template", "Kind", "Created")
     empty_text = "No documents yet"
 
     def __init__(self, app: Blankey, parent: QWidget | None = None):
@@ -331,10 +330,8 @@ class DocumentsPage(TablePage):
     def refresh(self) -> None:
         rows = []
         for doc in self.app.vault.list_documents():
-            flags = (doc.signed and f"signed ({doc.signed})", doc.encrypted and "password")
-            protection = ", ".join(f for f in flags if f)
             kind = "PDF" if doc.filename.endswith(".pdf") else "Word"
-            rows.append((doc.id, [doc.title, doc.template_id, kind, protection or "-", _when(doc.created_at)]))
+            rows.append((doc.id, [doc.title, doc.template_id, kind, _when(doc.created_at)]))
         self.set_rows(rows)
 
     def subtitle(self) -> str:

@@ -3,7 +3,7 @@ name = "blankey"
 version = "0.1.0"
 description = "Local encrypted PII vault and document templating with an MCP server"
 readme = "README.md"
-license = "LicenseRef-Proprietary"
+license = "MIT"
 license-files = ["LICENSE"]
 authors = [
     { name = "Ivelin", email = "hello@blankey.io" }
@@ -16,7 +16,6 @@ dependencies = [
     "keyring>=25.7.0",
     "mcp[cli]>=2.3.0",
     "platformdirs>=4.12.3",
-    "pyhanko[pkcs11]>=0.37.0",
     "pyobjc-framework-cocoa>=12.2.2 ; sys_platform == 'darwin'",
     "pyobjc-framework-localauthentication>=12.2.2 ; sys_platform == 'darwin'",
     "pypdf>=6.19.0",

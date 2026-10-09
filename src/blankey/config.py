@@ -16,7 +16,6 @@ class Config:
     data_dir: Path
     port: int = 8765
     auto_lock_minutes: int = 15
-    pkcs11_lib: str = ""
 
     @property
     def db_path(self) -> Path:

@@ -92,7 +92,7 @@ def test_profiles_page_round_trip(qtbot, app):
 
 
 def test_documents_page_deletes_all_selected(qtbot, app, monkeypatch):
-    ids = [app.vault.store_document("t", f"Doc {i}", {}, 0, "", False, f"d{i}.docx", b"x") for i in range(3)]
+    ids = [app.vault.store_document("t", f"Doc {i}", {}, 0, f"d{i}.docx", b"x") for i in range(3)]
     window = pages.DocumentsPage(app)
     qtbot.addWidget(window)
     selection = window.table.selectionModel()
@@ -110,8 +110,8 @@ def test_documents_page_deletes_all_selected(qtbot, app, monkeypatch):
 
 
 def test_main_window_switches_pages_and_filters(qtbot, app):
-    app.vault.store_document("t", "Договор", {}, 0, "", False, "a.docx", b"x")
-    app.vault.store_document("t", "Решение", {}, 0, "", False, "b.docx", b"x")
+    app.vault.store_document("t", "Договор", {}, 0, "a.docx", b"x")
+    app.vault.store_document("t", "Решение", {}, 0, "b.docx", b"x")
     window = MainWindow(app, on_lock=lambda: None, on_quit=lambda: None)
     qtbot.addWidget(window)
     assert isinstance(window.current_page(), pages.FillSetsPage)

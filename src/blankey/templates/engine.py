@@ -86,7 +86,7 @@ def render_values(template: Template, values: dict[str, Any], errors: list[str] 
                 doc.save(str(docx_path))
                 pdf = docx_to_pdf(docx_path)
                 if pdf is None:
-                    errors.append("LibreOffice not found: output is .docx and cannot be previewed or signed")
+                    errors.append("LibreOffice not found: output is .docx and cannot be previewed")
                     return Rendered(docx_path.read_bytes(), "docx", errors)
                 return Rendered(pdf, "pdf", errors)
     raise ValueError(f"Unsupported template kind {template.kind}")
