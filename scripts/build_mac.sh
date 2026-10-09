@@ -6,11 +6,11 @@ cd "$(dirname "$0")/.."
 contents=build/blankey/macos/app/Blankey.app/Contents
 
 if [ -d "$contents" ]; then
-    uv run briefcase update macOS
+    uv run briefcase update macOS --no-input
 else
-    uv run briefcase create macOS
+    uv run briefcase create macOS --no-input
 fi
-uv run briefcase build macOS
+uv run briefcase build macOS --no-input
 uv run python - "$contents" <<'PY'
 import sys
 from pathlib import Path
@@ -24,6 +24,6 @@ uv run python -m compileall -q -j0 --invalidation-mode unchecked-hash \
     "$contents/Resources/app" "$contents/Resources/app_packages" "$contents/Frameworks/Python.framework/Versions/Current/lib" \
     >/dev/null || true  # a few test files of third-party packages do not compile; they are never imported
 rm -f dist/Blankey-*.dmg
-uv run briefcase package macOS --adhoc-sign
+uv run briefcase package macOS --adhoc-sign --no-input
 codesign --verify --deep --strict "$contents/.."
 ls -lh dist/
