@@ -243,3 +243,12 @@ def test_free_port_skips_a_port_in_use(tmp_path):
     config.port = port
     config.save()
     assert load_config(tmp_path / "data").port == port
+
+
+def test_data_dir_from_environment(tmp_path, monkeypatch):
+    from blankey.config import load_config
+
+    monkeypatch.setenv("BLANKEY_DATA_DIR", str(tmp_path / "demo"))
+    assert load_config().data_dir == tmp_path / "demo"
+    assert (tmp_path / "demo" / "config.toml").exists()
+    assert load_config(tmp_path / "other").data_dir == tmp_path / "other"

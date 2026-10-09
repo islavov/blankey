@@ -1,3 +1,4 @@
+import os
 import socket
 import tomllib
 from dataclasses import asdict, dataclass
@@ -45,7 +46,8 @@ class Config:
 
 
 def load_config(data_dir: Path | None = None) -> Config:
-    data_dir = data_dir or user_data_path(APP_NAME, appauthor=False)
+    env_dir = os.environ.get("BLANKEY_DATA_DIR")
+    data_dir = data_dir or (Path(env_dir).expanduser() if env_dir else user_data_path(APP_NAME, appauthor=False))
     data_dir.mkdir(parents=True, exist_ok=True)
     config = Config(data_dir=data_dir)
     if config.config_path.exists():
