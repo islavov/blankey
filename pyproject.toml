@@ -27,6 +27,10 @@ dependencies = [
     "typst>=0.15.0",
 ]
 
+[project.urls]
+Homepage = "https://blankey.io"
+Repository = "https://github.com/islavov/blankey"
+
 [project.scripts]
 blankey = "blankey.__main__:main"
 
@@ -49,6 +53,8 @@ bundle = "bg.blankey"
 [tool.briefcase.app.blankey]
 formal_name = "Blankey"
 description = "Local encrypted PII vault and document templating with an MCP server"
+long_description = """Blankey keeps personal data in a local encrypted vault and fills docx, PDF-form and Typst
+templates with it. AI agents connect over MCP to build templates and map fields, but never see the values."""
 sources = ["src/blankey"]
 icon = "resources/blankey"
 

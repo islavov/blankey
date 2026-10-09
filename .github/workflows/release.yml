@@ -62,7 +62,7 @@ jobs:
         if: startsWith(matrix.name, 'linux')
         # Debian 13 ships Python 3.13, which the app needs; the package also installs on Ubuntu 25.04+
         run: |
-          uv run briefcase package linux system --target debian:trixie --no-input
+          uv run briefcase package linux system --target debian:trixie --adhoc-sign --no-input
           mv dist/*.deb dist/upload-Blankey-$VERSION-${{ matrix.name }}.deb
 
       - name: Upload to the release
