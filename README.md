@@ -4,6 +4,10 @@ Local, offline tray app that keeps personal data encrypted and fills document te
 An MCP server lets Claude design templates, test them with invented data, and ask for real
 documents, without ever seeing the real values.
 
+Website and download: [blankey.io](https://blankey.io)
+
+[![Claude turns a contract into a template and asks Blankey to fill it; the values are approved in the app](docs/demo.gif)](https://blankey.io)
+
 ## Run
 
 ```bash
