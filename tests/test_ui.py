@@ -1,7 +1,7 @@
 import pytest
 from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtGui import QColor, QGuiApplication, QPalette
-from PySide6.QtWidgets import QCheckBox, QMessageBox, QWidget
+from PySide6.QtWidgets import QCheckBox, QMessageBox, QTableWidgetSelectionRange, QWidget
 
 from blankey.core import RequestKind
 from blankey.templates import TemplateKind
@@ -302,3 +302,43 @@ def test_launch_command_inside_an_app_bundle(tmp_path, monkeypatch):
     assert platform.launch_command() == [str(executable)]
     monkeypatch.setattr(platform, "__file__", str(tmp_path / "src" / "blankey" / "ui" / "platform.py"))
     assert platform.launch_command()[1:] == ["-m", "blankey"]
+
+
+def test_profiles_page_removes_selected_fields(qtbot, app):
+    pid = app.vault.create_profile("Иван", "person")
+    app.vault.set_values(pid, [FieldInput(k, "x") for k in ("a", "b", "c")])
+    window = ProfilesPage(app)
+    qtbot.addWidget(window)
+    assert window.activate()
+    window.table.selectAll()
+    window.table.setRangeSelected(QTableWidgetSelectionRange(1, 0, 1, 3), False)
+    window._remove_rows()
+    assert [window.table.item(r, 0).text() for r in range(window.table.rowCount())] == ["b"]
+    window._save()
+    assert set(app.vault.get_values(pid)) == {"b"}
+
+
+def test_profiles_page_context_menus(qtbot, app):
+    window = ProfilesPage(app)
+    qtbot.addWidget(window)
+    assert [a.text() for a in window.profiles.actions()] == ["New profile", "Rename", "Delete profile"]
+    assert [a.text() for a in window.table.actions()] == ["Add field", "Remove fields"]
+
+
+def test_profiles_page_searches_and_wraps_profile_names(qtbot, app):
+    long_name = "Acme Holdings ЕООД – управител John Robert Smith, пълномощник по договор"
+    for name in ("Иван", long_name):
+        app.vault.create_profile(name, "person")
+    window = ProfilesPage(app)
+    qtbot.addWidget(window)
+    window.resize(900, 600)
+    window.show()
+    items = {window.profiles.item(r).text().split("  (")[0]: window.profiles.item(r) for r in range(2)}
+    assert (
+        window.profiles.visualItemRect(items[long_name]).height()
+        > window.profiles.visualItemRect(items["Иван"]).height()
+    )
+    window.profile_search.setText("acme")
+    assert items["Иван"].isHidden() and not items[long_name].isHidden()
+    window.refresh()
+    assert [window.profiles.item(r).isHidden() for r in range(2)].count(True) == 1

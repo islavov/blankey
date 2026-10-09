@@ -5,11 +5,13 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QInputDialog,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
     QTableWidget,
     QTableWidgetItem,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -31,20 +33,45 @@ class ProfilesPage(Page):
         self.profiles = QListWidget()
         style_list(self.profiles)
         self.profiles.setAlternatingRowColors(False)
-        self.profiles.setFixedWidth(240)
+        # long names wrap onto more lines instead of being cut off
+        self.profiles.setWordWrap(True)
+        self.profiles.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.profiles.setUniformItemSizes(False)
+        self.profiles.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.profiles.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.profiles.setSpacing(3)
         self.profiles.currentItemChanged.connect(lambda *_: self._load_fields())
+        self.profile_search = QLineEdit()
+        self.profile_search.setPlaceholderText("Search profiles")
+        self.profile_search.setClearButtonEnabled(True)
+        self.profile_search.textChanged.connect(self._filter_profiles)
+        sidebar = QWidget()
+        sidebar.setFixedWidth(240)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 8, 0, 0)
+        sidebar_layout.setSpacing(6)
+        search_row = QHBoxLayout()
+        search_row.setContentsMargins(8, 0, 8, 0)
+        search_row.addWidget(self.profile_search)
+        sidebar_layout.addLayout(search_row)
+        sidebar_layout.addWidget(self.profiles, 1)
 
         self.table = QTableWidget(0, len(COLUMNS))
         self.table.setHorizontalHeaderLabels(COLUMNS)
         style_table(self.table, editable=True)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         for column, width in enumerate((260, 240, 120)):
             self.table.setColumnWidth(column, width)
 
-        self.action("New profile", "person.badge.plus", self._add_profile)
-        self.action("Rename", "pencil", self._rename_profile)
-        self.action("Delete profile", "person.badge.minus", self._delete_profile)
-        self.action("Add field", "plus", lambda: self._append_row("", "", FieldType.TEXT, ""))
-        self.action("Remove field", "minus", self._remove_row)
+        add_profile = self.action("New profile", "person.badge.plus", self._add_profile)
+        rename = self.action("Rename", "pencil", self._rename_profile)
+        delete_profile = self.action("Delete profile", "person.badge.minus", self._delete_profile)
+        add_field = self.action("Add field", "plus", lambda: self._append_row("", "", FieldType.TEXT, ""))
+        remove_fields = self.action("Remove fields", "minus", self._remove_rows, QKeySequence("Ctrl+Backspace"))
+        self.profiles.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+        self.profiles.addActions([add_profile, rename, delete_profile])
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+        self.table.addActions([add_field, remove_fields])
         self.action("Save", "checkmark.circle", self._save, QKeySequence.StandardKey.Save)
 
         divider = QFrame()
@@ -54,7 +81,7 @@ class ProfilesPage(Page):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self.profiles)
+        layout.addWidget(sidebar)
         layout.addWidget(divider)
         layout.addWidget(self.table, 1)
         self._removed: set[str] = set()
@@ -83,7 +110,14 @@ class ProfilesPage(Page):
                 self.profiles.setCurrentItem(item)
         if self.profiles.currentItem() is None and self.profiles.count():
             self.profiles.setCurrentRow(0)
+        self._filter_profiles(self.profile_search.text())
         self.changed.emit()
+
+    def _filter_profiles(self, text: str) -> None:
+        needle = text.strip().casefold()
+        for row in range(self.profiles.count()):
+            item = self.profiles.item(row)
+            item.setHidden(bool(needle) and needle not in item.text().casefold())
 
     def _profile_id(self) -> int | None:
         item = self.profiles.currentItem()
@@ -110,14 +144,15 @@ class ProfilesPage(Page):
         self.table.setCellWidget(row, 2, combo)
         self.table.setItem(row, 3, QTableWidgetItem(value))
 
-    def _remove_row(self) -> None:
-        row = self.table.currentRow()
-        if row < 0:
-            return
-        key = self.table.item(row, 0).text().strip()
-        if key:
-            self._removed.add(key)
-        self.table.removeRow(row)
+    def _remove_rows(self) -> None:
+        """Removes the selected rows (Cmd-A selects all); the vault changes on Save."""
+        rows = sorted({index.row() for index in self.table.selectionModel().selectedRows()}, reverse=True)
+        if not rows and self.table.currentRow() >= 0:
+            rows = [self.table.currentRow()]
+        for row in rows:
+            if key := self.table.item(row, 0).text().strip():
+                self._removed.add(key)
+            self.table.removeRow(row)
 
     def _save(self) -> None:
         profile_id = self._profile_id()
