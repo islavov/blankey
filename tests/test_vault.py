@@ -7,6 +7,7 @@ from cryptography.exceptions import InvalidTag
 
 from blankey.vault import FieldInput, FieldType, Vault, VaultLocked, WrongSecret
 from blankey.vault.fieldtypes import valid_egn, valid_iban, validate
+from blankey.vault.migrations import VERSION
 from blankey.vault.models import MODELS
 from tests.conftest import PASSWORD
 
@@ -164,8 +165,31 @@ def test_requests_need_a_key_pair(app):
         app.vault.create_request("fill", {})
 
 
-def test_models_match_the_migrated_schema(app):
-    conn = sqlite3.connect(app.config.db_path)
+DATA = Path(__file__).parent / "data"
+
+
+def _v1_database(path: Path) -> Path:
+    conn = sqlite3.connect(path)
+    conn.executescript((DATA / "schema_v1.sql").read_text() + "PRAGMA user_version = 1;")
+    conn.execute(
+        "INSERT INTO requests (kind, payload, status, created_at) VALUES ('fill', ?, 'pending', 'x')",
+        ('{"reason": "Стар"}',),
+    )
+    conn.commit()
+    conn.close()
+    return path
+
+
+@pytest.mark.parametrize("origin", ["new", "v1", "v3"])
+def test_models_match_the_schema(tmp_path, origin):
+    path = tmp_path / "vault.db"
+    if origin == "v1":
+        _v1_database(path)
+    elif origin == "v3":
+        shutil.copy(DATA / "vault_v3.db", path)
+    Vault(path).close()
+    conn = sqlite3.connect(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == VERSION
     for model in MODELS:
         columns = {row[1]: row for row in conn.execute(f"PRAGMA table_info({model._meta.table_name})")}
         declared = {field.column_name for field in model._meta.sorted_fields}
@@ -174,9 +198,18 @@ def test_models_match_the_migrated_schema(app):
         assert required <= declared, model.__name__
 
 
+def test_upgrades_a_first_version_vault(tmp_path):
+    vault = Vault(_v1_database(tmp_path / "vault.db"))
+    vault.initialize(PASSWORD)
+    assert vault.list_requests()[0].payload == {"reason": "Стар"}
+    fill_set_id = vault.save_fill_set("delta", ["loan"], {}, {"amount": {"value": "1"}})
+    assert vault.get_fill_set(fill_set_id)[1] == {"amount": {"value": "1"}}
+    vault.close()
+
+
 def test_opens_a_vault_written_by_the_previous_db_layer(tmp_path):
     path = tmp_path / "vault.db"
-    shutil.copy(Path(__file__).parent / "data" / "vault_v3.db", path)
+    shutil.copy(DATA / "vault_v3.db", path)
     vault = Vault(path)
     assert [(p.name, p.kind) for p in vault.list_profiles()] == [("Иван", "person")]
     assert [(f.key, f.label, f.length) for f in vault.describe(1)] == [("egn", "ЕГН", 0), ("name", "Име", 11)]
