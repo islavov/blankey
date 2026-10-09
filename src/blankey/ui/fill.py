@@ -33,6 +33,7 @@ from blankey.ui.fill_preview import FillPreview
 from blankey.ui.widgets import (
     HeaderStrip,
     accent_color,
+    blend,
     fit_to_screen,
     footer_note,
     open_documents,
@@ -65,6 +66,24 @@ def _tint(color: QColor, alpha: float) -> QColor:
     return tint
 
 
+def _draw_row_background(painter: QPainter, option: QStyleOptionViewItem, dialog: QWidget, stripe: bool) -> None:
+    option.text = ""
+    option.widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
+    if stripe and option.state & QStyle.StateFlag.State_Selected:
+        painter.fillRect(QRect(option.rect.left(), option.rect.top(), 3, option.rect.height()), accent_color(dialog))
+
+
+def style_selection(table: QTableWidget) -> None:
+    """A soft accent tint for the selected row instead of the solid bar, so the colored chips stay legible."""
+    palette = table.palette()
+    base = palette.color(QPalette.ColorRole.Base)
+    tint = blend(accent_color(table), base, 0.3 if base.lightness() < 128 else 0.14)
+    for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive):
+        palette.setColor(group, QPalette.ColorRole.Highlight, tint)
+        palette.setColor(group, QPalette.ColorRole.HighlightedText, palette.color(QPalette.ColorRole.Text))
+    table.setPalette(palette)
+
+
 class FieldDelegate(QStyledItemDelegate):
     """Label, the template variable underneath, and a warning dot when the value would be empty."""
 
@@ -74,8 +93,7 @@ class FieldDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         self.initStyleOption(option, index)
-        option.text = ""
-        option.widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
+        _draw_row_background(painter, option, self.dialog, stripe=True)
         empty = self.dialog.is_empty_row(index.row())
         rect = option.rect.adjusted(12, 8, -8, -8)
         painter.save()
@@ -112,8 +130,7 @@ class SourceDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         self.initStyleOption(option, index)
-        option.text = ""
-        option.widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
+        _draw_row_background(painter, option, self.dialog, stripe=False)
         kind, path, value, empty = self.dialog.describe_row(index.row())
         box = source_box(option.rect)
         palette = option.palette
@@ -278,6 +295,7 @@ class FillDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.clicked.connect(lambda index: index.column() == SOURCE and self.show_source_menu(index.row()))
         self.table.installEventFilter(self)
+        style_selection(self.table)
         self.table.setItemDelegateForColumn(FIELD, FieldDelegate(self))
         self.table.setItemDelegateForColumn(SOURCE, SourceDelegate(self))
         header_view = self.table.horizontalHeader()
@@ -328,6 +346,12 @@ class FillDialog(QDialog):
             self.table.setCurrentCell(0, SOURCE)
 
     # -- sources -------------------------------------------------------------
+
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() == QEvent.Type.PaletteChange and hasattr(self, "table"):
+            self.table.setPalette(self.palette())  # light/dark switched; recompute the tint
+            style_selection(self.table)
+        super().changeEvent(event)
 
     def _select_var(self, name: str) -> None:
         if name in self.vars:

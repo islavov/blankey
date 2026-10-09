@@ -16,7 +16,8 @@ from blankey.templates import Template, TemplateKind, docx, engine, fill
 from blankey.templates.bindings import as_text
 from blankey.ui.widgets import PAPER_CSS, accent_color, paper_browser, secondary_label
 
-PDF_DPI = 90
+PDF_DPI = 180  # sharp on Retina screens at the width the preview usually has
+CHIP_COLOR = "#9cc5ff"  # the docx chips' blue, translucent over the page
 Boxes = dict[str, list[tuple[int, tuple]]]  # name -> [(1-based page, (x0, y0, x1, y1) in points, origin bottom-left)]
 
 
@@ -106,13 +107,14 @@ class PageView(QWidget):
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.drawPixmap(self.rect(), self.pixmap)
-        if self.active:
-            accent = accent_color(self)
-            tint = QColor(accent)
-            tint.setAlphaF(0.3)
-            painter.setPen(accent)
+        accent = accent_color(self)
+        for name in self.rects:
+            active = name == self.active
+            tint = QColor(accent if active else CHIP_COLOR)
+            tint.setAlphaF(0.3 if active else 0.45)
+            painter.setPen(accent if active else Qt.PenStyle.NoPen)
             painter.setBrush(tint)
-            for rect in self.field_rects(self.active):
+            for rect in self.field_rects(name):
                 painter.drawRoundedRect(rect.adjusted(-2, -2, 2, 2), 3, 3)
         painter.end()
 
@@ -134,7 +136,7 @@ class PdfPage(QScrollArea):
                 self.form_boxes.setdefault(f.name, []).extend((f.page, rect) for rect in f.rects)
             self.names = set(self.form_boxes)
         else:
-            self.markers = {name: f"[{name}]" for name in template.fields}
+            self.markers = _markers(template)
             pdf = engine.render_values(template, self.markers).content
             self.marker_boxes = preview.find_text(pdf, self.markers)
             self.names = set(self.marker_boxes)
@@ -186,6 +188,15 @@ class PdfPage(QScrollArea):
             rect = view.field_rects(var)[0]
             center = view.mapTo(self.widget(), rect.center().toPoint())
             self.ensureVisible(center.x(), center.y(), 40, int(self.viewport().height() * 0.4))
+
+
+def _markers(template: Template) -> dict[str, str]:
+    """Shown in place of empty values: the label in brackets, or the name when labels repeat."""
+    labels = [template.labels.get(name) or name for name in template.fields]
+    return {
+        name: f"[{label if labels.count(label) == 1 else name}]"
+        for name, label in zip(template.fields, labels, strict=True)
+    }
 
 
 def _nearest(candidates: list[tuple[int, tuple]], anchors: list[tuple[int, tuple]]) -> list[tuple[int, tuple]]:

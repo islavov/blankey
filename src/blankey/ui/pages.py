@@ -35,16 +35,14 @@ from PySide6.QtWidgets import (
 )
 
 from blankey.core import Blankey
-from blankey.render import pdf_form, preview
-from blankey.templates import Template, TemplateKind, docx, engine
-from blankey.templates.bindings import example_context
+from blankey.templates import Template, TemplateKind, docx
 from blankey.ui import macos
 from blankey.ui.fill import FillDialog
+from blankey.ui.fill_preview import PdfPage
 from blankey.ui.requests import open_request
 from blankey.ui.unlock import ensure_unlocked
 from blankey.ui.widgets import (
     Page,
-    PagePreview,
     accent_color,
     confirm,
     filter_table,
@@ -380,9 +378,7 @@ class TemplatePreview(QWidget):
         self.heading.setMinimumWidth(1)
         self.info = secondary_label()
         self.browser = paper_browser()
-        self.pages = PagePreview([])
-        self.pages.setMinimumSize(0, 0)
-        self.pages.setFrameShape(QFrame.Shape.NoFrame)
+        self.pages = QWidget()
         self.message = secondary_label("Select a template to see it", smaller=False)
         self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.stack = QStackedLayout()
@@ -418,7 +414,7 @@ class TemplatePreview(QWidget):
         self.info.setText("")
         self.stack.setCurrentWidget(self.message)
 
-    def show_template(self, template: Template, examples: list[dict], used_by: list[str]) -> None:
+    def show_template(self, template: Template, used_by: list[str]) -> None:
         blanks = docx.variables(template.source_path) if template.kind == TemplateKind.DOCX else list(template.fields)
         parts = [
             f'<span style="font-family: Menlo">{html.escape(template.id)}</span>',
@@ -435,29 +431,16 @@ class TemplatePreview(QWidget):
             self.stack.setCurrentWidget(self.browser)
             return
         try:
-            pngs = self._page_images(template, examples)
+            pages = PdfPage(template, on_click=lambda name: None)
         except Exception as exc:
             self.message.setText(f"No preview: {type(exc).__name__}: {exc}")
             self.stack.setCurrentWidget(self.message)
             return
-        pages = PagePreview(pngs)
         pages.setMinimumSize(0, 0)
-        pages.setFrameShape(QFrame.Shape.NoFrame)
         self.stack.replaceWidget(self.pages, pages)
         self.pages.deleteLater()
         self.pages = pages
         self.stack.setCurrentWidget(self.pages)
-
-    @staticmethod
-    def _page_images(template: Template, examples: list[dict]) -> list[bytes]:
-        if template.kind == TemplateKind.PDF_FORM:
-            fields = pdf_form.inspect_form(template.source)
-            return [
-                preview.annotate_fields(template.source, fields, page)
-                for page in range(1, preview.page_count(template.source) + 1)
-            ]
-        rendered = engine.render(template, example_context(examples[0] if examples else {}))
-        return preview.render_pages(rendered.content) if rendered.is_pdf else []
 
 
 ID_ROLE = Qt.ItemDataRole.UserRole
@@ -666,10 +649,7 @@ class TemplatesPage(Page):
         if template is None:
             self.preview.clear()
             return
-        examples = [
-            self.app.templates.get_example(template.id, name) for name in self.app.templates.examples(template.id)
-        ]
-        self.preview.show_template(template, examples, self._used_by(template.id))
+        self.preview.show_template(template, self._used_by(template.id))
 
     def copy_id(self) -> None:
         template = self._current()
