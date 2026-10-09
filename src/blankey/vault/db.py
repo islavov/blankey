@@ -1,6 +1,10 @@
 import sqlite3
 from pathlib import Path
 
+from peewee import SqliteDatabase
+
+from blankey.vault.models import MODELS
+
 SCHEMA = [
     """
     CREATE TABLE meta (
@@ -73,13 +77,18 @@ SCHEMA = [
 ]
 
 
-def connect(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    migrate(conn)
-    return conn
+def connect(path: Path) -> SqliteDatabase:
+    """One shared connection (guarded by the vault's lock), migrated and bound to the models."""
+    database = SqliteDatabase(
+        path,
+        pragmas={"journal_mode": "wal", "foreign_keys": 1},
+        thread_safe=False,
+        check_same_thread=False,
+    )
+    database.connect()
+    migrate(database.connection())
+    database.bind(MODELS)
+    return database
 
 
 def migrate(conn: sqlite3.Connection) -> None:
@@ -88,12 +97,12 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.executescript(f"BEGIN; {script}; PRAGMA user_version={index}; COMMIT;")
 
 
-def backup(conn: sqlite3.Connection, path: Path, keep: int = 3) -> None:
+def backup(database: SqliteDatabase, path: Path, keep: int = 3) -> None:
     for i in range(keep, 1, -1):
         older = path.with_name(f"{path.name}.{i - 1}")
         if older.exists():
             older.replace(path.with_name(f"{path.name}.{i}"))
     target = sqlite3.connect(path.with_name(f"{path.name}.1"))
     with target:
-        conn.backup(target)
+        database.connection().backup(target)
     target.close()

@@ -15,6 +15,7 @@ from keyring.errors import PasswordDeleteError
 
 from blankey.vault import crypto, db
 from blankey.vault.fieldtypes import FieldType
+from blankey.vault.models import AuditRow, DocumentRow, FieldRow, FillSetRow, ProfileRow, RequestRow, Setting
 
 KEYRING_SERVICE = "blankey"
 KEYRING_USER = "vault-kek"
@@ -110,7 +111,7 @@ class Vault:
 
     def __init__(self, path: Path):
         self.path = path
-        self._conn = db.connect(path)
+        self.db = db.connect(path)
         self._lock = threading.RLock()
         self._dek: bytes | None = None
         self._seal_private: bytes | None = None
@@ -170,7 +171,7 @@ class Vault:
         self._set_meta("wrapped_keyring", crypto.wrap_key(kek, dek))
 
     def disable_keyring(self) -> None:
-        self._execute("DELETE FROM meta WHERE key = 'wrapped_keyring'")
+        Setting.delete_by_id("wrapped_keyring")
         with contextlib.suppress(PasswordDeleteError):
             keyring.delete_password(KEYRING_SERVICE, KEYRING_USER)
 
@@ -229,14 +230,13 @@ class Vault:
         )
 
     def _meta(self, key: str) -> bytes | None:
-        row = self._execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
-        return row["value"] if row else None
+        with self._lock:
+            row = Setting.get_or_none(Setting.key == key)
+        return bytes(row.value) if row else None
 
     def _set_meta(self, key: str, value: bytes) -> None:
-        self._execute(
-            "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (key, value),
-        )
+        with self._lock:
+            Setting.replace(key=key, value=value).execute()
 
     def get_secret(self, name: str) -> bytes | None:
         raw = self._meta(f"secret:{name}")
@@ -252,79 +252,90 @@ class Vault:
     # -- profiles ----------------------------------------------------------
 
     def list_profiles(self) -> list[Profile]:
-        rows = self._execute("SELECT id, name, kind FROM profiles ORDER BY name").fetchall()
-        return [Profile(r["id"], r["name"], r["kind"]) for r in rows]
+        with self._lock:
+            return [_profile(r) for r in ProfileRow.select().order_by(ProfileRow.name)]
 
     def get_profile(self, profile_id: int) -> Profile:
-        row = self._execute("SELECT id, name, kind FROM profiles WHERE id = ?", (profile_id,)).fetchone()
+        with self._lock:
+            row = ProfileRow.get_or_none(ProfileRow.id == profile_id)
         if row is None:
             raise KeyError(f"Unknown profile {profile_id}")
-        return Profile(row["id"], row["name"], row["kind"])
+        return _profile(row)
 
     def create_profile(self, name: str, kind: str = "") -> int:
-        cur = self._execute("INSERT INTO profiles (name, kind, created_at) VALUES (?, ?, ?)", (name, kind, now()))
-        return cur.lastrowid
+        with self._lock:
+            return ProfileRow.insert(name=name, kind=kind, created_at=now()).execute()
 
     def update_profile(self, profile_id: int, name: str, kind: str) -> None:
-        self._execute("UPDATE profiles SET name = ?, kind = ? WHERE id = ?", (name, kind, profile_id))
+        with self._lock:
+            ProfileRow.update(name=name, kind=kind).where(ProfileRow.id == profile_id).execute()
 
     def delete_profile(self, profile_id: int) -> None:
-        self._execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
+        with self._lock:
+            ProfileRow.delete_by_id(profile_id)
 
     def describe(self, profile_id: int) -> list[FieldInfo]:
         self.get_profile(profile_id)
-        rows = self._execute(
-            "SELECT key, label, type, value_length FROM fields WHERE profile_id = ? ORDER BY key", (profile_id,)
-        ).fetchall()
-        return [FieldInfo(r["key"], r["label"], FieldType(r["type"]), r["value_length"]) for r in rows]
+        with self._lock:
+            rows = FieldRow.select().where(FieldRow.profile == profile_id).order_by(FieldRow.key)
+            return [FieldInfo(r.key, r.label, FieldType(r.type), r.value_length) for r in rows]
 
     def define_fields(self, profile_id: int, fields: Iterable[tuple[str, str, FieldType]]) -> None:
         """Upsert field definitions (key, label, type) without touching values."""
-        with self._lock, self._transaction():
+        with self._lock, self.db.atomic():
             for key, label, field_type in fields:
-                self._execute(
-                    """
-                    INSERT INTO fields (profile_id, key, label, type, updated_at) VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(profile_id, key) DO UPDATE SET label = excluded.label, type = excluded.type
-                    """,
-                    (profile_id, key, label, str(field_type), now()),
-                )
+                FieldRow.insert(
+                    profile=profile_id, key=key, label=label, type=str(field_type), updated_at=now()
+                ).on_conflict(
+                    conflict_target=[FieldRow.profile, FieldRow.key],
+                    preserve=[FieldRow.label, FieldRow.type],
+                ).execute()
 
     def set_values(self, profile_id: int, values: Iterable[FieldInput]) -> None:
         dek = self._require_dek()
-        with self._lock, self._transaction():
+        with self._lock, self.db.atomic():
             for item in values:
                 value = normalize(item.value)
                 if value:
                     nonce, ct = crypto.encrypt(dek, value.encode("utf-8"), self._aad(profile_id, item.key))
                 else:
                     nonce = ct = None
-                self._execute(
-                    """
-                    INSERT INTO fields (profile_id, key, label, type, value_length, nonce, ciphertext, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(profile_id, key) DO UPDATE SET
-                        label = excluded.label, type = excluded.type, value_length = excluded.value_length,
-                        nonce = excluded.nonce, ciphertext = excluded.ciphertext, updated_at = excluded.updated_at
-                    """,
-                    (profile_id, item.key, item.label, str(item.type), len(value), nonce, ct, now()),
-                )
+                FieldRow.insert(
+                    profile=profile_id,
+                    key=item.key,
+                    label=item.label,
+                    type=str(item.type),
+                    value_length=len(value),
+                    nonce=nonce,
+                    ciphertext=ct,
+                    updated_at=now(),
+                ).on_conflict(
+                    conflict_target=[FieldRow.profile, FieldRow.key],
+                    preserve=[
+                        FieldRow.label,
+                        FieldRow.type,
+                        FieldRow.value_length,
+                        FieldRow.nonce,
+                        FieldRow.ciphertext,
+                        FieldRow.updated_at,
+                    ],
+                ).execute()
         self.backup()
 
     def delete_field(self, profile_id: int, key: str) -> None:
-        self._execute("DELETE FROM fields WHERE profile_id = ? AND key = ?", (profile_id, key))
+        with self._lock:
+            FieldRow.delete().where((FieldRow.profile == profile_id) & (FieldRow.key == key)).execute()
 
     def get_values(self, profile_id: int) -> dict[str, tuple[FieldType, str]]:
         dek = self._require_dek()
-        rows = self._execute(
-            "SELECT key, type, nonce, ciphertext FROM fields WHERE profile_id = ?", (profile_id,)
-        ).fetchall()
+        with self._lock:
+            rows = list(FieldRow.select().where(FieldRow.profile == profile_id))
         values = {}
         for r in rows:
             plain = ""
-            if r["ciphertext"] is not None:
-                plain = crypto.decrypt(dek, r["nonce"], r["ciphertext"], self._aad(profile_id, r["key"])).decode()
-            values[r["key"]] = (FieldType(r["type"]), plain)
+            if r.ciphertext is not None:
+                plain = crypto.decrypt(dek, bytes(r.nonce), bytes(r.ciphertext), self._aad(profile_id, r.key)).decode()
+            values[r.key] = (FieldType(r.type), plain)
         return values
 
     @staticmethod
@@ -343,46 +354,45 @@ class Vault:
         content: bytes,
     ) -> int:
         dek = self._require_dek()
-        with self._lock, self._transaction():
-            cur = self._execute(
-                """
-                INSERT INTO documents
-                    (template_id, title, profiles, pages, filename, created_at, nonce, ciphertext)
-                VALUES (?, ?, ?, ?, ?, ?, x'', x'')
-                """,
-                (template_id, title, json.dumps(profiles), pages, filename, now()),
-            )
-            doc_id = cur.lastrowid
+        with self._lock, self.db.atomic():
+            doc_id = DocumentRow.insert(
+                template_id=template_id,
+                title=title,
+                profiles=profiles,
+                pages=pages,
+                filename=filename,
+                created_at=now(),
+            ).execute()
             nonce, ct = crypto.encrypt(dek, content, f"document:{doc_id}".encode())
-            self._execute("UPDATE documents SET nonce = ?, ciphertext = ? WHERE id = ?", (nonce, ct, doc_id))
+            DocumentRow.update(nonce=nonce, ciphertext=ct).where(DocumentRow.id == doc_id).execute()
         return doc_id
 
     def list_documents(self) -> list[DocumentInfo]:
-        rows = self._execute(
-            "SELECT id, template_id, title, profiles, pages, filename, created_at FROM documents ORDER BY id DESC"
-        ).fetchall()
-        return [
-            DocumentInfo(
-                r["id"],
-                r["template_id"],
-                r["title"],
-                json.loads(r["profiles"]),
-                r["pages"],
-                r["filename"],
-                r["created_at"],
-            )
-            for r in rows
-        ]
+        with self._lock:
+            rows = DocumentRow.select(
+                DocumentRow.id,
+                DocumentRow.template_id,
+                DocumentRow.title,
+                DocumentRow.profiles,
+                DocumentRow.pages,
+                DocumentRow.filename,
+                DocumentRow.created_at,
+            ).order_by(DocumentRow.id.desc())
+            return [
+                DocumentInfo(r.id, r.template_id, r.title, r.profiles, r.pages, r.filename, r.created_at) for r in rows
+            ]
 
     def load_document(self, doc_id: int) -> bytes:
         dek = self._require_dek()
-        row = self._execute("SELECT nonce, ciphertext FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        with self._lock:
+            row = DocumentRow.get_or_none(DocumentRow.id == doc_id)
         if row is None:
             raise KeyError(f"Unknown document {doc_id}")
-        return crypto.decrypt(dek, row["nonce"], row["ciphertext"], f"document:{doc_id}".encode())
+        return crypto.decrypt(dek, bytes(row.nonce), bytes(row.ciphertext), f"document:{doc_id}".encode())
 
     def delete_document(self, doc_id: int) -> None:
-        self._execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+        with self._lock:
+            DocumentRow.delete_by_id(doc_id)
 
     # -- fill sets ---------------------------------------------------------
     # bindings: {var: {"path": "role.key"} | {"value": "..."} | {"default": True}}; encrypted because
@@ -397,50 +407,38 @@ class Vault:
         fill_set_id: int | None = None,
     ) -> int:
         dek = self._require_dek()
-        meta = (name, json.dumps(templates), json.dumps(profiles), now())
-        with self._lock, self._transaction():
+        meta = {"name": name, "templates": templates, "profiles": profiles, "updated_at": now()}
+        with self._lock, self.db.atomic():
             if fill_set_id is None:
-                cur = self._execute(
-                    "INSERT INTO fill_sets (name, templates, profiles, updated_at, created_at, nonce, ciphertext) "
-                    "VALUES (?, ?, ?, ?, ?, x'', x'')",
-                    (*meta, now()),
-                )
-                fill_set_id = cur.lastrowid
-            else:
-                cur = self._execute(
-                    "UPDATE fill_sets SET name = ?, templates = ?, profiles = ?, updated_at = ? WHERE id = ?",
-                    (*meta, fill_set_id),
-                )
-                if not cur.rowcount:
-                    raise KeyError(f"Unknown fill set {fill_set_id}")
+                fill_set_id = FillSetRow.insert(**meta, created_at=now()).execute()
+            elif not FillSetRow.update(**meta).where(FillSetRow.id == fill_set_id).execute():
+                raise KeyError(f"Unknown fill set {fill_set_id}")
             plain = json.dumps(bindings, ensure_ascii=False).encode()
             nonce, ct = crypto.encrypt(dek, plain, f"fillset:{fill_set_id}".encode())
-            self._execute("UPDATE fill_sets SET nonce = ?, ciphertext = ? WHERE id = ?", (nonce, ct, fill_set_id))
+            FillSetRow.update(nonce=nonce, ciphertext=ct).where(FillSetRow.id == fill_set_id).execute()
         return fill_set_id
 
     def list_fill_sets(self) -> list[FillSetInfo]:
-        rows = self._execute("SELECT id, name, templates, profiles, updated_at FROM fill_sets ORDER BY id DESC")
-        return [self._fill_set_info(r) for r in rows.fetchall()]
+        with self._lock:
+            return [_fill_set_info(r) for r in FillSetRow.select().order_by(FillSetRow.id.desc())]
 
     def get_fill_set(self, fill_set_id: int) -> tuple[FillSetInfo, dict[str, dict[str, Any]]]:
         dek = self._require_dek()
-        row = self._execute("SELECT * FROM fill_sets WHERE id = ?", (fill_set_id,)).fetchone()
+        with self._lock:
+            row = FillSetRow.get_or_none(FillSetRow.id == fill_set_id)
         if row is None:
             raise KeyError(f"Unknown fill set {fill_set_id}")
-        plain = crypto.decrypt(dek, row["nonce"], row["ciphertext"], f"fillset:{fill_set_id}".encode())
-        return self._fill_set_info(row), json.loads(plain)
+        plain = crypto.decrypt(dek, bytes(row.nonce), bytes(row.ciphertext), f"fillset:{fill_set_id}".encode())
+        return _fill_set_info(row), json.loads(plain)
 
     def find_fill_set(self, name: str) -> int | None:
-        row = self._execute("SELECT id FROM fill_sets WHERE name = ?", (name,)).fetchone()
-        return row["id"] if row else None
+        with self._lock:
+            row = FillSetRow.get_or_none(FillSetRow.name == name)
+        return row.id if row else None
 
     def delete_fill_set(self, fill_set_id: int) -> None:
-        self._execute("DELETE FROM fill_sets WHERE id = ?", (fill_set_id,))
-
-    @staticmethod
-    def _fill_set_info(row) -> FillSetInfo:
-        profiles = {role: int(pid) for role, pid in json.loads(row["profiles"]).items()}
-        return FillSetInfo(row["id"], row["name"], json.loads(row["templates"]), profiles, row["updated_at"])
+        with self._lock:
+            FillSetRow.delete_by_id(fill_set_id)
 
     # -- requests ----------------------------------------------------------
     # Payloads and results are sealed to the request public key, so the MCP thread can store a request while
@@ -450,59 +448,60 @@ class Vault:
         public = self._meta(REQUEST_PUBLIC_KEY)
         if public is None:
             raise VaultLocked("Unlock Blankey once to enable requests from Claude")
-        with self._lock, self._transaction():
-            cur = self._execute("INSERT INTO requests (kind, payload, created_at) VALUES (?, '{}', ?)", (kind, now()))
-            request_id = cur.lastrowid
+        with self._lock, self.db.atomic():
+            request_id = RequestRow.insert(kind=kind, created_at=now()).execute()
             sealed = crypto.seal(public, json.dumps(payload, ensure_ascii=False).encode(), _request_aad(request_id))
-            self._execute("UPDATE requests SET sealed_payload = ? WHERE id = ?", (sealed, request_id))
+            RequestRow.update(sealed_payload=sealed).where(RequestRow.id == request_id).execute()
         return request_id
 
     def get_request(self, request_id: int) -> Request:
-        row = self._execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
+        with self._lock:
+            row = RequestRow.get_or_none(RequestRow.id == request_id)
         if row is None:
             raise KeyError(f"Unknown request {request_id}")
         return self._request(row)
 
     def list_requests(self, status: str | None = None) -> list[Request]:
+        query = RequestRow.select()
         if status:
-            rows = self._execute("SELECT * FROM requests WHERE status = ? ORDER BY id", (status,)).fetchall()
+            query = query.where(RequestRow.status == status).order_by(RequestRow.id)
         else:
-            rows = self._execute("SELECT * FROM requests ORDER BY id DESC LIMIT 100").fetchall()
+            query = query.order_by(RequestRow.id.desc()).limit(100)
+        with self._lock:
+            rows = list(query)
         return [self._request(r) for r in rows]
 
     def count_requests(self, status: str) -> int:
-        return self._execute("SELECT COUNT(*) FROM requests WHERE status = ?", (status,)).fetchone()[0]
+        with self._lock:
+            return RequestRow.select().where(RequestRow.status == status).count()
 
     def resolve_request(self, request_id: int, status: str, result: dict[str, Any]) -> None:
         public = self._meta(REQUEST_PUBLIC_KEY)
         plain = json.dumps(result, ensure_ascii=False).encode()
         sealed = crypto.seal(public, plain, _request_aad(request_id, "result"))
-        self._execute(
-            "UPDATE requests SET status = ?, result = NULL, sealed_result = ?, resolved_at = ? WHERE id = ?",
-            (status, sealed, now(), request_id),
-        )
+        with self._lock:
+            RequestRow.update(status=status, result=None, sealed_result=sealed, resolved_at=now()).where(
+                RequestRow.id == request_id
+            ).execute()
         self._results[request_id] = result
 
-    def _request(self, row) -> Request:
+    def _request(self, row: RequestRow) -> Request:
         payload: dict[str, Any] = {}
-        result = self._results.get(row["id"])
+        result = self._results.get(row.id)
         hidden = False
-        if row["sealed_payload"] is not None:
+        if row.sealed_payload is not None:
             if self._seal_private is None:
                 hidden = True
             else:
-                aad = _request_aad(row["id"])
-                payload = json.loads(crypto.unseal(self._seal_private, row["sealed_payload"], aad))
+                payload = json.loads(crypto.unseal(self._seal_private, bytes(row.sealed_payload), _request_aad(row.id)))
         else:
-            payload = json.loads(row["payload"])
-        if result is None and row["sealed_result"] is not None and self._seal_private is not None:
-            aad = _request_aad(row["id"], "result")
-            result = json.loads(crypto.unseal(self._seal_private, row["sealed_result"], aad))
-        elif result is None and row["result"]:
-            result = json.loads(row["result"])
-        return Request(
-            row["id"], row["kind"], payload, row["status"], result, row["created_at"], row["resolved_at"], hidden
-        )
+            payload = json.loads(row.payload)
+        if result is None and row.sealed_result is not None and self._seal_private is not None:
+            aad = _request_aad(row.id, "result")
+            result = json.loads(crypto.unseal(self._seal_private, bytes(row.sealed_result), aad))
+        elif result is None and row.result:
+            result = json.loads(row.result)
+        return Request(row.id, row.kind, payload, row.status, result, row.created_at, row.resolved_at, hidden)
 
     def _after_unlock(self) -> None:
         """Create the request key pair on first unlock, then seal requests stored before sealing existed."""
@@ -513,50 +512,37 @@ class Vault:
             self._set_meta(REQUEST_PUBLIC_KEY, public)
         self._seal_private = private
         public = self._meta(REQUEST_PUBLIC_KEY)
-        rows = self._execute("SELECT id, payload, result FROM requests WHERE sealed_payload IS NULL").fetchall()
-        with self._lock, self._transaction():
-            for row in rows:
-                sealed_payload = crypto.seal(public, row["payload"].encode(), _request_aad(row["id"]))
+        with self._lock, self.db.atomic():
+            for row in RequestRow.select().where(RequestRow.sealed_payload.is_null()):
                 sealed_result = (
-                    crypto.seal(public, row["result"].encode(), _request_aad(row["id"], "result"))
-                    if row["result"]
-                    else None
+                    crypto.seal(public, row.result.encode(), _request_aad(row.id, "result")) if row.result else None
                 )
-                self._execute(
-                    "UPDATE requests SET payload = '{}', result = NULL, sealed_payload = ?, sealed_result = ? "
-                    "WHERE id = ?",
-                    (sealed_payload, sealed_result, row["id"]),
-                )
+                RequestRow.update(
+                    payload="{}",
+                    result=None,
+                    sealed_payload=crypto.seal(public, row.payload.encode(), _request_aad(row.id)),
+                    sealed_result=sealed_result,
+                ).where(RequestRow.id == row.id).execute()
 
     # -- audit & maintenance -----------------------------------------------
 
     def audit(self, actor: str, action: str, target: str = "") -> None:
-        self._execute(
-            "INSERT INTO audit (ts, actor, action, target) VALUES (?, ?, ?, ?)", (now(), actor, action, target)
-        )
+        with self._lock:
+            AuditRow.insert(ts=now(), actor=actor, action=action, target=target).execute()
 
     def backup(self) -> None:
         with self._lock:
-            db.backup(self._conn, self.path)
+            db.backup(self.db, self.path)
 
     def close(self) -> None:
         self.lock()
-        self._conn.close()
-
-    def _execute(self, sql: str, params: tuple = ()):
-        with self._lock:
-            return self._conn.execute(sql, params)
-
-    def _transaction(self):
-        return _Transaction(self._conn)
+        self.db.close()
 
 
-class _Transaction:
-    def __init__(self, conn):
-        self.conn = conn
+def _profile(row: ProfileRow) -> Profile:
+    return Profile(row.id, row.name, row.kind)
 
-    def __enter__(self):
-        self.conn.execute("BEGIN")
 
-    def __exit__(self, exc_type, *_):
-        self.conn.execute("ROLLBACK" if exc_type else "COMMIT")
+def _fill_set_info(row: FillSetRow) -> FillSetInfo:
+    profiles = {role: int(pid) for role, pid in row.profiles.items()}
+    return FillSetInfo(row.id, row.name, row.templates, profiles, row.updated_at)

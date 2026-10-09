@@ -1,10 +1,13 @@
+import shutil
 import sqlite3
+from pathlib import Path
 
 import pytest
 from cryptography.exceptions import InvalidTag
 
 from blankey.vault import FieldInput, FieldType, Vault, VaultLocked, WrongSecret
 from blankey.vault.fieldtypes import valid_egn, valid_iban, validate
+from blankey.vault.models import MODELS
 from tests.conftest import PASSWORD
 
 
@@ -155,6 +158,36 @@ def test_plaintext_requests_from_before_sealing_are_sealed_on_unlock(app):
 
 
 def test_requests_need_a_key_pair(app):
-    app.vault._execute("DELETE FROM meta WHERE key = 'request_public_key'")
+    with sqlite3.connect(app.config.db_path) as conn:
+        conn.execute("DELETE FROM meta WHERE key = 'request_public_key'")
     with pytest.raises(VaultLocked, match="Unlock Blankey once"):
         app.vault.create_request("fill", {})
+
+
+def test_models_match_the_migrated_schema(app):
+    conn = sqlite3.connect(app.config.db_path)
+    for model in MODELS:
+        columns = {row[1]: row for row in conn.execute(f"PRAGMA table_info({model._meta.table_name})")}
+        declared = {field.column_name for field in model._meta.sorted_fields}
+        assert declared <= set(columns), model.__name__
+        required = {name for name, (_, _, _, notnull, default, pk) in columns.items() if notnull and default is None}
+        assert required <= declared, model.__name__
+
+
+def test_opens_a_vault_written_by_the_previous_db_layer(tmp_path):
+    path = tmp_path / "vault.db"
+    shutil.copy(Path(__file__).parent / "data" / "vault_v3.db", path)
+    vault = Vault(path)
+    assert [(p.name, p.kind) for p in vault.list_profiles()] == [("Иван", "person")]
+    assert [(f.key, f.label, f.length) for f in vault.describe(1)] == [("egn", "ЕГН", 0), ("name", "Име", 11)]
+    [request] = vault.list_requests()
+    assert request.hidden and request.status == "done"
+    vault.unlock("legacy-pw")
+    assert vault.get_values(1)["name"] == (FieldType.TEXT, "Иван Иванов")
+    info, bindings = vault.get_fill_set(vault.find_fill_set("delta"))
+    assert (info.templates, info.profiles, bindings) == (["loan"], {"manager": 1}, {"amount": {"value": "34 000"}})
+    [doc] = vault.list_documents()
+    assert (doc.title, doc.profiles, vault.load_document(doc.id)) == ("Договор", {"manager": 1}, b"%PDF-legacy")
+    request = vault.get_request(request.id)
+    assert (request.payload, request.result) == ({"reason": "Попълни"}, {"outcome": "saved"})
+    vault.close()

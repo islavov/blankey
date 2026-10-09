@@ -8,6 +8,7 @@ from blankey.core import RequestKind
 from blankey.mcp.server import build_server
 from blankey.render import pdf_form
 from blankey.vault import FieldInput, FieldType
+from blankey.vault.models import AuditRow
 from tests.conftest import PASSWORD
 
 SENTINEL_NAME = "Сентинела Тайнова"
@@ -113,8 +114,8 @@ def test_no_tool_leaks_vault_values(app, mcp, setup, filled_docx):
     for output in outputs:
         assert_no_pii(output)
     assert SENTINEL_NAME not in app.config.previews_dir.joinpath("t-example.pdf").read_bytes().decode("latin-1")
-    for row in app.vault._conn.execute("SELECT action, target FROM audit"):
-        assert_no_pii(row["action"] + row["target"])
+    for row in AuditRow.select():
+        assert_no_pii(row.action + row.target)
 
 
 def test_describe_profile_reports_lengths(mcp, setup):
