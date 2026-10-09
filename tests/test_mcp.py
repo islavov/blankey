@@ -11,7 +11,7 @@ from blankey.vault import FieldInput, FieldType
 from blankey.vault.models import AuditRow
 from tests.conftest import PASSWORD
 
-SENTINEL_NAME = "Сентинела Тайнова"
+SENTINEL_NAME = "Sentinel Hiddenwell"
 SENTINEL_EGN = "7501020018"
 
 
@@ -28,8 +28,8 @@ def setup(app, form_pdf, tmp_path):
     app.vault.set_values(
         pid,
         [
-            FieldInput("name", SENTINEL_NAME, "Име", FieldType.TEXT),
-            FieldInput("egn", SENTINEL_EGN, "ЕГН", FieldType.EGN),
+            FieldInput("name", SENTINEL_NAME, "Name", FieldType.TEXT),
+            FieldInput("egn", SENTINEL_EGN, "EGN", FieldType.EGN),
         ],
     )
     return {"pid": pid, "source": str(source)}
@@ -75,7 +75,7 @@ def test_no_tool_leaks_vault_values(app, mcp, setup, filled_docx):
         ),
         call(mcp, "list_templates"),
         call(mcp, "get_template", template_id="t"),
-        call(mcp, "save_example", template_id="t", name="ex", data={"applicant": {"name": "Пример"}}),
+        call(mcp, "save_example", template_id="t", name="ex", data={"applicant": {"name": "Example"}}),
         call(mcp, "render_example", template_id="t", example="ex"),
         call(mcp, "check_bindings", template_id="t", profiles={"applicant": pid}),
         call(mcp, "request_fill", templates=["t"], profiles={"applicant": pid}, name="leak"),
@@ -140,7 +140,7 @@ def test_render_example_returns_pages(mcp, setup):
         roles={"applicant": "person"},
         source_path=setup["source"],
     )
-    pngs = images(mcp, "render_example", template_id="t", example={"applicant": {"name": "Пример"}})
+    pngs = images(mcp, "render_example", template_id="t", example={"applicant": {"name": "Example"}})
     assert len(pngs) == 1
 
 
@@ -148,9 +148,9 @@ def test_wait_request_returns_profile_input_result(app, mcp, setup):
     created = call(
         mcp,
         "request_profile_input",
-        fields=[{"key": "email", "label": "Имейл", "type": "email"}],
-        reason="Нужно за ДСК",
-        new_profile_name="Мария",
+        fields=[{"key": "email", "label": "Email", "type": "email"}],
+        reason="Needed for the bank",
+        new_profile_name="Maria",
     )
     assert '"pending"' in created
     request = app.vault.list_requests("pending")[0]
@@ -224,7 +224,7 @@ def test_flat_pdf_becomes_a_template(app, mcp, flat_pdf, tmp_path):
     fields = pdf_form.inspect_form(app.templates.get("flat").source)
     assert [(f.name, f.rects) for f in fields] == [("name", [[95.0, 785.0, 400.0, 803.0]])]  # rebuilt, not stacked
 
-    rendered = call(mcp, "render_example", template_id="flat", example={"applicant": {"name": "Пример Примеров"}})
+    rendered = call(mcp, "render_example", template_id="flat", example={"applicant": {"name": "Example Person"}})
     assert "warnings" in rendered
     with pytest.raises(Exception, match="page must be"):
         asyncio.run(

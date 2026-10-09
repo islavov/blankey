@@ -19,7 +19,7 @@ from blankey.vault import FieldInput, FieldType
 
 REPLACEMENTS = [  # applied in order: longer dot blanks first
     {"find": "...........2026", "var": "contract_date"},
-    {"find": "„ACME HOLDINGS“ ЕООД", "var": "company_name"},
+    {"find": "“ACME HOLDINGS” LTD", "var": "company_name"},
     {"find": "999000111", "var": "company_eik"},
     {"find": "John Smith", "var": "manager_name"},
     {"find": "..........", "var": "manager_egn", "occurrence": 1},
@@ -48,26 +48,26 @@ def template(app, filled_docx, tmp_path):
     target = tmp_path / "template.docx"
     docx_template.tokenize(filled_docx, target, REPLACEMENTS)
     return app.templates.save(
-        "loan", "Loan", TemplateKind.DOCX, ROLES, FIELDS, source_file=target, labels={"loan_amount": "Сума"}
+        "loan", "Loan", TemplateKind.DOCX, ROLES, FIELDS, source_file=target, labels={"loan_amount": "Amount"}
     )
 
 
 @pytest.fixture
 def profiles(app):
-    company = app.vault.create_profile("Delta", "company")
-    app.vault.set_values(company, [FieldInput("name", "„ACME“ ЕООД"), FieldInput("eik", "999000111")])
+    company = app.vault.create_profile("Acme", "company")
+    app.vault.set_values(company, [FieldInput("name", "“ACME” LTD"), FieldInput("eik", "999000111")])
     manager = app.vault.create_profile("John", "person")
     app.vault.set_values(
-        manager, [FieldInput("name", "Тест Тестов"), FieldInput("egn", "7501020018", type=FieldType.EGN)]
+        manager, [FieldInput("name", "Test Tester"), FieldInput("egn", "7501020018", type=FieldType.EGN)]
     )
     return {"company": company, "manager": manager}
 
 
 def test_tokenize_and_variables(template):
     text = text_of(template.source)
-    assert "{{ company_name }}, ЕИК {{ company_eik }}" in text
-    assert "ЕГН {{ manager_egn }}, л.к. № {{ manager_id_card }}" in text
-    assert "Договор № {{ contract_no }} / {{ contract_date }} г." in text
+    assert "{{ company_name }}, Company ID {{ company_eik }}" in text
+    assert "ID No {{ manager_egn }}, card No {{ manager_id_card }}" in text
+    assert "Contract No {{ contract_no }} / {{ contract_date }}" in text
     assert docx_template.variables(template.source_path) == [
         "contract_no",
         "contract_date",
@@ -79,13 +79,13 @@ def test_tokenize_and_variables(template):
         "loan_amount",
     ]
     contexts = docx_template.blank_contexts(template.source_path)
-    assert contexts["loan_amount"] == ["Заем в размер на [____] евро."]
+    assert contexts["loan_amount"] == ["Loan in the amount of [____] EUR."]
     assert len(contexts["manager_name"]) == 2  # paragraph and table cell
 
 
 def test_tokenize_errors(filled_docx, tmp_path):
     with pytest.raises(ValueError, match="spans several runs"):
-        docx_template.tokenize(filled_docx, tmp_path / "x.docx", [{"find": "ЕООД, ЕИК", "var": "x"}])
+        docx_template.tokenize(filled_docx, tmp_path / "x.docx", [{"find": "LTD, Company ID", "var": "x"}])
     with pytest.raises(ValueError, match="not found"):
         docx_template.tokenize(filled_docx, tmp_path / "x.docx", [{"find": "nope", "var": "x"}])
     with pytest.raises(ValueError, match="no occurrence 9"):
@@ -98,10 +98,10 @@ def test_describe_warns_about_unbound_tags(template):
 
 
 def test_fill_set_encrypted_round_trip(app):
-    bindings = {"manager_egn": {"path": "manager.egn"}, "secret": {"value": "Тайна Стойност"}}
+    bindings = {"manager_egn": {"path": "manager.egn"}, "secret": {"value": "Hidden Value"}}
     fill_set_id = app.vault.save_fill_set("s", ["loan"], {"manager": 1}, bindings)
     raw = sqlite3.connect(app.config.db_path).execute("SELECT ciphertext FROM fill_sets").fetchone()[0]
-    assert "Тайна".encode() not in raw
+    assert b"Hidden" not in raw
     info, loaded = app.vault.get_fill_set(fill_set_id)
     assert (info.name, info.templates, info.profiles, loaded) == ("s", ["loan"], {"manager": 1}, bindings)
     app.vault.save_fill_set("s2", ["loan"], {}, {}, fill_set_id)
@@ -115,17 +115,17 @@ def test_generate_fill_mixes_paths_values_and_defaults(app, template, profiles):
         "contract_no": {"value": ""},
         "manager_id_card": {"path": "manager.egn"},
     }
-    fill_set_id = app.vault.save_fill_set("delta", ["loan"], profiles, bindings)
+    fill_set_id = app.vault.save_fill_set("acme", ["loan"], profiles, bindings)
     [doc_id] = app.generate_fill(fill_set_id)
     text = text_of(app.vault.load_document(doc_id))
-    assert "„ACME“ ЕООД, ЕИК 999000111, представлявано от Тест Тестов" in text
-    assert "ЕГН 7501020018, л.к. № 7501020018" in text
-    assert "34 000 евро" in text
+    assert "“ACME” LTD, Company ID 999000111, represented by Test Tester" in text
+    assert "ID No 7501020018, card No 7501020018" in text
+    assert "34 000 EUR" in text
     assert "None" not in text and "{{" not in text
 
 
 def test_export_import_and_bundle(app, template, profiles, tmp_path):
-    fill_set_id = app.vault.save_fill_set("delta", ["loan"], profiles, {"loan_amount": {"value": "1"}})
+    fill_set_id = app.vault.save_fill_set("acme", ["loan"], profiles, {"loan_amount": {"value": "1"}})
     exported = yaml.safe_load(app.export_fill_set(fill_set_id))
     assert exported["bindings"] == {"loan_amount": {"value": "1"}}
     exported["bindings"]["loan_amount"]["value"] = "2"
@@ -166,7 +166,7 @@ def test_request_fill_validates_and_hides_values(qtbot, app, template, profiles,
         "request_fill",
         templates=["loan"],
         profiles=profiles,
-        name="delta",
+        name="acme",
         values={"loan_amount": "34 000"},
         paths={"manager_id_card": "manager.egn"},
     )
@@ -196,10 +196,10 @@ def test_request_fill_validates_and_hides_values(qtbot, app, template, profiles,
     assert result["outcome"] == "generated" and len(result["document_ids"]) == 1
     assert result["empty"] == []
     assert len(opened_urls) == 1 and opened_urls[0].endswith(".docx")
-    assert "Договор № 17" in text_of(Path(opened_urls[0]).read_bytes())
-    assert "Договор № 17" in text_of(app.vault.load_document(result["document_ids"][0]))
+    assert "Contract No 17" in text_of(Path(opened_urls[0]).read_bytes())
+    assert "Contract No 17" in text_of(app.vault.load_document(result["document_ids"][0]))
     listed = call("list_fill_sets").model_dump_json()
-    assert "7501020018" not in listed and "Тест" not in listed and '"loan_amount":"value"' in listed.replace(" ", "")
+    assert "7501020018" not in listed and "Tester" not in listed and '"loan_amount":"value"' in listed.replace(" ", "")
 
 
 def test_fill_dialog_cancel_and_save(qtbot, app, template, profiles):
@@ -242,9 +242,9 @@ def test_source_menu_and_typing(qtbot, app, template, profiles):
 
 
 def test_docx_to_html_shows_blanks_as_chips(template):
-    html = docx_template.to_html(template.source_path, {"loan_amount": "Сума & <лихва>"})
+    html = docx_template.to_html(template.source_path, {"loan_amount": "Amount & <interest>"})
     link = '<a href="field:loan_amount" name="blank-loan_amount">'
-    assert link + '<span class="blank b-loan_amount">&nbsp;Сума &amp; &lt;лихва&gt;&nbsp;</span></a>' in html
+    assert link + '<span class="blank b-loan_amount">&nbsp;Amount &amp; &lt;interest&gt;&nbsp;</span></a>' in html
     assert '<span class="blank b-company_name">&nbsp;company_name&nbsp;</span>' in html
     assert "<b>1. " in html
     assert "<table" in html and "<td>" in html
@@ -298,10 +298,10 @@ def test_preview_highlights_docx_blanks_and_switches_documents(qtbot, app, templ
 
 
 def test_preview_finds_typst_values_on_the_page(qtbot, app):
-    source = "#let data = json(bytes(sys.inputs.data))\n= Декларация\nДолуподписаният #data.name, ЕГН #data.egn\n"
+    source = "#let data = json(bytes(sys.inputs.data))\n= Declaration\nThe undersigned #data.name, ID No #data.egn\n"
     app.templates.save(
         "decl",
-        "Декларация",
+        "Declaration",
         TemplateKind.TYPST,
         {"applicant": "person"},
         {"name": "{{ applicant.name }}", "egn": "{{ applicant.egn }}"},
@@ -341,9 +341,9 @@ def test_preview_shows_values_and_clicks_select_the_field(qtbot, app, template, 
 
 
 def test_typst_preview_finds_filled_values(qtbot, app):
-    source = "#let data = json(bytes(sys.inputs.data))\nГрад #data.city, адрес #data.address, град #data.city\n"
+    source = "#let data = json(bytes(sys.inputs.data))\nCity #data.city, address #data.address, city #data.city\n"
     app.templates.save(
-        "addr", "Адрес", TemplateKind.TYPST, {}, {"city": "София", "address": "ул. Витоша 1"}, source_text=source
+        "addr", "Address", TemplateKind.TYPST, {}, {"city": "Paris", "address": "1 Rue de Rivoli"}, source_text=source
     )
     dialog = FillDialog(app, ["addr"], {}, "typst-live")
     qtbot.addWidget(dialog)

@@ -13,11 +13,11 @@ from tests.conftest import PASSWORD
 
 
 def test_values_are_encrypted_at_rest(app):
-    pid = app.vault.create_profile("Иван", "person")
-    app.vault.set_values(pid, [FieldInput("name", "Иван Петров Иванов", "Име", FieldType.TEXT)])
+    pid = app.vault.create_profile("John", "person")
+    app.vault.set_values(pid, [FieldInput("name", "John Peter Smith", "Name", FieldType.TEXT)])
     raw = sqlite3.connect(app.config.db_path).execute("SELECT ciphertext, value_length FROM fields").fetchone()
-    assert "Иван".encode() not in raw[0]
-    assert raw[1] == len("Иван Петров Иванов")
+    assert b"John" not in raw[0]
+    assert raw[1] == len("John Peter Smith")
 
 
 def test_lock_unlock_and_wrong_password(app):
@@ -34,15 +34,15 @@ def test_lock_unlock_and_wrong_password(app):
 
 def test_metadata_readable_while_locked(app):
     pid = app.vault.create_profile("p")
-    app.vault.set_values(pid, [FieldInput("city", "София", "Град")])
+    app.vault.set_values(pid, [FieldInput("city", "Paris", "City")])
     app.vault.lock()
     [info] = app.vault.describe(pid)
-    assert (info.key, info.label, info.length) == ("city", "Град", 5)
+    assert (info.key, info.label, info.length) == ("city", "City", 5)
 
 
 def test_length_counts_nfc_characters(app):
     pid = app.vault.create_profile("p")
-    decomposed = "й"  # й as two code points
+    decomposed = "e\u0301"  # é as two code points
     app.vault.set_values(pid, [FieldInput("x", decomposed)])
     assert app.vault.describe(pid)[0].length == 1
 
@@ -115,20 +115,20 @@ def test_validators_direct():
 
 def test_requests_are_sealed_and_need_unlock(app):
     vault = app.vault
-    request_id = vault.create_request("fill", {"reason": "Договор за Тайнов", "values": {"x": "Тайна"}})
+    request_id = vault.create_request("fill", {"reason": "Contract for Hidden", "values": {"x": "Hidden"}})
     row = (
         sqlite3.connect(app.config.db_path)
         .execute("SELECT payload, sealed_payload FROM requests WHERE id = ?", (request_id,))
         .fetchone()
     )
-    assert row[0] == "{}" and "Тайн".encode() not in row[1]
+    assert row[0] == "{}" and b"Hidden" not in row[1]
 
     vault.lock()
     hidden = vault.get_request(request_id)
     assert hidden.hidden and hidden.payload == {} and hidden.kind == "fill"
     assert vault.count_requests("pending") == 1
     vault.unlock(PASSWORD)
-    assert vault.get_request(request_id).payload["reason"] == "Договор за Тайнов"
+    assert vault.get_request(request_id).payload["reason"] == "Contract for Hidden"
 
     vault.resolve_request(request_id, "done", {"outcome": "saved", "fill_set_id": 3})
     raw = sqlite3.connect(app.config.db_path).execute("SELECT result FROM requests").fetchone()[0]
@@ -147,7 +147,7 @@ def test_plaintext_requests_from_before_sealing_are_sealed_on_unlock(app):
     conn = sqlite3.connect(app.config.db_path)
     conn.execute(
         "INSERT INTO requests (kind, payload, status, result, created_at) VALUES "
-        "('generate', '{\"reason\": \"Стар\"}', 'done', '{\"outcome\": \"generated\"}', '2026-01-01')"
+        "('generate', '{\"reason\": \"Old\"}', 'done', '{\"outcome\": \"generated\"}', '2026-01-01')"
     )
     conn.commit()
     app.vault.lock()
@@ -155,7 +155,7 @@ def test_plaintext_requests_from_before_sealing_are_sealed_on_unlock(app):
     payload, result, sealed = conn.execute("SELECT payload, result, sealed_payload FROM requests").fetchone()
     assert payload == "{}" and result is None and sealed is not None
     request = app.vault.list_requests()[0]
-    assert request.payload == {"reason": "Стар"} and request.result == {"outcome": "generated"}
+    assert request.payload == {"reason": "Old"} and request.result == {"outcome": "generated"}
 
 
 def test_requests_need_a_key_pair(app):
@@ -173,7 +173,7 @@ def _v1_database(path: Path) -> Path:
     conn.executescript((DATA / "schema_v1.sql").read_text() + "PRAGMA user_version = 1;")
     conn.execute(
         "INSERT INTO requests (kind, payload, status, created_at) VALUES ('fill', ?, 'pending', 'x')",
-        ('{"reason": "Стар"}',),
+        ('{"reason": "Old"}',),
     )
     conn.commit()
     conn.close()
@@ -201,8 +201,8 @@ def test_models_match_the_schema(tmp_path, origin):
 def test_upgrades_a_first_version_vault(tmp_path):
     vault = Vault(_v1_database(tmp_path / "vault.db"))
     vault.initialize(PASSWORD)
-    assert vault.list_requests()[0].payload == {"reason": "Стар"}
-    fill_set_id = vault.save_fill_set("delta", ["loan"], {}, {"amount": {"value": "1"}})
+    assert vault.list_requests()[0].payload == {"reason": "Old"}
+    fill_set_id = vault.save_fill_set("acme", ["loan"], {}, {"amount": {"value": "1"}})
     assert vault.get_fill_set(fill_set_id)[1] == {"amount": {"value": "1"}}
     vault.close()
 
@@ -211,18 +211,18 @@ def test_opens_a_vault_written_by_the_previous_db_layer(tmp_path):
     path = tmp_path / "vault.db"
     shutil.copy(DATA / "vault_v3.db", path)
     vault = Vault(path)
-    assert [(p.name, p.kind) for p in vault.list_profiles()] == [("Иван", "person")]
-    assert [(f.key, f.label, f.length) for f in vault.describe(1)] == [("egn", "ЕГН", 0), ("name", "Име", 11)]
+    assert [(p.name, p.kind) for p in vault.list_profiles()] == [("John", "person")]
+    assert [(f.key, f.label, f.length) for f in vault.describe(1)] == [("egn", "EGN", 0), ("name", "Name", 11)]
     [request] = vault.list_requests()
     assert request.hidden and request.status == "done"
     vault.unlock("legacy-pw")
-    assert vault.get_values(1)["name"] == (FieldType.TEXT, "Иван Иванов")
-    info, bindings = vault.get_fill_set(vault.find_fill_set("delta"))
+    assert vault.get_values(1)["name"] == (FieldType.TEXT, "John Watson")
+    info, bindings = vault.get_fill_set(vault.find_fill_set("acme"))
     assert (info.templates, info.profiles, bindings) == (["loan"], {"manager": 1}, {"amount": {"value": "34 000"}})
     [doc] = vault.list_documents()
-    assert (doc.title, doc.profiles, vault.load_document(doc.id)) == ("Договор", {"manager": 1}, b"%PDF-legacy")
+    assert (doc.title, doc.profiles, vault.load_document(doc.id)) == ("Contract", {"manager": 1}, b"%PDF-legacy")
     request = vault.get_request(request.id)
-    assert (request.payload, request.result) == ({"reason": "Попълни"}, {"outcome": "saved"})
+    assert (request.payload, request.result) == ({"reason": "Fill in"}, {"outcome": "saved"})
     vault.close()
 
 

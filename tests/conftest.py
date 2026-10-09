@@ -67,11 +67,11 @@ def filled_docx(tmp_path):
     import docx
 
     document = docx.Document()
-    document.add_paragraph("Договор № ......... / ...........2026 г.")
+    document.add_paragraph("Contract No ......... / ...........2026")
     paragraph = document.add_paragraph()
-    paragraph.add_run("1. „ACME HOLDINGS“ ЕООД").bold = True
-    paragraph.add_run(", ЕИК 999000111, представлявано от John Smith, ЕГН .........., л.к. № ..........")
-    document.add_paragraph("Заем в размер на 34 000 евро.")
+    paragraph.add_run("1. “ACME HOLDINGS” LTD").bold = True
+    paragraph.add_run(", Company ID 999000111, represented by John Smith, ID No .........., card No ..........")
+    document.add_paragraph("Loan in the amount of 34 000 EUR.")
     document.add_table(rows=1, cols=2).cell(0, 1).text = "John Smith"
     path = tmp_path / "filled.docx"
     document.save(str(path))

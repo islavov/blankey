@@ -36,11 +36,11 @@ def test_profile_input_creates_profile_and_reports_lengths(qtbot, app, no_modal_
         RequestKind.PROFILE_INPUT,
         {
             "profile_id": None,
-            "new_profile": {"name": "Мария", "kind": "person"},
+            "new_profile": {"name": "Maria", "kind": "person"},
             "fields": [
-                {"key": "egn", "label": "ЕГН", "type": "egn", "required": True},
-                {"key": "married", "label": "Семейна", "type": "bool"},
-                {"key": "phone", "label": "Телефон", "type": "phone"},
+                {"key": "egn", "label": "EGN", "type": "egn", "required": True},
+                {"key": "married", "label": "Married", "type": "bool"},
+                {"key": "phone", "label": "Phone", "type": "phone"},
             ],
             "reason": "test",
         },
@@ -65,7 +65,7 @@ def test_profile_input_creates_profile_and_reports_lengths(qtbot, app, no_modal_
         {"key": "phone", "length": 0, "status": "skipped"},
     ]
     profile = app.vault.get_profile(request.result["profile_id"])
-    assert profile.name == "Мария"
+    assert profile.name == "Maria"
 
 
 def test_profile_input_cancel(qtbot, app):
@@ -80,15 +80,15 @@ def test_profile_input_cancel(qtbot, app):
 
 
 def test_profiles_page_round_trip(qtbot, app):
-    pid = app.vault.create_profile("Иван", "person")
-    app.vault.set_values(pid, [FieldInput("city", "София", "Град")])
+    pid = app.vault.create_profile("John", "person")
+    app.vault.set_values(pid, [FieldInput("city", "Paris", "City")])
     window = ProfilesPage(app)
     qtbot.addWidget(window)
     assert window.activate()
-    assert window.table.item(0, 3).text() == "София"
-    window.table.item(0, 3).setText("Пловдив")
+    assert window.table.item(0, 3).text() == "Paris"
+    window.table.item(0, 3).setText("Lyon")
     window._save()
-    assert app.vault.get_values(pid)["city"][1] == "Пловдив"
+    assert app.vault.get_values(pid)["city"][1] == "Lyon"
 
 
 def test_documents_page_deletes_all_selected(qtbot, app, monkeypatch):
@@ -110,8 +110,8 @@ def test_documents_page_deletes_all_selected(qtbot, app, monkeypatch):
 
 
 def test_main_window_switches_pages_and_filters(qtbot, app):
-    app.vault.store_document("t", "Договор", {}, 0, "a.docx", b"x")
-    app.vault.store_document("t", "Решение", {}, 0, "b.docx", b"x")
+    app.vault.store_document("t", "Contract", {}, 0, "a.docx", b"x")
+    app.vault.store_document("t", "Decision", {}, 0, "b.docx", b"x")
     window = MainWindow(app, on_lock=lambda: None, on_quit=lambda: None)
     qtbot.addWidget(window)
     assert isinstance(window.current_page(), pages.FillSetsPage)
@@ -120,9 +120,9 @@ def test_main_window_switches_pages_and_filters(qtbot, app):
     assert isinstance(page, pages.DocumentsPage)
     assert window.title_label.text() == "Documents"
     assert [a.text() for a in window.toolbar.actions() if a in page.toolbar_actions] == ["Open", "Export", "Delete"]
-    window.search.setText("решение")
+    window.search.setText("decision")
     visible = [page.table.item(r, 0).text() for r in range(page.table.rowCount()) if not page.table.isRowHidden(r)]
-    assert visible == ["Решение"]
+    assert visible == ["Decision"]
 
 
 def test_main_window_badges_pending_requests(qtbot, app):
@@ -178,7 +178,7 @@ def test_activity_lists_waiting_first_with_outcomes(qtbot, app):
     vault.resolve_request(
         profile, "done", {"fields": [{"key": "a", "status": "saved"}, {"key": "b", "status": "skipped"}]}
     )
-    fill = vault.create_request("fill", {"templates": ["t"], "name": "delta", "reason": ""})
+    fill = vault.create_request("fill", {"templates": ["t"], "name": "acme", "reason": ""})
     vault.resolve_request(fill, "done", {"outcome": "generated", "document_ids": [1, 2], "empty": ["x"]})
     cancelled = vault.create_request("generate", {"template_id": "t", "reason": "Sign it"})
     vault.resolve_request(cancelled, "cancelled", {"outcome": "cancelled"})
@@ -189,7 +189,7 @@ def test_activity_lists_waiting_first_with_outcomes(qtbot, app):
     assert rows == [
         ["Fill documents", "Fill the decision", "Waiting for you"],
         ["Generate document", "Sign it", "Cancelled"],
-        ["Fill documents", "t · delta", "2 documents generated, 1 empty"],
+        ["Fill documents", "t · acme", "2 documents generated, 1 empty"],
         ["Profile data", "2 fields", "Saved 1 field, 1 skipped"],
     ]
     assert page.badge() == 1 and page.subtitle() == "1 waiting"
@@ -200,16 +200,16 @@ def test_templates_page_previews_docx_and_deletes(qtbot, app, filled_docx, tmp_p
 
     target = tmp_path / "t.docx"
     docx.tokenize(filled_docx, target, [{"find": "34 000", "var": "amount"}])
-    app.templates.save("loan", "Договор", TemplateKind.DOCX, {"company": "c"}, {}, source_file=target)
-    app.vault.save_fill_set("delta", ["loan"], {}, {})
+    app.templates.save("loan", "Contract", TemplateKind.DOCX, {"company": "c"}, {}, source_file=target)
+    app.vault.save_fill_set("acme", ["loan"], {}, {})
     page = pages.TemplatesPage(app)
     qtbot.addWidget(page)
-    assert page.preview.heading.text() == "Договор"
-    assert "used by: delta" in page.preview.info.text()
+    assert page.preview.heading.text() == "Contract"
+    assert "used by: acme" in page.preview.info.text()
     assert "amount" in page.preview.browser.toPlainText()
     assert page.fill_action.isEnabled()
     item = page.list.item(0)
-    assert (item.text(), item.data(Qt.ItemDataRole.UserRole)) == ("Договор", "loan")
+    assert (item.text(), item.data(Qt.ItemDataRole.UserRole)) == ("Contract", "loan")
     assert item.data(Qt.ItemDataRole.UserRole + 1) == "Word  ·  1 blank  ·  1 fill set"
     assert page.preview.info.text().startswith('<span style="font-family: Menlo">loan</span>')
     page.copy_id()
@@ -225,7 +225,7 @@ def test_templates_page_previews_docx_and_deletes(qtbot, app, filled_docx, tmp_p
 
 
 def test_activity_is_hidden_while_locked(qtbot, app):
-    app.vault.create_request("fill", {"templates": ["t"], "name": "secret-set", "reason": "Тайно"})
+    app.vault.create_request("fill", {"templates": ["t"], "name": "secret-set", "reason": "Hidden"})
     app.vault.lock()
     page = pages.ActivityPage(app)
     qtbot.addWidget(page)
@@ -239,7 +239,7 @@ def test_template_cards_keep_their_width_in_a_narrow_window(qtbot, app, filled_d
 
     target = tmp_path / "t.docx"
     docx.tokenize(filled_docx, target, [{"find": "34 000", "var": "amount"}])
-    long_name = "Договор за паричен заем – Acme Holdings ЕООД и управител John Smith, вариант с поръчител"
+    long_name = "Loan agreement – Acme Holdings Ltd and manager John Smith, guarantor variant"
     app.templates.save("loan", long_name, TemplateKind.DOCX, {}, {}, source_file=target)
     window = MainWindow(app, on_lock=lambda: None, on_quit=lambda: None)
     qtbot.addWidget(window)
@@ -258,8 +258,8 @@ def test_switching_templates_keeps_the_split(qtbot, app, filled_docx, tmp_path):
 
     target = tmp_path / "t.docx"
     docx.tokenize(filled_docx, target, [{"find": "34 000", "var": "amount"}])
-    app.templates.save("a", "Кратко", TemplateKind.DOCX, {}, {}, source_file=target)
-    app.templates.save("b", "Много дълго име на шаблон " * 6, TemplateKind.DOCX, {}, {}, source_file=target)
+    app.templates.save("a", "Short", TemplateKind.DOCX, {}, {}, source_file=target)
+    app.templates.save("b", "A very long template name " * 6, TemplateKind.DOCX, {}, {}, source_file=target)
     window = MainWindow(app, on_lock=lambda: None, on_quit=lambda: None)
     qtbot.addWidget(window)
     window.show_page(pages.TemplatesPage)
@@ -305,7 +305,7 @@ def test_launch_command_inside_an_app_bundle(tmp_path, monkeypatch):
 
 
 def test_profiles_page_removes_selected_fields(qtbot, app):
-    pid = app.vault.create_profile("Иван", "person")
+    pid = app.vault.create_profile("John", "person")
     app.vault.set_values(pid, [FieldInput(k, "x") for k in ("a", "b", "c")])
     window = ProfilesPage(app)
     qtbot.addWidget(window)
@@ -326,8 +326,8 @@ def test_profiles_page_context_menus(qtbot, app):
 
 
 def test_profiles_page_searches_and_wraps_profile_names(qtbot, app):
-    long_name = "Acme Holdings ЕООД – управител John Robert Smith, пълномощник по договор"
-    for name in ("Иван", long_name):
+    long_name = "Acme Holdings Ltd – manager John Robert Smith, attorney under contract"
+    for name in ("John", long_name):
         app.vault.create_profile(name, "person")
     window = ProfilesPage(app)
     qtbot.addWidget(window)
@@ -336,9 +336,9 @@ def test_profiles_page_searches_and_wraps_profile_names(qtbot, app):
     items = {window.profiles.item(r).text().split("  (")[0]: window.profiles.item(r) for r in range(2)}
     assert (
         window.profiles.visualItemRect(items[long_name]).height()
-        > window.profiles.visualItemRect(items["Иван"]).height()
+        > window.profiles.visualItemRect(items["John"]).height()
     )
     window.profile_search.setText("acme")
-    assert items["Иван"].isHidden() and not items[long_name].isHidden()
+    assert items["John"].isHidden() and not items[long_name].isHidden()
     window.refresh()
     assert [window.profiles.item(r).isHidden() for r in range(2)].count(True) == 1

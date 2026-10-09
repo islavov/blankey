@@ -12,7 +12,7 @@ FIELDS = {
     "name": "{{ applicant.name }}",
     "egn": "{{ applicant.egn }}",
     "email": "{{ applicant.email }}",
-    "citizen_bg": "{{ applicant.citizenship == 'българско' }}",
+    "citizen_bg": "{{ applicant.citizenship == 'Bulgarian' }}",
     "status": "{{ '/married' if applicant.married else '/single' }}",
 }
 
@@ -54,12 +54,12 @@ def test_evaluate_native_and_filters():
 
 def test_render_example_fills_cyrillic(app, template):
     ctx = example_context(
-        {"applicant": {"name": "Жана Щерева", "egn": "7501020018", "citizenship": "българско", "married": True}}
+        {"applicant": {"name": "Jane Austen", "egn": "7501020018", "citizenship": "Bulgarian", "married": True}}
     )
     rendered = engine.render(template, ctx)
     assert rendered.warnings == []
     text = text_of(rendered.content)
-    assert "Жана Щерева" in text
+    assert "Jane Austen" in text
     assert "7501020018" in "".join(text.split())
     fields = PdfReader(io.BytesIO(rendered.content)).get_fields()
     assert "name" not in fields  # flattened
@@ -74,11 +74,11 @@ def test_unknown_form_field_is_reported(app, template):
 
 
 def test_check_bindings_locked_and_unlocked(app, template):
-    pid = app.vault.create_profile("Жана", "person")
+    pid = app.vault.create_profile("Jane", "person")
     app.vault.set_values(
         pid,
         [
-            FieldInput("name", "Жана Щерева"),
+            FieldInput("name", "Jane Austen"),
             FieldInput("egn", "7501020018", type=FieldType.EGN),
             FieldInput("email", "a.very.long.email.address@example.com", type=FieldType.EMAIL),
             FieldInput("citizenship", ""),
@@ -97,21 +97,21 @@ def test_check_bindings_locked_and_unlocked(app, template):
 
 
 def test_missing_glyphs():
-    assert pdf_form.missing_glyphs("Иван 😀") == ["😀"]
+    assert pdf_form.missing_glyphs("John 😀") == ["😀"]
 
 
 def test_typst_template(app):
-    source = "#let data = json(bytes(sys.inputs.data))\n= Декларация\nДолуподписаният #data.name, ЕГН #data.egn\n"
+    source = "#let data = json(bytes(sys.inputs.data))\n= Declaration\nThe undersigned #data.name, ID No #data.egn\n"
     template = app.templates.save(
         "decl",
-        "Декларация",
+        "Declaration",
         TemplateKind.TYPST,
         {"applicant": "person"},
         {"name": "{{ applicant.name }}", "egn": "{{ applicant.egn }}"},
         source_text=source,
     )
-    rendered = engine.render(template, example_context({"applicant": {"name": "Иван Иванов", "egn": "123"}}))
-    assert "Иван Иванов" in text_of(rendered.content)
+    rendered = engine.render(template, example_context({"applicant": {"name": "John Watson", "egn": "123"}}))
+    assert "John Watson" in text_of(rendered.content)
 
 
 def test_printed_labels(form_pdf):
@@ -134,9 +134,9 @@ def test_add_fields_turns_a_flat_pdf_into_a_form(flat_pdf):
     assert fields["name"].rects == [[90.0, 785.0, 400.0, 803.0]] and not fields["name"].comb
     assert (fields["egn"].max_len, fields["egn"].comb) == (10, True)
     assert (fields["married"].max_len, fields["married"].comb) == (1, True)
-    filled = pdf_form.fill_form(form, {"name": "Иван Петров", "egn": "7501020018", "married": "X"})
+    filled = pdf_form.fill_form(form, {"name": "John Peter", "egn": "7501020018", "married": "X"})
     text = text_of(filled)
-    assert "Иван Петров" in text and "X" in text
+    assert "John Peter" in text and "X" in text
     assert pdf_form.inspect_form(filled) == []  # flattened
 
 
