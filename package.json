@@ -1,0 +1,13 @@
+{
+  "name": "blankey-ui",
+  "private": true,
+  "type": "module",
+  "description": "Tests for the Blankey UI in ui/tests (ui/ is served as-is, without a build step)",
+  "scripts": {
+    "test": "node --test ui/tests/"
+  },
+  "devDependencies": {
+    "@happy-dom/global-registrator": "^15.11.7",
+    "happy-dom": "^15.11.7"
+  }
+}

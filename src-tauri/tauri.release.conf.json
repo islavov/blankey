@@ -1,4 +1,7 @@
 {
+  "build": {
+    "frontendDist": "target/ui"
+  },
   "bundle": {
     "resources": {
       "THIRD_PARTY_LICENSES.html": "THIRD_PARTY_LICENSES.html"

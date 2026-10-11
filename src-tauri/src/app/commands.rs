@@ -406,7 +406,7 @@ fn delete_fill_set(state: State<AppState>, id: i64) -> CmdResult<()> {
     Ok(())
 }
 
-// -- requests from Claude --------------------------------------------------------
+// -- requests from AI assistants --------------------------------------------------------
 
 fn request_label(kind: &str) -> &str {
     match kind {
@@ -501,7 +501,7 @@ struct ActivityRow {
     document_ids: Vec<i64>,
 }
 
-/// Everything Claude asked for, waiting requests first. Metadata only.
+/// Everything the assistant asked for, waiting requests first. Metadata only.
 #[tauri::command]
 fn list_activity(state: State<AppState>) -> CmdResult<Vec<ActivityRow>> {
     let names: IndexMap<String, String> = state.app.templates.all().into_iter().map(|t| (t.id, t.name)).collect();

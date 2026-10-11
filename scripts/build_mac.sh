@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 [ -f src-tauri/pdfium/libpdfium.dylib ] || scripts/fetch-pdfium.sh
 scripts/licenses.sh
+scripts/stage-ui.sh
 cd src-tauri
 cargo tauri build --config tauri.release.conf.json "$@"
 mkdir -p "$ROOT/dist"

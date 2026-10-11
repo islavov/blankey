@@ -32,7 +32,7 @@ fn menu(handle: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
     let status = item("status", if unlocked { "Unlocked" } else { "Locked" }, false)?;
     let lock = if unlocked { item("lock", "Lock now", true)? } else { item("unlock", "Unlock…", true)? };
-    let open_label = if pending > 0 { format!("Open Blankey ({pending} from Claude)") } else { "Open Blankey".into() };
+    let open_label = if pending > 0 { format!("Open Blankey ({pending} waiting)") } else { "Open Blankey".into() };
     let open = item("open", &open_label, true)?;
     let url = app.config.mcp_url();
     let running = state.mcp_running.load(Ordering::SeqCst);

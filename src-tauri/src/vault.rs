@@ -85,7 +85,7 @@ pub enum VaultError {
     NotInitialized,
     #[error("Vault is already initialized")]
     AlreadyInitialized,
-    #[error("Unlock Blankey once to enable requests from Claude")]
+    #[error("Unlock Blankey once to enable requests from AI assistants")]
     NoRequestKey,
     #[error("{0}")]
     NotFound(String),
@@ -210,7 +210,7 @@ pub struct Vault {
     secrets: Box<dyn SecretStore>,
     dek: Option<Key>,
     seal_private: Option<Key>,
-    /// resolved results for Claude, readable while locked for the life of this process
+    /// resolved results for the MCP client, readable while locked for the life of this process
     results: HashMap<i64, Value>,
 }
 

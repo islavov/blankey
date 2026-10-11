@@ -47,7 +47,7 @@ pub struct Session {
     all_profiles: Vec<Profile>,
     vars: Vec<FillVar>,
     bindings: Map<String, Value>,
-    claude_values: IndexMap<String, String>,
+    suggested_values: IndexMap<String, String>,
 }
 
 pub fn open(app: &Blankey, args: OpenArgs) -> Result<Session, String> {
@@ -111,7 +111,7 @@ pub fn open(app: &Blankey, args: OpenArgs) -> Result<Session, String> {
         all_profiles: app.vault().list_profiles().map_err(|e| e.to_string())?,
         vars: vars.into_values().collect(),
         bindings,
-        claude_values: args.values,
+        suggested_values: args.values,
     })
 }
 

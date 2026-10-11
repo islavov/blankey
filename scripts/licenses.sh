@@ -1,5 +1,6 @@
 #!/bin/sh
-# Writes src-tauri/THIRD_PARTY_LICENSES.html: every Rust dependency (cargo-about), plus PDFium and the fonts.
+# Writes src-tauri/THIRD_PARTY_LICENSES.html: every Rust dependency (cargo-about), plus PDFium, the fonts and the
+# UI's vendored Preact and htm.
 # Needs cargo-about (cargo install cargo-about) and the PDFium download (scripts/fetch-pdfium.sh).
 set -eu
 cd "$(dirname "$0")/../src-tauri"
@@ -17,6 +18,12 @@ escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$1"; }
     echo '<h3>Typst fonts: Libertinus Serif, Libertinus Math (OFL 1.1), New Computer Modern (GUST Font License),'
     echo 'DejaVu Sans Mono (Bitstream Vera / DejaVu license)</h3>'
     echo '<p>Embedded through the typst-assets crate; see https://github.com/typst/typst-assets for the full texts.</p>'
+    echo '<h3>Preact (MIT), https://preactjs.com</h3><pre>'
+    escape ../ui/vendor/LICENSE-preact
+    echo '</pre>'
+    echo '<h3>htm (Apache-2.0), https://github.com/developit/htm</h3><pre>'
+    escape ../ui/vendor/LICENSE-htm
+    echo '</pre>'
 } > bundled.tmp
 # insert the bundled section where the template marks it
 awk -v file=bundled.tmp '/<!-- BUNDLED -->/ { while ((getline line < file) > 0) print line; next } { print }' "$OUT.tmp" > "$OUT"

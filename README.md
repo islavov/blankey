@@ -1,7 +1,8 @@
 # Blankey (Rust + Tauri)
 
-Local, offline tray app that keeps personal data encrypted and fills document templates. An MCP server lets Claude
-design templates, test them with invented data, and ask for real documents, without ever seeing the real values.
+Local, offline tray app that keeps personal data encrypted and fills document templates. An MCP server lets an AI
+assistant (any MCP client) design templates, test them with invented data, and ask for real documents, without ever
+seeing the real values.
 
 Rewrite of the Python/Qt app with the same data format: `vault.db`, `templates/`, `config.toml` and the keychain
 entry are shared, so an existing vault opens unchanged (see `vault::tests::reads_python_vault`).
@@ -14,6 +15,7 @@ cd src-tauri
 cargo run                        # debug builds use ~/Library/Application Support/Blankey Preview
 cargo test
 cargo fmt && cargo clippy --all-targets
+cd .. && npm install && npm test # UI tests (Node, happy-dom), no build step
 ```
 
 `BLANKEY_DATA_DIR=/some/dir` picks another data dir. Release builds use the same folder as the Python app
@@ -42,10 +44,10 @@ Blankey is MIT. `scripts/licenses.sh` lists every Rust dependency with its licen
 licenses in `src-tauri/about.toml`), plus PDFium (BSD-3-Clause), Noto Sans (OFL) and the Typst fonts, in
 `THIRD_PARTY_LICENSES.html`, which ships inside each package.
 
-## Connect Claude
+## Connect an AI assistant
 
 The server listens on `http://127.0.0.1:8765/mcp` (streamable HTTP, JSON responses); it moves to the next free port
-when 8765 is taken. Menu bar → Connect MCP:
+when 8765 is taken. Any MCP client can connect; menu bar → Connect MCP has shortcuts for common ones:
 
 - **Claude Desktop**: "Configure Claude Desktop" adds `Blankey mcp` (a stdio bridge that starts the app if needed).
 - **Claude Code**: `claude mcp add --transport http blankey http://127.0.0.1:8765/mcp`
@@ -63,4 +65,6 @@ Only loopback connections are accepted and foreign Host/Origin headers are refus
 - `src-tauri/src/render/`: AcroForm filling with an embedded subset of Noto Sans (lopdf), PDFium previews
 - `src-tauri/src/mcp/`: MCP server (axum) and the `blankey mcp` stdio bridge
 - `src-tauri/src/app/`: tray, window, auto-lock, request handling and the commands the UI calls
-- `ui/`: plain HTML/CSS/JS frontend, no build step
+- `ui/`: Preact + htm components (vendored in `ui/vendor`), loaded as ES modules with no build step. `ui/js/main.js`
+  boots, `pages/` has one file per page, `fill/` the fill form. `ui/tests/` runs the real UI in happy-dom against a
+  fake backend; release builds package `ui/` without the tests (`scripts/stage-ui.sh`)

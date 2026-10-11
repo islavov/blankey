@@ -18,34 +18,36 @@
   --pending: #fff4dc;
   --backdrop: #e9e9ec;
   --chip-vault: rgba(47, 125, 91, 0.2);
-  --chip-claude: rgba(142, 92, 217, 0.2);
+  --chip-suggested: rgba(142, 92, 217, 0.2);
   --chip-value: rgba(42, 157, 143, 0.2);
   --chip-default: rgba(110, 110, 115, 0.18);
   --chip-empty: rgba(178, 74, 0, 0.18);
-  color-scheme: light dark;
+  --danger-text: #ffffff;
+  color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1e1e20;
-    --sidebar: #28282b;
-    --panel: #232326;
-    --text: #ececef;
-    --muted: #9a9aa1;
-    --line: #38383c;
-    --hover: rgba(255, 255, 255, 0.05);
-    --selected: rgba(255, 255, 255, 0.11);
-    --accent: #4fb488;
-    --accent-soft: rgba(79, 180, 136, 0.2);
-    --accent-text: #0f1f17;
-    --danger: #ff6b6f;
-    --warn: #ff9f0a;
-    --warn-soft: rgba(255, 159, 10, 0.1);
-    --input: #2a2a2d;
-    --code: #262629;
-    --pending: #3a3020;
-    --backdrop: #161618;
-  }
+/* data-theme is set by js/theme.js: the system setting or the sidebar switch */
+:root[data-theme="dark"] {
+  --bg: #1e1e20;
+  --sidebar: #28282b;
+  --panel: #232326;
+  --text: #ececef;
+  --muted: #9a9aa1;
+  --line: #38383c;
+  --hover: rgba(255, 255, 255, 0.05);
+  --selected: rgba(255, 255, 255, 0.11);
+  --accent: #4fb488;
+  --accent-soft: rgba(79, 180, 136, 0.2);
+  --accent-text: #0f1f17;
+  --danger: #ff6b6f;
+  --warn: #ff9f0a;
+  --warn-soft: rgba(255, 159, 10, 0.1);
+  --input: #2a2a2d;
+  --code: #262629;
+  --pending: #3a3020;
+  --backdrop: #161618;
+  --danger-text: #2b0b0c;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -61,6 +63,7 @@ html, body {
   overflow: hidden;
 }
 
+#root { height: 100%; }
 input, select, textarea, button { font: inherit; color: inherit; }
 .hidden { display: none !important; }
 .muted { color: var(--muted); }
@@ -82,6 +85,8 @@ button:hover:not(:disabled) { background: var(--hover); }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 button.primary:hover:not(:disabled) { filter: brightness(1.06); background: var(--accent); }
 button.danger { color: var(--danger); }
+button.primary.danger { background: var(--danger); border-color: var(--danger); color: var(--danger-text); }
+button.primary.danger:hover:not(:disabled) { background: var(--danger); }
 button.ghost { border-color: transparent; background: transparent; }
 button:disabled { opacity: 0.45; }
 
@@ -133,11 +138,18 @@ input[type=checkbox] { accent-color: var(--accent); }
 .nav-item.active { background: var(--selected); font-weight: 500; }
 .nav-item svg { width: 16px; height: 16px; color: var(--accent); flex: none; }
 .badge { margin-left: auto; font-size: 11px; font-weight: 600; background: var(--selected); border-radius: 9px; padding: 0 7px; }
-.sidebar-foot { padding: 10px; border-top: 1px solid var(--line); display: grid; gap: 6px; }
-.sidebar-foot #lock-btn { display: flex; align-items: center; gap: 6px; justify-self: start; }
-.sidebar-foot svg { width: 14px; height: 14px; color: var(--muted); }
-.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: var(--muted); }
-.dot.up { background: var(--accent); }
+.sidebar-foot { padding: 10px 12px 12px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.mcp-status {
+  display: flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 8px;
+  background: var(--hover); color: var(--muted); font-size: 11.5px; overflow: hidden; white-space: nowrap;
+}
+.foot-actions { display: flex; gap: 6px; }
+.foot-actions button { display: flex; align-items: center; justify-content: center; gap: 6px; height: 28px; }
+.foot-actions #lock-btn { flex: 1; }
+.foot-actions .icon-btn { width: 32px; padding: 0; flex: none; }
+.foot-actions svg { width: 14px; height: 14px; color: var(--muted); }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.up { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .dot.down { background: var(--danger); }
 
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -259,7 +271,7 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .fill-row.is-empty .source { border-style: dashed; border-color: var(--warn); background: var(--warn-soft); }
 .source .chip { font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 4px; flex: none; }
 .chip.Vault { background: var(--chip-vault); }
-.chip.Claude { background: var(--chip-claude); }
+.chip.Suggested { background: var(--chip-suggested); }
 .chip.Value { background: var(--chip-value); }
 .chip.Default { background: var(--chip-default); }
 .chip.Empty { background: var(--chip-empty); }

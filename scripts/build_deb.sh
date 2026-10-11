@@ -21,6 +21,7 @@ fi
 DISTRO="${VERSION_CODENAME:-$ID}"
 [ -f src-tauri/pdfium/libpdfium.so ] || scripts/fetch-pdfium.sh
 scripts/licenses.sh
+scripts/stage-ui.sh
 cd src-tauri
 cargo tauri build --config tauri.release.conf.json "$@"
 mkdir -p "$ROOT/dist"

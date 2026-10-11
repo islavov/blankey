@@ -1,4 +1,4 @@
-//! The tray app: window lifecycle, MCP server, auto-lock and requests from Claude.
+//! The tray app: window lifecycle, MCP server, auto-lock and requests from AI assistants.
 
 mod commands;
 mod fill;
@@ -99,8 +99,8 @@ fn on_request(handle: &AppHandle, id: i64) {
         .ok()
         .and_then(|r| r.payload.get("reason").and_then(|v| v.as_str()).map(str::to_string))
         .filter(|r| !r.is_empty())
-        .unwrap_or_else(|| "Claude sent a request. Open Blankey to review it.".into());
-    notify(handle, "Request from Claude", &reason);
+        .unwrap_or_else(|| "Your AI assistant sent a request. Open Blankey to review it.".into());
+    notify(handle, "Request from your AI assistant", &reason);
     tray::refresh(handle);
     show_main(handle);
     let _ = handle.emit("request-created", id);
@@ -211,7 +211,7 @@ pub fn run() {
             start_auto_lock(&handle);
             if let Some(old) = moved_from {
                 let message = format!(
-                    "Port {old} is in use, so the MCP server moved to {}. Copy the connect command again for Claude Code or Codex.",
+                    "Port {old} is in use, so Blankey moved to {}. If your AI assistant stops reaching Blankey, connect it again from the menu bar.",
                     app.config.mcp_url()
                 );
                 notify(&handle, "Blankey", &message);

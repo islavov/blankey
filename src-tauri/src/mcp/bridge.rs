@@ -1,4 +1,4 @@
-//! `blankey mcp`: stdio MCP server for Claude Desktop that forwards to the running app.
+//! `blankey mcp`: stdio MCP server for clients like Claude Desktop that forwards to the running app.
 //!
 //! Each JSON-RPC line from stdin is POSTed to the app's local HTTP endpoint and the JSON reply is written back to
 //! stdout. Requests run on their own threads so a blocking wait_request does not hold up other calls. If the app
