@@ -1,0 +1,18 @@
+{
+  "bundle": {
+    "targets": [
+      "deb"
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libayatana-appindicator3-1"
+        ],
+        "files": {
+          "/usr/lib/blankey/libpdfium.so": "pdfium/libpdfium.so",
+          "/usr/share/doc/blankey/THIRD_PARTY_LICENSES.html": "THIRD_PARTY_LICENSES.html"
+        }
+      }
+    }
+  }
+}

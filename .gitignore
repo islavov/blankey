@@ -1,0 +1,9 @@
+/src-tauri/target
+/src-tauri/gen
+.DS_Store
+/src-tauri/pdfium/libpdfium.*
+/src-tauri/pdfium/*.dll
+/src-tauri/THIRD_PARTY_LICENSES.html
+/dist
+/target-linux
+/.idea

@@ -1,0 +1,207 @@
+//! Render templates to documents and check bindings against profiles.
+
+use std::collections::HashSet;
+
+use indexmap::IndexMap;
+use serde::Serialize;
+use serde_json::{json, Value};
+
+use super::bindings::{as_text, evaluate, referenced_paths};
+use super::{docx, typst, Template, TemplateKind};
+use crate::render::{fonts, pdf_form};
+use crate::vault::FieldInfo;
+
+pub struct Rendered {
+    pub content: Vec<u8>,
+    /// "pdf" or "docx"
+    pub extension: &'static str,
+    pub warnings: Vec<String>,
+}
+
+impl Rendered {
+    pub fn is_pdf(&self) -> bool {
+        self.extension == "pdf"
+    }
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct BindingReport {
+    pub field: String,
+    /// ok | missing | empty | error | overflow | glyphs
+    pub status: String,
+    pub missing: Vec<String>,
+    pub empty: Vec<String>,
+    pub fit_ratio: Option<f64>,
+    pub missing_glyphs: Vec<String>,
+    pub error: Option<String>,
+}
+
+impl BindingReport {
+    fn new(field: &str) -> Self {
+        Self {
+            field: field.to_string(),
+            status: "ok".into(),
+            missing: Vec::new(),
+            empty: Vec::new(),
+            fit_ratio: None,
+            missing_glyphs: Vec::new(),
+            error: None,
+        }
+    }
+}
+
+pub type Values = IndexMap<String, Value>;
+
+pub fn resolve(template: &Template, context: &Value) -> (Values, Vec<String>) {
+    let (mut values, mut errors) = (Values::new(), Vec::new());
+    for (name, expression) in &template.fields {
+        match evaluate(expression, context) {
+            Ok(value) => {
+                values.insert(name.clone(), value);
+            }
+            Err(e) => errors.push(format!("{name}: {e}")),
+        }
+    }
+    (values, errors)
+}
+
+pub fn render(template: &Template, context: &Value) -> Result<Rendered, String> {
+    let (values, errors) = resolve(template, context);
+    render_values(template, &values, errors)
+}
+
+pub fn render_values(template: &Template, values: &Values, errors: Vec<String>) -> Result<Rendered, String> {
+    let mut warnings = errors;
+    let source = template.source().map_err(|e| format!("{}: {e}", template.source_path().display()))?;
+    match template.kind {
+        TemplateKind::PdfForm => {
+            let known: HashSet<String> = pdf_form::inspect_form(&source)?.into_iter().map(|f| f.name).collect();
+            let mut unknown: Vec<&String> = values.keys().filter(|k| !known.contains(*k)).collect();
+            unknown.sort();
+            if !unknown.is_empty() {
+                let names: Vec<&str> = unknown.iter().map(|s| s.as_str()).collect();
+                warnings.push(format!("Fields not in the PDF form: {}", names.join(", ")));
+            }
+            let text: IndexMap<String, String> =
+                values.iter().filter(|(k, _)| known.contains(*k)).map(|(k, v)| (k.clone(), as_text(v))).collect();
+            Ok(Rendered { content: pdf_form::fill_form(&source, &text)?, extension: "pdf", warnings })
+        }
+        TemplateKind::Typst => {
+            let data = serde_json::to_string(values).map_err(|e| e.to_string())?;
+            Ok(Rendered { content: typst::compile(&template.directory, &data)?, extension: "pdf", warnings })
+        }
+        TemplateKind::Docx => {
+            let tags = docx::variables(&template.source_path())?;
+            let unbound: Vec<&str> = tags.iter().filter(|t| !values.contains_key(*t)).map(String::as_str).collect();
+            if !unbound.is_empty() {
+                let mut sorted = unbound.clone();
+                sorted.sort();
+                warnings.push(format!("Tags without a value: {}", sorted.join(", ")));
+            }
+            let text: IndexMap<String, String> = values.iter().map(|(k, v)| (k.clone(), as_text(v))).collect();
+            let rendered = docx::render(&source, &text)?;
+            match docx::to_pdf(&rendered)? {
+                Some(pdf) => Ok(Rendered { content: pdf, extension: "pdf", warnings }),
+                None => {
+                    warnings.push("LibreOffice not found: output is .docx and cannot be previewed".into());
+                    Ok(Rendered { content: rendered, extension: "docx", warnings })
+                }
+            }
+        }
+    }
+}
+
+/// Checks each binding. `profile_fields` is metadata per role; `context` holds real values when the vault is
+/// unlocked and enables fit / glyph checks. Reports never include values.
+pub fn check(
+    template: &Template,
+    profile_fields: &IndexMap<String, Vec<FieldInfo>>,
+    context: Option<&Value>,
+) -> Result<Vec<BindingReport>, String> {
+    let roles: HashSet<String> = template.roles.keys().chain(profile_fields.keys()).cloned().collect();
+    let form_fields: IndexMap<String, pdf_form::FormField> = if template.kind == TemplateKind::PdfForm {
+        let source = template.source().map_err(|e| e.to_string())?;
+        pdf_form::inspect_form(&source)?.into_iter().map(|f| (f.name.clone(), f)).collect()
+    } else {
+        IndexMap::new()
+    };
+    let mut reports = Vec::new();
+    for (name, expression) in &template.fields {
+        let mut report = BindingReport::new(name);
+        for path in referenced_paths(expression, &roles) {
+            let (role, key) = path.split_once('.').unwrap_or((&path, ""));
+            let Some(infos) = profile_fields.get(role) else {
+                report.missing.push(path.clone());
+                continue;
+            };
+            let matches: Vec<&FieldInfo> = infos
+                .iter()
+                .filter(|i| !key.is_empty() && (i.key == key || i.key.starts_with(&format!("{key}."))))
+                .collect();
+            if matches.is_empty() {
+                report.missing.push(path.clone());
+            } else if !matches.iter().any(|i| i.length > 0) {
+                report.empty.push(path.clone());
+            }
+        }
+        if !report.missing.is_empty() {
+            report.status = "missing".into();
+        } else if !report.empty.is_empty() {
+            report.status = "empty".into();
+        }
+        if let Some(context) = context {
+            let text = match evaluate(expression, context) {
+                Ok(value) => as_text(&value),
+                Err(_) => {
+                    report.status = "error".into();
+                    report.error = Some("error with real values".into());
+                    reports.push(report);
+                    continue;
+                }
+            };
+            report.missing_glyphs = fonts::missing_glyphs(&text);
+            if let Some(field) = form_fields.get(name) {
+                if field.field_type == "text" && !text.is_empty() {
+                    let comb_len = if field.comb { field.max_len.unwrap_or(0).max(0) as usize } else { 0 };
+                    let fit = pdf_form::measure(field.rects[0], &text, comb_len);
+                    report.fit_ratio = Some(fit.ratio);
+                    if !fit.fits && report.status == "ok" {
+                        report.status = "overflow".into();
+                    }
+                }
+            }
+            if !report.missing_glyphs.is_empty() && report.status == "ok" {
+                report.status = "glyphs".into();
+            }
+        }
+        reports.push(report);
+    }
+    Ok(reports)
+}
+
+pub fn describe_template(template: &Template) -> Value {
+    let mut out = template.manifest();
+    out["source"] = json!(template.kind.source_name());
+    if template.kind == TemplateKind::Docx {
+        let tags = docx::variables(&template.source_path()).unwrap_or_default();
+        let mut warnings: Vec<String> = tags
+            .iter()
+            .filter(|t| !template.fields.contains_key(*t))
+            .map(|t| format!("Tag without binding: {t}"))
+            .collect();
+        warnings
+            .extend(template.fields.keys().filter(|f| !tags.contains(f)).map(|f| format!("Binding without tag: {f}")));
+        out["tags"] = json!(tags);
+        out["warnings"] = json!(warnings);
+    }
+    out
+}
+
+/// Pretty JSON as the tools return it (one-space indent, real Unicode).
+pub fn dump(data: &impl Serialize) -> String {
+    let mut out = Vec::new();
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
+    let mut serializer = serde_json::Serializer::with_formatter(&mut out, formatter);
+    data.serialize(&mut serializer).expect("JSON serializes");
+    String::from_utf8(out).expect("JSON is UTF-8")
+}
