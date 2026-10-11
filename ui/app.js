@@ -619,11 +619,12 @@ function renderPreview(container, preview, { interactive = true, onPick } = {}) 
     return;
   }
   if (preview.type === "html") {
-    container.innerHTML = `<div class="paper">${preview.html}</div>`;
+    container.innerHTML = `<div class="zoom"><div class="paper">${preview.html}</div></div>`;
     if (onPick) $$(".blank", container).forEach((el) => (el.onclick = () => onPick(el.dataset.var)));
+    enableZoom(container);
     return;
   }
-  container.innerHTML = preview.pages
+  const pages = preview.pages
     .map((page) => {
       const boxes = Object.entries(page.boxes)
         .flatMap(([name, rects]) =>
@@ -639,7 +640,63 @@ function renderPreview(container, preview, { interactive = true, onPick } = {}) 
         <img src="${page.image}" alt="">${boxes}</div>`;
     })
     .join("");
+  container.innerHTML = `<div class="zoom">${pages}</div>`;
   if (onPick) $$(".box", container).forEach((el) => (el.onclick = () => onPick(el.dataset.var)));
+  enableZoom(container);
+}
+
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 4;
+
+/** Pinch (trackpad or ctrl+wheel) zooms the preview around the pointer; the level survives re-renders. */
+function enableZoom(container) {
+  const apply = () => {
+    const content = container.querySelector(".zoom");
+    if (!content) return;
+    content.style.setProperty("--zoom", container.zoom);
+    content.style.width = `${container.zoom * 100}%`;
+  };
+  if (!container.zoom) container.zoom = 1;
+  apply();
+  if (container.zoomBound) return;
+  container.zoomBound = true;
+  const zoomTo = (level, x, y) => {
+    const old = container.zoom;
+    const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, level));
+    if (next === old) return;
+    const rect = container.getBoundingClientRect();
+    const px = x - rect.left;
+    const py = y - rect.top;
+    const contentX = (container.scrollLeft + px) / old;
+    const contentY = (container.scrollTop + py) / old;
+    container.zoom = next;
+    apply();
+    container.scrollLeft = contentX * next - px;
+    container.scrollTop = contentY * next - py;
+  };
+  container.addEventListener(
+    "wheel",
+    (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      zoomTo(container.zoom * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+    },
+    { passive: false }
+  );
+  // WebKit sends pinches as gesture events instead of ctrl+wheel
+  let start = 1;
+  container.addEventListener("gesturestart", (e) => {
+    e.preventDefault();
+    start = container.zoom;
+  });
+  container.addEventListener("gesturechange", (e) => {
+    e.preventDefault();
+    zoomTo(start * e.scale, e.clientX, e.clientY);
+  });
+  container.addEventListener("dblclick", (e) => {
+    if (e.target.closest(".box, .blank")) return;
+    zoomTo(1, e.clientX, e.clientY);
+  });
 }
 
 function highlightPreview(container, name, scroll) {
