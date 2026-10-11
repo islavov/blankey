@@ -664,7 +664,8 @@ impl Vault {
 
     pub fn create_request(&self, kind: &str, payload: &Value) -> Result<i64> {
         let public = self.meta(REQUEST_PUBLIC_KEY)?.ok_or(VaultError::NoRequestKey)?;
-        self.conn.execute("INSERT INTO requests (kind, created_at) VALUES (?1, ?2)", params![kind, now()])?;
+        self.conn
+            .execute("INSERT INTO requests (kind, payload, created_at) VALUES (?1, '{}', ?2)", params![kind, now()])?;
         let id = self.conn.last_insert_rowid();
         let sealed = crypto::seal(&public, &serde_json::to_vec(payload)?, &request_aad(id, "payload"))?;
         self.conn.execute("UPDATE requests SET sealed_payload = ?1 WHERE id = ?2", params![sealed, id])?;
@@ -971,5 +972,9 @@ mod tests {
         let request = &vault.list_requests(None).unwrap()[0];
         assert_eq!(Value::Object(request.payload.clone()), json!({"reason": "Fill in"}));
         assert_eq!(request.result, Some(json!({"outcome": "saved"})));
+
+        // the Python schema has no default for requests.payload
+        let id = vault.create_request("fill", &json!({"reason": "New"})).unwrap();
+        assert_eq!(vault.get_request(id).unwrap().payload["reason"], json!("New"));
     }
 }
