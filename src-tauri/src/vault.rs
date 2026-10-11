@@ -11,55 +11,69 @@ use unicode_normalization::UnicodeNormalization;
 use crate::crypto::{self, KdfParams, Key};
 use crate::keychain::SecretStore;
 
-const SCHEMA_VERSION: i64 = 3;
 const REQUEST_PUBLIC_KEY: &str = "request_public_key";
 const REQUEST_PRIVATE_KEY: &str = "request_private_key";
 const BACKUPS: usize = 3;
 
-const SCHEMA: &str = r#"
-CREATE TABLE meta (key TEXT PRIMARY KEY, value BLOB NOT NULL);
-CREATE TABLE profiles (
-    id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
-);
-CREATE TABLE fields (
-    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-    key TEXT NOT NULL,
-    label TEXT NOT NULL DEFAULT '',
-    type TEXT NOT NULL DEFAULT 'text',
-    value_length INTEGER NOT NULL DEFAULT 0,
-    nonce BLOB,
-    ciphertext BLOB,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (profile_id, key)
-);
-CREATE TABLE documents (
-    id INTEGER PRIMARY KEY, template_id TEXT NOT NULL, title TEXT NOT NULL, profiles TEXT NOT NULL,
-    pages INTEGER NOT NULL, filename TEXT NOT NULL, created_at TEXT NOT NULL,
-    nonce BLOB NOT NULL DEFAULT x'', ciphertext BLOB NOT NULL DEFAULT x''
-);
-CREATE TABLE requests (
-    id INTEGER PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}',
-    status TEXT NOT NULL DEFAULT 'pending', result TEXT, created_at TEXT NOT NULL, resolved_at TEXT,
-    sealed_payload BLOB, sealed_result BLOB
-);
-CREATE TABLE audit (
-    id INTEGER PRIMARY KEY, ts TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL,
-    target TEXT NOT NULL DEFAULT ''
-);
-"#;
+/// Schema steps; the step at index i brings a vault to user_version i + 1, the numbering the Python app uses.
+/// Every step must be idempotent (IF NOT EXISTS, add_column), so re-running one after a partial upgrade is safe.
+/// Append only: a shipped step never changes. New vaults run every step, so they match upgraded ones.
+const MIGRATIONS: &[fn(&Connection) -> rusqlite::Result<()>] = &[initial_schema, fill_sets, sealed_requests];
 
-const FILL_SETS: &str = r#"
-CREATE TABLE fill_sets (
-    id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, templates TEXT NOT NULL, profiles TEXT NOT NULL,
-    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-    nonce BLOB NOT NULL DEFAULT x'', ciphertext BLOB NOT NULL DEFAULT x''
-);
-"#;
+/// The Python app's DDL (peewee): NOT NULL without SQL defaults, so every insert names all its columns.
+fn initial_schema(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS "audit" ("id" INTEGER NOT NULL PRIMARY KEY, "ts" TEXT NOT NULL, "actor" TEXT NOT NULL, "action" TEXT NOT NULL, "target" TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS "documents" ("id" INTEGER NOT NULL PRIMARY KEY, "template_id" TEXT NOT NULL, "title" TEXT NOT NULL, "profiles" TEXT NOT NULL, "pages" INTEGER NOT NULL, "filename" TEXT NOT NULL, "created_at" TEXT NOT NULL, "nonce" BLOB NOT NULL, "ciphertext" BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS "profiles" ("id" INTEGER NOT NULL PRIMARY KEY, "name" TEXT NOT NULL, "kind" TEXT NOT NULL, "created_at" TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS "fields" ("profile_id" INTEGER NOT NULL, "key" TEXT NOT NULL, "label" TEXT NOT NULL, "type" TEXT NOT NULL, "value_length" INTEGER NOT NULL, "nonce" BLOB, "ciphertext" BLOB, "updated_at" TEXT NOT NULL, PRIMARY KEY ("profile_id", "key"), FOREIGN KEY ("profile_id") REFERENCES "profiles" ("id") ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS "fieldrow_profile_id" ON "fields" ("profile_id");
+CREATE TABLE IF NOT EXISTS "requests" ("id" INTEGER NOT NULL PRIMARY KEY, "kind" TEXT NOT NULL, "payload" TEXT NOT NULL, "status" TEXT NOT NULL, "result" TEXT, "created_at" TEXT NOT NULL, "resolved_at" TEXT);
+CREATE TABLE IF NOT EXISTS "meta" ("key" TEXT NOT NULL PRIMARY KEY, "value" BLOB NOT NULL);
+"#,
+    )
+}
 
-const SEALED_REQUESTS: &str = r#"
-ALTER TABLE requests ADD COLUMN sealed_payload BLOB;
-ALTER TABLE requests ADD COLUMN sealed_result BLOB;
-"#;
+fn fill_sets(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS "fill_sets" ("id" INTEGER NOT NULL PRIMARY KEY, "name" TEXT NOT NULL, "templates" TEXT NOT NULL, "profiles" TEXT NOT NULL, "created_at" TEXT NOT NULL, "updated_at" TEXT NOT NULL, "nonce" BLOB NOT NULL, "ciphertext" BLOB NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS "fillsetrow_name" ON "fill_sets" ("name");
+"#,
+    )
+}
+
+fn sealed_requests(conn: &Connection) -> rusqlite::Result<()> {
+    add_column(conn, "requests", "sealed_payload", "BLOB")?;
+    add_column(conn, "requests", "sealed_result", "BLOB")
+}
+
+fn add_column(conn: &Connection, table: &str, column: &str, declaration: &str) -> rusqlite::Result<()> {
+    let exists: bool = conn.query_row(
+        &format!("SELECT EXISTS (SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1)"),
+        [column],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {declaration}"))?;
+    }
+    Ok(())
+}
+
+fn migrate(conn: &mut Connection) -> Result<()> {
+    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if version > MIGRATIONS.len() as i64 {
+        return Err(VaultError::Schema(version));
+    }
+    for (index, step) in MIGRATIONS.iter().enumerate().skip(version as usize) {
+        let tx = conn.transaction()?;
+        step(&tx)?;
+        tx.pragma_update(None, "user_version", index as i64 + 1)?;
+        tx.commit()?;
+    }
+    Ok(())
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum VaultError {
@@ -202,24 +216,10 @@ pub struct Vault {
 
 impl Vault {
     pub fn open(path: &Path, secrets: Box<dyn SecretStore>) -> Result<Self> {
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "wal")?;
         conn.pragma_update(None, "foreign_keys", 1)?;
-        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if version > SCHEMA_VERSION {
-            return Err(VaultError::Schema(version));
-        }
-        if version == 0 {
-            conn.execute_batch(&format!("BEGIN; {SCHEMA} {FILL_SETS} COMMIT;"))?;
-        } else {
-            if version < 2 {
-                conn.execute_batch(FILL_SETS)?;
-            }
-            if version < 3 {
-                conn.execute_batch(SEALED_REQUESTS)?;
-            }
-        }
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        migrate(&mut conn)?;
         Ok(Self { path: path.to_path_buf(), conn, secrets, dek: None, seal_private: None, results: HashMap::new() })
     }
 
@@ -471,7 +471,7 @@ impl Vault {
     pub fn define_fields(&self, profile_id: i64, fields: &[(String, String, String)]) -> Result<()> {
         for (key, label, field_type) in fields {
             self.conn.execute(
-                "INSERT INTO fields (profile_id, key, label, type, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+                "INSERT INTO fields (profile_id, key, label, type, value_length, updated_at) VALUES (?1, ?2, ?3, ?4, 0, ?5)
                  ON CONFLICT (profile_id, key) DO NOTHING",
                 params![profile_id, key, label, field_type, now()],
             )?;
@@ -664,8 +664,10 @@ impl Vault {
 
     pub fn create_request(&self, kind: &str, payload: &Value) -> Result<i64> {
         let public = self.meta(REQUEST_PUBLIC_KEY)?.ok_or(VaultError::NoRequestKey)?;
-        self.conn
-            .execute("INSERT INTO requests (kind, payload, created_at) VALUES (?1, '{}', ?2)", params![kind, now()])?;
+        self.conn.execute(
+            "INSERT INTO requests (kind, payload, status, created_at) VALUES (?1, '{}', 'pending', ?2)",
+            params![kind, now()],
+        )?;
         let id = self.conn.last_insert_rowid();
         let sealed = crypto::seal(&public, &serde_json::to_vec(payload)?, &request_aad(id, "payload"))?;
         self.conn.execute("UPDATE requests SET sealed_payload = ?1 WHERE id = ?2", params![sealed, id])?;
@@ -943,6 +945,22 @@ mod tests {
         let payload: String = vault.conn().query_row("SELECT payload FROM requests", [], |r| r.get(0)).unwrap();
         assert_eq!(payload, "{}");
         assert_eq!(vault.list_requests(None).unwrap()[0].payload["reason"], json!("Old"));
+    }
+
+    #[test]
+    fn migrations_rerun_safely() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.db");
+        let mut vault = Vault::open(&path, Box::new(MemoryStore::default())).unwrap();
+        vault.initialize(PASSWORD, false).unwrap();
+        vault.create_profile("John", "person").unwrap();
+        vault.conn().pragma_update(None, "user_version", 0).unwrap();
+        drop(vault);
+
+        let vault = Vault::open(&path, Box::new(MemoryStore::default())).unwrap();
+        let version: i64 = vault.conn().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(version, MIGRATIONS.len() as i64);
+        assert_eq!(vault.list_profiles().unwrap()[0].name, "John");
     }
 
     /// A vault written by the Python app opens and decrypts unchanged.
