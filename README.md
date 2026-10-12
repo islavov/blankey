@@ -42,9 +42,11 @@ PDFium is fetched for the platform and bundled next to the app. `.docx` output i
 LibreOffice is installed.
 
 To release: bump the version in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, update `CHANGELOG.md`,
-then publish a GitHub release tagged `v<version>`. `.github/workflows/release.yml` tests, builds every platform and
-uploads the installers to that release. A manual run without a tag only builds and keeps the installers as
-workflow artifacts; with a tag it uploads to that existing release.
+then publish a GitHub release tagged `v<version>`. `.github/workflows/release.yml` builds every platform while the
+tests (`ci.yml`, also run on pushes to main and PRs) run alongside, and uploads the installers to that release once
+both pass. A manual run without a tag only builds and keeps the installers as workflow artifacts; with a tag it
+uploads to that existing release. Rust caches are saved only on main, so a manual run on main before tagging warms
+the build caches.
 
 ## First launch
 

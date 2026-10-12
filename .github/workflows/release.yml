@@ -17,8 +17,8 @@ env:
   TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
 jobs:
-  test:
-    runs-on: macos-14
+  version:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,26 +28,15 @@ jobs:
         run: |
           version=$(jq -r .version src-tauri/tauri.conf.json)
           [ "$TAG" = "v$version" ] || { echo "Tag $TAG does not match tauri.conf.json version $version"; exit 1; }
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-      - run: scripts/fetch-pdfium.sh
-      - working-directory: src-tauri
-        run: |
-          cargo fmt --check
-          cargo clippy --all-targets -- -D warnings
-          cargo test
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci && npm test
+
+  # Runs alongside the builds; only the upload waits for it
+  test:
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ github.event.release.tag_name || github.sha }}
 
   macos:
-    needs: test
+    needs: version
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -57,6 +46,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: cargo-bins/cargo-binstall@main
       - run: cargo binstall -y tauri-cli@^2 cargo-about
       - run: scripts/build_mac.sh
@@ -66,7 +56,7 @@ jobs:
           path: dist/*
 
   windows:
-    needs: test
+    needs: version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,6 +68,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: cargo-bins/cargo-binstall@main
       - run: cargo binstall -y tauri-cli@^2 cargo-about
       - shell: pwsh
@@ -88,7 +79,7 @@ jobs:
           path: dist/*
 
   deb:
-    needs: test
+    needs: version
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -107,6 +98,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: ${{ matrix.image }}
       - uses: cargo-bins/cargo-binstall@main
       - run: cargo binstall -y tauri-cli@^2 cargo-about
@@ -120,7 +112,7 @@ jobs:
 
   upload:
     if: github.event.release.tag_name || inputs.tag
-    needs: [macos, windows, deb]
+    needs: [test, macos, windows, deb]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
