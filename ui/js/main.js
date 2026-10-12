@@ -54,6 +54,8 @@ listen("request-created", async () => {
 });
 listen("requests-changed", () => refreshStatus());
 listen("unlock-needed", (event) => update({ gateReason: event.payload }));
+listen("relay-status", () => state.page === "connections" && reload());
+listen("show-page", ({ payload }) => update({ page: payload, search: "" }));
 
 (async () => {
   const status = await refreshStatus();

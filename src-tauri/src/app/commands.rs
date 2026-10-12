@@ -699,6 +699,42 @@ fn fill_close(handle: AppHandle, state: State<AppState>, args: fill::CloseArgs) 
     Ok(())
 }
 
+// -- relay -------------------------------------------------------------------
+
+type RelayState<'a> = State<'a, std::sync::Arc<crate::relay::Relay>>;
+
+#[tauri::command]
+async fn relay_status(relay: RelayState<'_>) -> CmdResult<crate::relay::Info> {
+    Ok(relay.info().await)
+}
+
+#[tauri::command]
+fn relay_login(relay: RelayState) {
+    relay.login();
+}
+
+#[tauri::command]
+fn relay_logout(relay: RelayState) {
+    relay.logout();
+}
+
+#[tauri::command]
+async fn relay_revoke(relay: RelayState<'_>, grant_id: String) -> CmdResult<()> {
+    relay.revoke(&grant_id).await
+}
+
+/// No url: back to the official relay.
+#[tauri::command]
+async fn relay_set_url(relay: RelayState<'_>, url: Option<String>) -> CmdResult<()> {
+    relay.set_url(url.as_deref()).await
+}
+
+#[tauri::command]
+async fn relay_open_account(relay: RelayState<'_>) -> CmdResult<()> {
+    let url = relay.account_url().await.ok_or("The relay cannot be reached.")?;
+    open::that(url).map_err(err)
+}
+
 pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         status,
@@ -738,5 +774,11 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         fill_preview,
         fill_save,
         fill_close,
+        relay_status,
+        relay_login,
+        relay_logout,
+        relay_revoke,
+        relay_set_url,
+        relay_open_account,
     ]
 }

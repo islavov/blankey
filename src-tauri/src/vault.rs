@@ -1,4 +1,4 @@
-//! Encrypted profile store over the same SQLite schema as the Python app (user_version 3).
+//! Encrypted profile store over the Python app's SQLite schema (user_version 3), plus later migrations.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -13,12 +13,15 @@ use crate::keychain::SecretStore;
 
 const REQUEST_PUBLIC_KEY: &str = "request_public_key";
 const REQUEST_PRIVATE_KEY: &str = "request_private_key";
+const RELAY_DEVICE_ID: &str = "relay_device_id";
+const RELAY_CLIENT: &str = "relay_client";
 const BACKUPS: usize = 3;
 
 /// Schema steps; the step at index i brings a vault to user_version i + 1, the numbering the Python app uses.
 /// Every step must be idempotent (IF NOT EXISTS, add_column), so re-running one after a partial upgrade is safe.
 /// Append only: a shipped step never changes. New vaults run every step, so they match upgraded ones.
-const MIGRATIONS: &[fn(&Connection) -> rusqlite::Result<()>] = &[initial_schema, fill_sets, sealed_requests];
+const MIGRATIONS: &[fn(&Connection) -> rusqlite::Result<()>] =
+    &[initial_schema, fill_sets, sealed_requests, relay_grants];
 
 /// The Python app's DDL (peewee): NOT NULL without SQL defaults, so every insert names all its columns.
 fn initial_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -47,6 +50,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS "fillsetrow_name" ON "fill_sets" ("name");
 fn sealed_requests(conn: &Connection) -> rusqlite::Result<()> {
     add_column(conn, "requests", "sealed_payload", "BLOB")?;
     add_column(conn, "requests", "sealed_result", "BLOB")
+}
+
+/// Web agents the user accepted through a relay; plaintext, so the relay client works while the vault is locked.
+fn relay_grants(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS "relay_grants" ("grant_id" TEXT NOT NULL PRIMARY KEY, "relay_url" TEXT NOT NULL, "client_name" TEXT NOT NULL, "redirect_host" TEXT NOT NULL, "accepted_at" TEXT NOT NULL, "revoked_at" TEXT);
+"#,
+    )
 }
 
 fn add_column(conn: &Connection, table: &str, column: &str, declaration: &str) -> rusqlite::Result<()> {
@@ -180,6 +192,15 @@ pub struct Request {
     pub resolved_at: Option<String>,
     /// payload sealed and the vault is locked
     pub hidden: bool,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct RelayGrant {
+    pub grant_id: String,
+    pub relay_url: String,
+    pub client_name: String,
+    pub redirect_host: String,
+    pub accepted_at: String,
 }
 
 pub fn now() -> String {
@@ -747,6 +768,88 @@ impl Vault {
         Ok(out)
     }
 
+    // -- relay -------------------------------------------------------------
+    // Plaintext metadata: the relay client runs while the vault is locked.
+
+    pub fn add_relay_grant(&self, grant: &RelayGrant) -> Result<()> {
+        self.conn.execute(
+            "REPLACE INTO relay_grants (grant_id, relay_url, client_name, redirect_host, accepted_at, revoked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+            params![grant.grant_id, grant.relay_url, grant.client_name, grant.redirect_host, grant.accepted_at],
+        )?;
+        Ok(())
+    }
+
+    /// Grants on this relay that are not revoked, newest first.
+    pub fn relay_grants(&self, relay_url: &str) -> Result<Vec<RelayGrant>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT grant_id, relay_url, client_name, redirect_host, accepted_at FROM relay_grants
+             WHERE relay_url = ?1 AND revoked_at IS NULL ORDER BY accepted_at DESC",
+        )?;
+        let rows = stmt.query_map([relay_url], |r| {
+            Ok(RelayGrant {
+                grant_id: r.get(0)?,
+                relay_url: r.get(1)?,
+                client_name: r.get(2)?,
+                redirect_host: r.get(3)?,
+                accepted_at: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn relay_grant_allowed(&self, grant_id: &str, relay_url: &str) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM relay_grants WHERE grant_id = ?1 AND relay_url = ?2 AND revoked_at IS NULL)",
+            [grant_id, relay_url],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn revoke_relay_grant(&self, grant_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE relay_grants SET revoked_at = ?1 WHERE grant_id = ?2 AND revoked_at IS NULL",
+            params![now(), grant_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_relay_grants(&self, relay_url: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM relay_grants WHERE relay_url = ?1", [relay_url])?;
+        Ok(())
+    }
+
+    pub fn relay_device_id(&self) -> Result<Option<String>> {
+        self.text_meta(RELAY_DEVICE_ID)
+    }
+
+    pub fn set_relay_device_id(&self, device_id: Option<&str>) -> Result<()> {
+        self.set_text_meta(RELAY_DEVICE_ID, device_id)
+    }
+
+    /// The app's own OAuth client registration on the relay (JSON).
+    pub fn relay_client(&self) -> Result<Option<String>> {
+        self.text_meta(RELAY_CLIENT)
+    }
+
+    pub fn set_relay_client(&self, client: Option<&str>) -> Result<()> {
+        self.set_text_meta(RELAY_CLIENT, client)
+    }
+
+    fn text_meta(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.meta(key)?.map(|v| String::from_utf8_lossy(&v).into_owned()))
+    }
+
+    fn set_text_meta(&self, key: &str, value: Option<&str>) -> Result<()> {
+        match value {
+            Some(value) => self.set_meta(key, value.as_bytes()),
+            None => {
+                self.conn.execute("DELETE FROM meta WHERE key = ?1", [key])?;
+                Ok(())
+            }
+        }
+    }
+
     // -- audit & maintenance -----------------------------------------------
 
     pub fn audit(&self, actor: &str, action: &str, target: &str) -> Result<()> {
@@ -961,6 +1064,40 @@ mod tests {
         let version: i64 = vault.conn().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
         assert_eq!(version, MIGRATIONS.len() as i64);
         assert_eq!(vault.list_profiles().unwrap()[0].name, "John");
+    }
+
+    #[test]
+    fn relay_grants_work_while_locked() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = vault(dir.path());
+        vault.lock();
+        let grant = |id: &str, relay: &str| RelayGrant {
+            grant_id: id.into(),
+            relay_url: relay.into(),
+            client_name: "Claude".into(),
+            redirect_host: "claude.ai".into(),
+            accepted_at: now(),
+        };
+        vault.add_relay_grant(&grant("g-1", "https://a")).unwrap();
+        vault.add_relay_grant(&grant("g-2", "https://a")).unwrap();
+        vault.add_relay_grant(&grant("g-3", "https://b")).unwrap();
+        assert!(vault.relay_grant_allowed("g-1", "https://a").unwrap());
+        assert!(!vault.relay_grant_allowed("g-1", "https://b").unwrap());
+
+        vault.revoke_relay_grant("g-1").unwrap();
+        assert!(!vault.relay_grant_allowed("g-1", "https://a").unwrap());
+        let ids: Vec<String> = vault.relay_grants("https://a").unwrap().into_iter().map(|g| g.grant_id).collect();
+        assert_eq!(ids, ["g-2"]);
+
+        vault.clear_relay_grants("https://a").unwrap();
+        assert!(vault.relay_grants("https://a").unwrap().is_empty());
+        assert_eq!(vault.relay_grants("https://b").unwrap().len(), 1);
+
+        assert_eq!(vault.relay_device_id().unwrap(), None);
+        vault.set_relay_device_id(Some("d-1")).unwrap();
+        assert_eq!(vault.relay_device_id().unwrap().as_deref(), Some("d-1"));
+        vault.set_relay_device_id(None).unwrap();
+        assert_eq!(vault.relay_device_id().unwrap(), None);
     }
 
     /// A vault written by the Python app opens and decrypts unchanged.

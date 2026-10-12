@@ -309,3 +309,8 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
   padding: 7px 14px; border-radius: 8px; z-index: 40; max-width: 80%; white-space: pre-line;
 }
 .busy { cursor: progress; }
+
+.relay { padding: 12px 16px; border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
+.relay-row { display: flex; align-items: center; gap: 10px; min-height: 28px; }
+.relay-row > .muted:first-child { width: 110px; flex: none; }
+.relay-row .pill { margin: 0; }

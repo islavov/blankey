@@ -73,6 +73,24 @@ when 8765 is taken. Any MCP client can connect; menu bar → Connect MCP has sho
 
 Only loopback connections are accepted and foreign Host/Origin headers are refused.
 
+## Connect a web agent (claude.ai)
+
+Web agents cannot reach `127.0.0.1`, so Blankey can keep an outbound WebSocket to a relay that forwards their MCP
+requests to the app. The app never accepts inbound connections. The official relay is `https://relay.blankey.io`;
+anyone can run their own by implementing [the relay protocol](relay/README.md).
+
+1. Menu bar → Online → "Sign in to relay…" (or the Connections page). The browser opens the relay's sign-in page;
+   the refresh token is kept in the OS keychain.
+2. In claude.ai, add a custom connector with the connector URL shown on the Connections page (the relay's `/mcp`).
+3. When the agent connects, Blankey asks: "Claude (claude.ai) wants to connect to Blankey on this computer through
+   relay.blankey.io." Allow it (plus Touch ID where available). Accepted agents are listed on the Connections page,
+   where each can be revoked.
+
+The app answers only agents on its own allowlist (vault table `relay_grants`), so a relay cannot add an agent
+without the user. The relay sees MCP traffic (field metadata, templates, example data), never vault values.
+Connections → "Use custom relay…" switches relays: the agents of the old relay are revoked and forgotten, then you
+sign in to the new one. `config.toml` keeps `relay_enabled` and `relay_url`.
+
 ## How the PII boundary works
 
 - Profile values are AES-256-GCM encrypted per field. A random data key is wrapped by the master password
@@ -119,6 +137,7 @@ exported (YAML, or a zip with the templates) and imported from tray → "Fill se
   X25519-sealed requests, keychain / Touch ID unlock, rotating backups
 - `src-tauri/src/templates/`: template store, Jinja bindings (minijinja), docx tokenizing and rendering, Typst,
   fill sets, previews
+- `src-tauri/src/relay/`: relay client (discovery, OAuth with PKCE, device WebSocket); its tests run a stub relay
 - `src-tauri/src/render/`: AcroForm filling with an embedded subset of Noto Sans (lopdf), PDFium previews
 - `src-tauri/src/mcp/`: MCP server (axum) and the `blankey mcp` stdio bridge
 - `src-tauri/src/app/`: tray, window, auto-lock, request handling and the commands the UI calls

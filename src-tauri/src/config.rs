@@ -1,18 +1,38 @@
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 pub const APP_NAME: &str = "Blankey";
 pub const HEALTH_PATH: &str = "/health";
 pub const HEALTH_TEXT: &str = "blankey";
 const DEFAULT_PORT: u16 = 8765;
+pub const OFFICIAL_RELAY: &str = "https://relay.blankey.io";
 /// ports tried after the configured one before asking the OS for any free port
 const PORT_SEARCH: u16 = 50;
 
-#[derive(Clone, Debug)]
+/// config.toml in the data dir; missing keys take their defaults and unknown keys are ignored.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
+    #[serde(skip)]
     pub data_dir: PathBuf,
     pub port: u16,
     pub auto_lock_minutes: u32,
+    pub relay_enabled: bool,
+    pub relay_url: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            data_dir: PathBuf::new(),
+            port: DEFAULT_PORT,
+            auto_lock_minutes: 15,
+            relay_enabled: false,
+            relay_url: OFFICIAL_RELAY.into(),
+        }
+    }
 }
 
 impl Config {
@@ -29,20 +49,19 @@ impl Config {
 
     pub fn load_from(data_dir: PathBuf) -> std::io::Result<Self> {
         std::fs::create_dir_all(&data_dir)?;
-        let mut config = Self { data_dir, port: DEFAULT_PORT, auto_lock_minutes: 15 };
-        match std::fs::read_to_string(config.config_path()) {
+        let path = data_dir.join("config.toml");
+        let config = match std::fs::read_to_string(&path) {
             Ok(text) => {
-                for line in text.lines() {
-                    let Some((key, value)) = line.split_once('=') else { continue };
-                    match (key.trim(), value.trim().parse::<u32>()) {
-                        ("port", Ok(v)) => config.port = v as u16,
-                        ("auto_lock_minutes", Ok(v)) => config.auto_lock_minutes = v,
-                        _ => {}
-                    }
-                }
+                let invalid =
+                    |e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: {e}", path.display()));
+                Self { data_dir, ..toml::from_str(&text).map_err(invalid)? }
             }
-            Err(_) => config.save()?,
-        }
+            Err(_) => {
+                let config = Self { data_dir, ..Self::default() };
+                config.save()?;
+                config
+            }
+        };
         std::fs::create_dir_all(config.templates_dir())?;
         std::fs::create_dir_all(config.previews_dir())?;
         Ok(config)
@@ -54,7 +73,7 @@ impl Config {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
-        let text = format!("port = {}\nauto_lock_minutes = {}\n", self.port, self.auto_lock_minutes);
+        let text = toml::to_string(self).map_err(std::io::Error::other)?;
         std::fs::write(self.config_path(), text)
     }
 
@@ -130,5 +149,23 @@ mod tests {
         let loaded = Config::load_from(dir.path().join("data")).unwrap();
         assert_eq!((loaded.port, loaded.auto_lock_minutes), (9999, 15));
         assert!(loaded.templates_dir().is_dir() && loaded.previews_dir().is_dir());
+        assert_eq!((loaded.relay_enabled, loaded.relay_url.as_str()), (false, OFFICIAL_RELAY));
+
+        let mut config = loaded;
+        config.relay_enabled = true;
+        config.relay_url = "http://localhost:9000".into();
+        config.save().unwrap();
+        let loaded = Config::load_from(dir.path().join("data")).unwrap();
+        assert_eq!((loaded.relay_enabled, loaded.relay_url.as_str()), (true, "http://localhost:9000"));
+    }
+
+    #[test]
+    fn legacy_config_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "port = 9001\nauto_lock_minutes = 5\nlegacy_key = \"x\"\n")
+            .unwrap();
+        let config = Config::load_from(dir.path().to_path_buf()).unwrap();
+        assert_eq!((config.port, config.auto_lock_minutes, config.relay_enabled), (9001, 5, false));
+        assert_eq!(config.relay_url, OFFICIAL_RELAY);
     }
 }

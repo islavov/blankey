@@ -17,6 +17,13 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use crate::config::{HEALTH_PATH, HEALTH_TEXT};
 use crate::core::Blankey;
 
+/// Request extension on MCP requests forwarded by the relay (`relay::client`): the agent's grant and name.
+#[derive(Clone, Debug)]
+pub struct Remote {
+    pub grant: String,
+    pub client_name: String,
+}
+
 pub fn router(app: Arc<Blankey>, port: u16) -> Router {
     let origins = ["http", "https"]
         .iter()
@@ -37,8 +44,18 @@ pub async fn serve(
     listener: tokio::net::TcpListener,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
+    serve_with(app, listener, Router::new(), shutdown).await
+}
+
+/// `serve` plus extra routes (the relay sign-in callback).
+pub async fn serve_with(
+    app: Arc<Blankey>,
+    listener: tokio::net::TcpListener,
+    extra: Router,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
     let port = listener.local_addr()?.port();
-    axum::serve(listener, router(app, port)).with_graceful_shutdown(shutdown).await
+    axum::serve(listener, router(app, port).merge(extra)).with_graceful_shutdown(shutdown).await
 }
 
 #[cfg(test)]

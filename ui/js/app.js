@@ -2,6 +2,7 @@ import { useState } from "../vendor/preact-htm.js";
 import { invoke } from "./api.js";
 import { html, Icon, update, useStore } from "./lib.js";
 import { Activity } from "./pages/activity.js";
+import { Connections } from "./pages/connections.js";
 import { Documents } from "./pages/documents.js";
 import { FillSets } from "./pages/fillsets.js";
 import { Profiles } from "./pages/profiles.js";
@@ -10,6 +11,7 @@ import { currentTheme, setTheme } from "./theme.js";
 
 const PAGES = {
   activity: { title: "Activity", component: Activity },
+  connections: { title: "Connections", component: Connections },
   fillsets: { title: "Fill sets", component: FillSets },
   documents: { title: "Documents", component: Documents },
   templates: { title: "Templates", component: Templates },
@@ -17,7 +19,7 @@ const PAGES = {
 };
 
 const SECTIONS = [
-  ["Assistant", ["activity"]],
+  ["Assistant", ["activity", "connections"]],
   ["Library", ["fillsets", "documents", "templates"]],
   ["Vault", ["profiles"]],
 ];
