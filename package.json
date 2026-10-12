@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Tests for the Blankey UI in ui/tests (ui/ is served as-is, without a build step)",
   "scripts": {
-    "test": "node --test ui/tests/"
+    "test": "node --test ui/tests/*.test.js"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^15.11.7",
