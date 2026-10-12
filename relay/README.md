@@ -47,8 +47,11 @@ The app refuses a relay whose `protocol` it does not support, and any URL that i
 The relay is an OAuth 2.1 authorization server:
 
 - RFC 8414 metadata at `{issuer}/.well-known/oauth-authorization-server`
-- RFC 9728 protected-resource metadata at `{issuer}/.well-known/oauth-protected-resource` for `mcp_url`, and
-  `401` responses from `mcp_url` carry `WWW-Authenticate: Bearer resource_metadata="<that url>"`
+- RFC 9728 protected-resource metadata at `{issuer}/.well-known/oauth-protected-resource`. The resource is the
+  relay's origin (`issuer`), so one token audience covers `mcp_url` and the device endpoints; scopes keep them apart.
+  Clients that send `resource` must send that value. `401` responses from `mcp_url` carry
+  `WWW-Authenticate: Bearer resource_metadata="<that url>"`; a token with the wrong scope gets `403`
+  `insufficient_scope`
 - RFC 7591 dynamic client registration; public clients (`token_endpoint_auth_method: none`)
 - Authorization code with PKCE (`S256` only), refresh tokens with rotation
 
@@ -58,6 +61,9 @@ Two scopes:
 |---|---|---|
 | `device` | the Blankey app | `device_register`, `device_connect`, `device_revoke` |
 | `mcp` | agents | `mcp_url` |
+
+A client asks for one scope at a time. Relays should only grant `device` to clients whose redirect URI is a
+loopback address, so a web agent cannot obtain a device token.
 
 ### Desktop app
 
@@ -80,7 +86,8 @@ The agent registers (DCR) and starts authorization with `scope=mcp`. The relay:
 3. lets the user pick a device when the account has several;
 4. creates a grant id and sends `approve` to that device; when the device is offline or does not answer within
    120 s the authorization fails with `access_denied`;
-5. on `accepted: true` issues the code. All tokens from this consent are tied to the grant id and the device.
+5. on `accepted: true` issues the code. All tokens from this consent are tied to the grant id and the device. A new
+   authorization by the same client may replace that client's earlier grant.
 
 ## Device WebSocket
 
@@ -120,7 +127,7 @@ The relay returns `status`, `headers` and `body` to the agent as the HTTP respon
 response mode, so bodies are complete JSON, not streams. If the grant is not on the app's allowlist the app answers
 `status: 403`. If the device is not connected the relay answers the agent `503` with a JSON-RPC error
 (`{"jsonrpc":"2.0","id":<request id or null>,"error":{"code":-32000,"message":"Blankey is not running on your computer"}}`).
-The relay waits at least 60 s for an `mcp_result`.
+The relay waits at least 60 s for an `mcp_result` and then answers `504` with a JSON-RPC error.
 
 ### Approval
 
