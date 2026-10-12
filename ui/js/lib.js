@@ -34,7 +34,7 @@ export const Icon = ({ name }) => html`<svg viewBox="0 0 16 16" dangerouslySetIn
 // -- app-wide state ------------------------------------------------------------------------
 // Only what crosses components: the rest lives in component state.
 
-export const state = { status: null, page: "activity", search: "", gateReason: "", recoveryKey: null, revision: 0 };
+export const state = { status: null, relay: null, page: "activity", search: "", gateReason: "", recoveryKey: null, revision: 0 };
 const listeners = new Set();
 let version = 0;
 

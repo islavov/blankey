@@ -38,12 +38,25 @@ test("revoke asks first", async () => {
   assert.ok(text(".empty").startsWith("No web agents yet."));
 });
 
+test("the sidebar shows the relay account next to Lock", async () => {
+  assert.equal(text("#relay-account"), "you@example.com");
+  assert.equal(text("#relay-btn"), "you");
+  assert.equal($("#relay-btn").title, "you@example.com: Connected");
+  await goTo("Activity");
+  await click($("#relay-btn"));
+  assert.equal(text(".toolbar h2"), "Connections");
+});
+
 test("sign out and in again", async () => {
   await action("Sign out");
   assert.equal(text("#relay-state"), "Signed out");
-  await action("Sign in");
+  assert.equal($("#relay-account"), null);
+  assert.equal(text("#relay-btn"), "Sign in");
+  await click($("#relay-btn"));
   assert.equal(backend.called("relay_login").length, 1);
   assert.equal(text("#relay-state"), "Signing in…");
+  assert.equal(text("#relay-btn"), "Signing in…");
+  assert.ok($("#relay-btn").disabled);
 });
 
 test("a custom relay, then back to the official one", async () => {

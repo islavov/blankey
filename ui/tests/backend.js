@@ -46,6 +46,7 @@ export function seed() {
       url: "https://relay.blankey.io",
       official: true,
       signed_in: true,
+      account: "you@example.com",
       state: "connected",
       message: "",
       account_url: "https://relay.blankey.io/account",
@@ -226,11 +227,12 @@ export function createBackend(db = seed()) {
     },
     fill_close: ({ args }) => removeRequest(args.request_id),
     relay_status: () => db.relay,
+    relay_summary: () => ({ signed_in: db.relay.signed_in, state: db.relay.state, account: db.relay.account }),
     relay_login: () => {
       db.relay.state = "signing_in";
     },
     relay_logout: () => {
-      Object.assign(db.relay, { signed_in: false, state: "signed_out" });
+      Object.assign(db.relay, { signed_in: false, state: "signed_out", account: null });
     },
     relay_revoke: ({ grantId }) => {
       db.relay.grants = db.relay.grants.filter((g) => g.grant_id !== grantId);
@@ -238,7 +240,7 @@ export function createBackend(db = seed()) {
     relay_set_url: ({ url }) => {
       const next = url ?? "https://relay.blankey.io";
       if (!next.startsWith("https://")) throw `${next} must use https://`;
-      Object.assign(db.relay, { url: next, official: !url, signed_in: false, state: "signing_in", grants: [] });
+      Object.assign(db.relay, { url: next, official: !url, signed_in: false, state: "signing_in", account: null, grants: [] });
     },
     relay_open_account: () => null,
   };

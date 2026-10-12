@@ -1,5 +1,5 @@
 import { html, render } from "../vendor/preact-htm.js";
-import { invoke, listen, refreshStatus } from "./api.js";
+import { invoke, listen, refreshRelay, refreshStatus } from "./api.js";
 import { App } from "./app.js";
 import { enterApp, Gate, resetQuickUnlock } from "./gate.js";
 import { reload, state, update, useStore } from "./lib.js";
@@ -54,7 +54,10 @@ listen("request-created", async () => {
 });
 listen("requests-changed", () => refreshStatus());
 listen("unlock-needed", (event) => update({ gateReason: event.payload }));
-listen("relay-status", () => state.page === "connections" && reload());
+listen("relay-status", () => {
+  refreshRelay();
+  if (state.page === "connections") reload();
+});
 listen("show-page", ({ payload }) => update({ page: payload, search: "" }));
 
 (async () => {
