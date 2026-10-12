@@ -21,7 +21,7 @@ const BACKUPS: usize = 3;
 /// Every step must be idempotent (IF NOT EXISTS, add_column), so re-running one after a partial upgrade is safe.
 /// Append only: a shipped step never changes. New vaults run every step, so they match upgraded ones.
 const MIGRATIONS: &[fn(&Connection) -> rusqlite::Result<()>] =
-    &[initial_schema, fill_sets, sealed_requests, relay_grants];
+    &[initial_schema, fill_sets, sealed_requests, relay_grants, request_grants];
 
 /// The Python app's DDL (peewee): NOT NULL without SQL defaults, so every insert names all its columns.
 fn initial_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -59,6 +59,11 @@ fn relay_grants(conn: &Connection) -> rusqlite::Result<()> {
 CREATE TABLE IF NOT EXISTS "relay_grants" ("grant_id" TEXT NOT NULL PRIMARY KEY, "relay_url" TEXT NOT NULL, "client_name" TEXT NOT NULL, "redirect_host" TEXT NOT NULL, "accepted_at" TEXT NOT NULL, "revoked_at" TEXT);
 "#,
     )
+}
+
+/// The relay grant of the agent that made a request; NULL for local clients.
+fn request_grants(conn: &Connection) -> rusqlite::Result<()> {
+    add_column(conn, "requests", "grant_id", "TEXT")
 }
 
 fn add_column(conn: &Connection, table: &str, column: &str, declaration: &str) -> rusqlite::Result<()> {
@@ -190,6 +195,7 @@ pub struct Request {
     pub result: Option<Value>,
     pub created_at: String,
     pub resolved_at: Option<String>,
+    pub grant_id: Option<String>,
     /// payload sealed and the vault is locked
     pub hidden: bool,
 }
@@ -683,11 +689,11 @@ impl Vault {
     // Payloads and results are sealed to the request public key, so a request can be stored while the vault is
     // locked and only an unlocked vault can read it. Kind, status and timestamps stay readable.
 
-    pub fn create_request(&self, kind: &str, payload: &Value) -> Result<i64> {
+    pub fn create_request(&self, kind: &str, payload: &Value, grant: Option<&str>) -> Result<i64> {
         let public = self.meta(REQUEST_PUBLIC_KEY)?.ok_or(VaultError::NoRequestKey)?;
         self.conn.execute(
-            "INSERT INTO requests (kind, payload, status, created_at) VALUES (?1, '{}', 'pending', ?2)",
-            params![kind, now()],
+            "INSERT INTO requests (kind, payload, status, created_at, grant_id) VALUES (?1, '{}', 'pending', ?2, ?3)",
+            params![kind, now(), grant],
         )?;
         let id = self.conn.last_insert_rowid();
         let sealed = crypto::seal(&public, &serde_json::to_vec(payload)?, &request_aad(id, "payload"))?;
@@ -725,16 +731,37 @@ impl Vault {
     }
 
     fn query_requests(&self, clause: &str, args: &[&dyn rusqlite::ToSql]) -> Result<Vec<Request>> {
-        type Row =
-            (i64, String, String, String, Option<String>, String, Option<String>, Option<Vec<u8>>, Option<Vec<u8>>);
+        type Row = (
+            i64,
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<Vec<u8>>,
+            Option<Vec<u8>>,
+            Option<String>,
+        );
         let sql = format!(
-            "SELECT id, kind, status, created_at, resolved_at, payload, result, sealed_payload, sealed_result
+            "SELECT id, kind, status, created_at, resolved_at, payload, result, sealed_payload, sealed_result, grant_id
              FROM requests {clause}"
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows: Vec<Row> = stmt
             .query_map(args, |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                    r.get(8)?,
+                    r.get(9)?,
+                ))
             })?
             .collect::<rusqlite::Result<_>>()?;
         let private = self.seal_private.as_ref();
@@ -743,7 +770,9 @@ impl Vault {
             Ok(serde_json::from_slice(&plain)?)
         };
         let mut out = Vec::new();
-        for (id, kind, status, created_at, resolved_at, payload, result, sealed_payload, sealed_result) in rows {
+        for (id, kind, status, created_at, resolved_at, payload, result, sealed_payload, sealed_result, grant_id) in
+            rows
+        {
             let mut hidden = false;
             let payload = match &sealed_payload {
                 Some(_) if private.is_none() => {
@@ -763,7 +792,7 @@ impl Vault {
                 Value::Object(map) => map,
                 _ => Map::new(),
             };
-            out.push(Request { id, kind, payload, status, result, created_at, resolved_at, hidden });
+            out.push(Request { id, kind, payload, status, result, created_at, resolved_at, grant_id, hidden });
         }
         Ok(out)
     }
@@ -1013,7 +1042,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut vault = vault(dir.path());
         vault.lock();
-        let id = vault.create_request("fill", &json!({"reason": "Needed"})).unwrap();
+        let id = vault.create_request("fill", &json!({"reason": "Needed"}), None).unwrap();
         let raw: Vec<u8> = vault.conn().query_row("SELECT sealed_payload FROM requests", [], |r| r.get(0)).unwrap();
         assert!(!String::from_utf8_lossy(&raw).contains("Needed"));
         let request = vault.get_request(id).unwrap();
@@ -1029,7 +1058,7 @@ mod tests {
     fn requests_need_a_key_pair() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::open(&dir.path().join("vault.db"), Box::new(MemoryStore::default())).unwrap();
-        assert!(matches!(vault.create_request("fill", &json!({})), Err(VaultError::NoRequestKey)));
+        assert!(matches!(vault.create_request("fill", &json!({}), None), Err(VaultError::NoRequestKey)));
     }
 
     #[test]
@@ -1129,7 +1158,7 @@ mod tests {
         assert_eq!(request.result, Some(json!({"outcome": "saved"})));
 
         // the Python schema has no default for requests.payload
-        let id = vault.create_request("fill", &json!({"reason": "New"})).unwrap();
+        let id = vault.create_request("fill", &json!({"reason": "New"}), None).unwrap();
         assert_eq!(vault.get_request(id).unwrap().payload["reason"], json!("New"));
     }
 }

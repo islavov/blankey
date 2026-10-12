@@ -146,9 +146,12 @@ mod tests {
         let reply = call_in_process(app.clone(), None, "inspect_pdf_form", raw).await;
         assert_ne!(reply["result"]["isError"], true, "{reply}");
 
-        let id = app.create_request(crate::core::FILE, json!({"kind": "pdf", "reason": "r"})).unwrap();
+        let id = app.create_request(crate::core::FILE, json!({"kind": "pdf", "reason": "r"}), Some("g1")).unwrap();
         let file_id = app.store_upload(id, &path).unwrap()["file_id"].clone();
-        let reply = call_in_process(app, remote(), "inspect_pdf_form", json!({"path": file_id})).await;
+        let reply = call_in_process(app.clone(), remote(), "inspect_pdf_form", json!({"path": file_id})).await;
         assert_ne!(reply["result"]["isError"], true, "{reply}");
+        let other = Some(Remote { grant: "g2".into(), client_name: "Other".into() });
+        let reply = call_in_process(app, other, "inspect_pdf_form", json!({"path": file_id})).await;
+        assert_eq!(reply["result"]["isError"], true, "{reply}");
     }
 }

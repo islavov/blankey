@@ -21,7 +21,8 @@ agent --POST /mcp (Bearer)--> relay --WebSocket frame--> Blankey app --> local M
 - The app keeps its own allowlist of accepted grants and answers 403 to MCP frames for any other grant, so a relay
   cannot attach an agent without the user.
 - Remote sessions cannot read local files by path; agents get files through `request_file`, which the user answers
-  with a file picker. Long waits are capped (`wait_request` ≤ 50 s per call over a relay).
+  with a file picker; the agent gets a file id and size, never the file name. Each agent (grant) only sees its own
+  requests and files. Long waits are capped (`wait_request` ≤ 50 s per call over a relay).
 
 ## Discovery
 
