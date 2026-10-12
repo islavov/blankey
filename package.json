@@ -2,6 +2,9 @@
   "name": "blankey-ui",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
   "description": "Tests for the Blankey UI in ui/tests (ui/ is served as-is, without a build step)",
   "scripts": {
     "test": "node --test ui/tests/*.test.js"
