@@ -10,7 +10,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::DialogExt;
 
 use super::{fill, platform, tray, AppState};
-use crate::core::{FILL, PROFILE_INPUT};
+use crate::core::{FILE, FILL, PROFILE_INPUT};
 use crate::fieldtypes;
 use crate::keychain;
 use crate::templates::preview::{self, Preview};
@@ -413,6 +413,7 @@ fn request_label(kind: &str) -> &str {
         PROFILE_INPUT => "Profile data",
         "generate" => "Generate document",
         FILL => "Fill documents",
+        FILE => "File",
         other => other,
     }
 }
@@ -456,6 +457,7 @@ fn request_outcome(request: &Request) -> String {
             }
             text
         }
+        FILE => format!("Shared {}", result.get("name").and_then(Value::as_str).unwrap_or("a file")),
         _ => {
             if outcome.is_empty() {
                 request.status.clone()
@@ -644,6 +646,24 @@ fn resolve_profile_input(
     Ok(Vec::new())
 }
 
+/// Lets the user pick the file a `file` request asks for; None when the picker was closed.
+#[tauri::command]
+async fn resolve_file_request(handle: AppHandle, state: State<'_, AppState>, id: i64) -> CmdResult<Option<Value>> {
+    let request = state.app.vault().get_request(id).map_err(err)?;
+    let kind = request.payload.get("kind").and_then(Value::as_str).unwrap_or_default().to_string();
+    let picked = handle
+        .dialog()
+        .file()
+        .set_title("Choose a file for your AI assistant")
+        .add_filter(kind.to_uppercase(), &[kind.as_str()])
+        .blocking_pick_file();
+    let Some(source) = picked.and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    let result = state.app.store_upload(id, &source)?;
+    tray::refresh(&handle);
+    let _ = handle.emit("requests-changed", ());
+    Ok(Some(result))
+}
+
 // -- fill form -------------------------------------------------------------------
 
 #[tauri::command]
@@ -769,6 +789,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         next_request,
         cancel_request,
         resolve_profile_input,
+        resolve_file_request,
         fill_open,
         fill_evaluate,
         fill_preview,

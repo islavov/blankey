@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { before, test } from "node:test";
-import { fillRequest, profileInputRequest } from "./backend.js";
+import { fileRequest, fillRequest, profileInputRequest } from "./backend.js";
 import { $, $$, byText, check, click, key, settle, startApp, text, type } from "./setup.js";
 
 let backend;
@@ -41,4 +41,33 @@ test("a request that arrives while the app is open is shown; Escape cancels it",
   assert.equal(closed.args.fill_set_id, null);
   assert.equal($(".sheet"), null);
   assert.equal(backend.db.requests.length, 0);
+});
+
+test("file request: the user picks the file; closing the picker keeps the request open", async () => {
+  backend.db.requests.push(fileRequest(10));
+  backend.emit("request-created", 10);
+  await settle(300);
+  assert.equal(text(".sheet h2"), "Your AI assistant asks for a PDF file");
+  assert.equal(text(".sheet .reason"), "The blank NZOK form");
+
+  backend.db.pickedFile = null;
+  await click(byText(".sheet-foot button", "Choose file…"));
+  assert.ok($(".sheet"));
+  assert.equal(backend.db.requests.length, 1);
+
+  backend.db.pickedFile = "nzok.pdf";
+  await click(byText(".sheet-foot button", "Choose file…"));
+  assert.deepEqual(backend.called("resolve_file_request").at(-1), { id: 10 });
+  assert.equal(text("#toast"), "Shared nzok.pdf");
+  assert.equal($(".sheet"), null);
+  assert.equal(backend.db.requests.length, 0);
+});
+
+test("file request: Cancel cancels it", async () => {
+  backend.db.requests.push(fileRequest(11));
+  backend.emit("request-created", 11);
+  await settle(300);
+  await click(byText(".sheet-foot button", "Cancel"));
+  assert.deepEqual(backend.called("cancel_request").at(-1), { id: 11 });
+  assert.equal($(".sheet"), null);
 });

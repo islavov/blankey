@@ -1,7 +1,7 @@
 //! Application service shared by the MCP server (metadata + examples) and the UI (real values).
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, RwLock};
 use std::time::{Duration, Instant};
 
@@ -17,6 +17,9 @@ use crate::vault::{Bindings, FieldInfo, Profiles, Vault};
 
 pub const PROFILE_INPUT: &str = "profile_input";
 pub const FILL: &str = "fill";
+pub const FILE: &str = "file";
+/// Extensions a `file` request can ask for.
+pub const FILE_KINDS: &[&str] = &["pdf", "docx"];
 
 type RequestHook = Box<dyn Fn(i64) + Send + Sync>;
 type UnlockHook = Box<dyn Fn(&str) + Send + Sync>;
@@ -86,6 +89,50 @@ impl Blankey {
         };
         (self.on_request.read().unwrap())(id);
         Ok(id)
+    }
+
+    // -- uploads -----------------------------------------------------------
+    // Files the user picked for a `file` request. MCP reads them only by their `file:<uuid>` id.
+
+    pub fn uploads_dir(&self) -> PathBuf {
+        self.config.data_dir.join("uploads")
+    }
+
+    /// Copies the picked file into uploads and resolves the request with its id, name and size.
+    pub fn store_upload(&self, request_id: i64, source: &Path) -> Result<Value, String> {
+        let request = self.vault().get_request(request_id).map_err(|e| e.to_string())?;
+        if request.kind != FILE || request.status != "pending" {
+            return Err(format!("Request {request_id} does not wait for a file"));
+        }
+        let kind = request.payload.get("kind").and_then(Value::as_str).unwrap_or_default();
+        let extension = source.extension().and_then(|e| e.to_str()).unwrap_or_default().to_lowercase();
+        if !FILE_KINDS.contains(&kind) || extension != kind {
+            return Err(format!("Choose a .{kind} file"));
+        }
+        let uuid = uuid::Uuid::new_v4();
+        std::fs::create_dir_all(self.uploads_dir()).map_err(|e| e.to_string())?;
+        let size =
+            std::fs::copy(source, self.uploads_dir().join(format!("{uuid}.{kind}"))).map_err(|e| e.to_string())?;
+        let name = source.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+        let result = json!({"outcome": "uploaded", "file_id": format!("file:{uuid}"), "name": name, "size": size});
+        let mut vault = self.vault();
+        vault.resolve_request(request_id, "done", result.clone()).map_err(|e| e.to_string())?;
+        let _ = vault.audit("user", "upload", &format!("request={request_id} file={uuid}"));
+        Ok(result)
+    }
+
+    /// The upload behind an exact `file:<uuid>` id.
+    pub fn upload_path(&self, file_id: &str) -> Result<PathBuf, String> {
+        let unknown = || format!("Unknown file id {file_id:?}; call request_file to get one");
+        let uuid = file_id
+            .strip_prefix("file:")
+            .and_then(|s| uuid::Uuid::parse_str(s).ok().filter(|u| u.hyphenated().to_string() == s))
+            .ok_or_else(unknown)?;
+        FILE_KINDS
+            .iter()
+            .map(|extension| self.uploads_dir().join(format!("{uuid}.{extension}")))
+            .find(|path| path.is_file())
+            .ok_or_else(unknown)
     }
 
     // -- metadata (safe for MCP) -------------------------------------------

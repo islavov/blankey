@@ -76,6 +76,8 @@ export const profileInputRequest = (id = 8) => ({
   },
 });
 
+export const fileRequest = (id = 10) => ({ id, kind: "file", payload: { kind: "pdf", reason: "The blank NZOK form" } });
+
 const fillSession = (db, args) => ({
   request_id: args.request_id,
   reason: args.request_id ? "Fill the NZOK form" : "",
@@ -208,6 +210,11 @@ export function createBackend(db = seed()) {
       if (!values.email) return ["Email is required"];
       removeRequest(id);
       return [];
+    },
+    resolve_file_request: ({ id }) => {
+      if (db.pickedFile === null) return null;
+      removeRequest(id);
+      return { outcome: "uploaded", file_id: "file:0f8fad5b-d9cb-469f-a165-70867728950e", name: db.pickedFile || "form.pdf", size: 1024 };
     },
     fill_open: ({ args }) => fillSession(db, args),
     fill_evaluate: ({ args }) => evaluate(args),
