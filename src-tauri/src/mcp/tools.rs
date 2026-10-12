@@ -700,7 +700,7 @@ impl Tools {
                 data @ Value::Object(_) => data,
                 _ => return Err("example must be a saved example name or a dict keyed by role".into()),
             };
-            let rendered = engine::render(&template, &example_context(&data))?;
+            let rendered = engine::render_example(&template, &example_context(&data))?;
             let out_path = app.config.previews_dir().join(format!("{}-example.{}", a.template_id, rendered.extension));
             std::fs::write(&out_path, &rendered.content).map_err(string)?;
             // a remote agent cannot open the file, and the absolute path reveals the user's home folder
