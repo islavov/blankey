@@ -97,11 +97,20 @@ pub struct GrantInfo {
     pub on_relay: Option<bool>,
 }
 
+/// What the sidebar shows; no network.
+#[derive(Serialize)]
+pub struct Summary {
+    pub signed_in: bool,
+    pub state: State,
+    pub account: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct Info {
     pub url: String,
     pub official: bool,
     pub signed_in: bool,
+    pub account: Option<String>,
     #[serde(flatten)]
     pub status: Status,
     pub account_url: Option<String>,
@@ -143,6 +152,16 @@ struct Inner {
     /// frames to the relay while connected
     outgoing: Option<mpsc::UnboundedSender<String>>,
     grant_queries: HashMap<String, oneshot::Sender<Vec<RemoteGrant>>>,
+    /// unlocked since the relay last confirmed this computer as primary
+    primary_pending: bool,
+}
+
+impl Inner {
+    fn send_primary_claim(&self) {
+        if let (true, Some(outgoing)) = (self.primary_pending, &self.outgoing) {
+            let _ = outgoing.send(serde_json::json!({"v": 1, "type": "primary", "id": "p-1"}).to_string());
+        }
+    }
 }
 
 type Browser = Box<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
@@ -182,6 +201,7 @@ impl Relay {
             task: None,
             outgoing: None,
             grant_queries: HashMap::new(),
+            primary_pending: false,
         };
         let mcp = crate::mcp::router(app.clone(), config.port);
         let status = Status { state: State::SignedOut, message: String::new() };
@@ -331,6 +351,7 @@ impl Relay {
     pub fn logout(&self) {
         self.stop();
         self.forget_token();
+        let _ = self.app.vault().set_relay_account(None);
         {
             let mut inner = self.inner();
             inner.access_token = None;
@@ -423,6 +444,14 @@ impl Relay {
         }
     }
 
+    /// Called on unlock: the relay sends agents to the computer unlocked last. Sent now when connected, else on the
+    /// next connection; a reconnect after the relay confirmed it does not claim again.
+    pub fn claim_primary(&self) {
+        let mut inner = self.inner();
+        inner.primary_pending = true;
+        inner.send_primary_claim();
+    }
+
     /// Accepted agents on the current relay.
     pub fn grants(&self) -> Vec<RelayGrant> {
         let url = self.url();
@@ -466,6 +495,14 @@ impl Relay {
         self.inner().endpoints.as_ref().map(|e| e.discovery.account_url.clone())
     }
 
+    pub fn summary(&self) -> Summary {
+        Summary { signed_in: self.signed_in(), state: self.status().state, account: self.account() }
+    }
+
+    fn account(&self) -> Option<String> {
+        self.app.vault().relay_account().ok().flatten()
+    }
+
     /// Everything the Connections page shows.
     pub async fn info(&self) -> Info {
         let url = self.url();
@@ -485,6 +522,7 @@ impl Relay {
         Info {
             official: url == OFFICIAL_RELAY,
             signed_in: self.signed_in(),
+            account: self.account(),
             status: self.status(),
             account_url: discovery.as_ref().map(|d| d.account_url.clone()),
             mcp_url: discovery.map(|d| d.mcp_url),
@@ -518,6 +556,7 @@ impl Relay {
             vault.clear_relay_grants(&old).map_err(|e| e.to_string())?;
             vault.set_relay_device_id(None).map_err(|e| e.to_string())?;
             vault.set_relay_client(None).map_err(|e| e.to_string())?;
+            vault.set_relay_account(None).map_err(|e| e.to_string())?;
         }
         self.forget_token();
         {

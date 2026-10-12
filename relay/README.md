@@ -17,7 +17,8 @@ agent --POST /mcp (Bearer)--> relay --WebSocket frame--> Blankey app --> local M
 - The relay sees MCP traffic: profile and field metadata, templates, example data and request status. Blankey's tools
   never return vault values (see `mcp::tools::tests::no_tool_leaks_vault_values`), so real personal data does not pass
   through it.
-- The device has the final say. An agent only gets tokens after the user accepts it in the app (`approve` frame).
+- The device has the final say. An agent only gets tokens after the user accepts it in the app (`approve` frame), and
+  each of the user's computers asks before it serves an agent for the first time.
 - The app keeps its own allowlist of accepted grants and answers 403 to MCP frames for any other grant, so a relay
   cannot attach an agent without the user.
 - Remote sessions cannot read local files by path; agents get files through `request_file`, which the user answers
@@ -75,8 +76,9 @@ loopback address, so a web agent cannot obtain a device token.
    the relay.
 3. Exchanges the code; keeps the refresh token in the OS keychain.
 4. `POST device_register` with `Authorization: Bearer <device token>` and `{"name": "<host name>", "platform":
-   "macos|windows|linux"}` → `200 {"device_id": "<id>"}`. The id is stable; the app stores it and sends it again on
-   later registrations (`{"device_id": ...}`) to keep the same device.
+   "macos|windows|linux"}` → `200 {"device_id": "<id>", "account": "<email>"}`. The id is stable; the app stores it and
+   sends it again on later registrations (`{"device_id": ...}`) to keep the same device. `account` is optional: the
+   signed-in account as the user knows it, shown in the app.
 
 ### Agents
 
@@ -84,11 +86,22 @@ The agent registers (DCR) and starts authorization with `scope=mcp`. The relay:
 
 1. signs the user in;
 2. may refuse with an explanation page (no subscription etc.);
-3. lets the user pick a device when the account has several;
-4. creates a grant id and sends `approve` to that device; when the device is offline or does not answer within
-   120 s the authorization fails with `access_denied`;
-5. on `accepted: true` issues the code. All tokens from this consent are tied to the grant id and the device. A new
-   authorization by the same client may replace that client's earlier grant.
+3. creates a grant id and sends `approve` to the primary device (see below); when no device is online, or it does not
+   answer within 120 s, the authorization fails with `access_denied`;
+4. on `accepted: true` issues the code. All tokens from this consent are tied to the grant id, which belongs to the
+   account, not to one device. A new authorization by the same client may replace that client's earlier grant.
+
+### Primary device
+
+Only one device per account receives agent requests: the primary one. The app claims it when the user unlocks
+Blankey (`primary` frame below); the primary device is the connected one that claimed it last, or, when none of the
+connected devices has, the one seen most recently. Other devices stay connected and take over when the primary one
+goes offline.
+
+The first time a grant reaches a device that has not answered for it, the relay sends that device an `approve` frame
+for the existing grant and forwards the request only once it is accepted. The relay remembers each device's answer;
+requests that arrive while the question is open wait for the same answer. A device that refused gets `403` with a
+JSON-RPC error for that grant from then on.
 
 ## Device WebSocket
 
@@ -130,9 +143,16 @@ response mode, so bodies are complete JSON, not streams. If the grant is not on 
 (`{"jsonrpc":"2.0","id":<request id or null>,"error":{"code":-32000,"message":"Blankey is not running on your computer"}}`).
 The relay waits at least 60 s for an `mcp_result` and then answers `504` with a JSON-RPC error.
 
+### Primary
+
+App → relay when the user unlocks Blankey: `{"v": 1, "type": "primary", "id": "p-1"}`; the relay makes this device
+the primary one and echoes the frame back. When the app is not connected at the time, it sends the claim after
+connecting, and keeps sending it on each new connection until the relay has echoed it. A reconnect alone does not
+claim.
+
 ### Approval
 
-Relay → app during agent authorization:
+Relay → app during agent authorization, and when a grant first reaches a device that has not answered for it:
 
 ```json
 {"v": 1, "type": "approve", "id": "a-3", "grant": "g-abc", "client_name": "Claude",
@@ -146,12 +166,14 @@ where available) and adds the grant to its allowlist only when accepted.
 
 App → relay: `{"v": 1, "type": "grants", "id": "q-1"}`; relay → app:
 `{"v": 1, "type": "grants", "id": "q-1", "grants": [{"grant": "g-abc", "client_name": "Claude",
-"created_at": "2026-10-12T10:00:00Z"}]}`. The app uses it to show grants the relay still honours.
+"created_at": "2026-10-12T10:00:00Z"}]}`: the grants this device accepted that the relay still honours. The app shows
+them on the Connections page.
 
 ## Revoking
 
 `POST device_revoke` with the device token and `{"grant": "g-abc"}` → `204`. The relay must stop accepting tokens of
-that grant immediately. The app removes the grant from its allowlist first, so it is refused even if this call fails.
+that grant immediately, on every device of the account. The app removes the grant from its allowlist first, so it is
+refused even if this call fails.
 
 ## Running your own relay
 
@@ -159,8 +181,9 @@ Any stack works (Workers, Node, Go…) as long as it speaks the above over TLS. 
 
 - discovery document, OAuth metadata, DCR, PKCE, refresh tokens, `device` and `mcp` scopes
 - device registration and one WebSocket per device, `ping`/`pong`
-- `approve` before issuing agent codes; tokens tied to grant and device
-- `mcp` frames per request, 60 s wait, 503 when offline
+- `primary` claims; agent requests only to the primary device, falling back to another connected one
+- `approve` before issuing agent codes, and on a device's first request for a grant; tokens tied to the grant
+- `mcp` frames per request, 60 s wait, 503 when no device is online, 403 for a grant the device refused
 - revocation
 
 To test: run it locally, set the app's relay to `http://localhost:<port>`, sign in from the app, then connect

@@ -195,21 +195,29 @@ fn post_json(agent: &ureq::Agent, url: &str, token: &str, body: &Value) -> Http<
 }
 
 /// Registers this computer; with the stored id the relay keeps the same device.
+/// `device_register`'s answer.
+pub struct Registration {
+    pub device_id: String,
+    /// the signed-in account, when the relay names it
+    pub account: Option<String>,
+}
+
 pub fn register_device(
     agent: &ureq::Agent,
     discovery: &Discovery,
     token: &str,
     device_id: Option<&str>,
-) -> Http<String> {
+) -> Http<Registration> {
     let mut body = json!({"name": gethostname::gethostname().to_string_lossy(), "platform": platform()});
     if let Some(id) = device_id {
         body["device_id"] = json!(id);
     }
     let reply: Value = parse(&post_json(agent, &discovery.device_register, token, &body)?)?;
-    reply["device_id"]
+    let device_id = reply["device_id"]
         .as_str()
         .map(str::to_string)
-        .ok_or_else(|| HttpError::Transport("the relay returned no device_id".into()))
+        .ok_or_else(|| HttpError::Transport("the relay returned no device_id".into()))?;
+    Ok(Registration { device_id, account: reply["account"].as_str().map(str::to_string) })
 }
 
 pub fn revoke_grant(agent: &ureq::Agent, discovery: &Discovery, token: &str, grant: &str) -> Http<()> {

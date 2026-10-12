@@ -65,7 +65,10 @@ impl Stub {
             .route("/register", post(|| async { Json(json!({"client_id": "client-1"})) }))
             .route("/authorize", get(authorize))
             .route("/token", post(token))
-            .route("/device/register", post(|| async { Json(json!({"device_id": DEVICE_ID})) }))
+            .route(
+                "/device/register",
+                post(|| async { Json(json!({"device_id": DEVICE_ID, "account": "you@example.com"})) }),
+            )
             .route("/device/grants/revoke", post(revoke))
             .with_state(state.clone());
         tokio::spawn(async move { axum::serve(http, routes).await });
@@ -219,6 +222,8 @@ async fn signs_in_and_answers_frames() {
     wait_for(&relay, State::Connected).await;
     assert!(relay.signed_in());
     assert_eq!(app.vault().relay_device_id().unwrap().as_deref(), Some(DEVICE_ID));
+    let summary = relay.summary();
+    assert_eq!((summary.signed_in, summary.account.as_deref()), (true, Some("you@example.com")));
     let config = Config::load_from(dir.path().join("data")).unwrap();
     assert!(config.relay_enabled);
 
@@ -261,6 +266,7 @@ async fn signs_in_and_answers_frames() {
 
     relay.logout();
     assert!(!relay.signed_in());
+    assert_eq!(relay.summary().account, None);
     assert_eq!(relay.status().state, State::SignedOut);
 }
 
@@ -287,4 +293,46 @@ async fn switching_relay_clears_grants() {
     assert_eq!(relay.url(), new.url());
     assert_eq!(Config::load_from(dir.path().join("data")).unwrap().relay_url, new.url());
     wait_for(&relay, State::SigningIn).await;
+}
+
+/// The next frame from the device that is not a ping (pings are answered).
+async fn next_frame(socket: &mut WebSocketStream<TcpStream>) -> Value {
+    loop {
+        let message = tokio::time::timeout(WAIT, socket.next()).await.unwrap().unwrap().unwrap();
+        let frame: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+        if frame["type"] != "ping" {
+            return frame;
+        }
+        socket.send(Message::text(json!({"v": 1, "type": "pong"}).to_string())).await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn claims_primary_on_unlock_until_the_relay_confirms() {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = Stub::start(1).await;
+    let (relay, _app) = signed_in_app(dir.path(), &stub).await;
+    let mut socket = stub.accept().await;
+    wait_for(&relay, State::Connected).await;
+
+    relay.claim_primary();
+    let claim = next_frame(&mut socket).await;
+    assert_eq!((claim["v"].as_u64(), claim["type"].as_str()), (Some(1), Some("primary")), "{claim}");
+
+    // lost before the relay answered: claimed again on the next connection
+    drop(socket);
+    let mut socket = stub.accept().await;
+    let claim = next_frame(&mut socket).await;
+    assert_eq!(claim["type"], "primary");
+    socket.send(Message::text(json!({"v": 1, "type": "primary", "id": claim["id"]}).to_string())).await.unwrap();
+
+    // a plain reconnect after the relay confirmed does not move agents to this computer
+    let initialize = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"});
+    let reply = ask(&mut socket, mcp_frame("r-1", "g-unknown", initialize.clone())).await;
+    assert_eq!(reply["type"], "mcp_result");
+    drop(socket);
+    let mut socket = stub.accept().await;
+    socket.send(Message::text(mcp_frame("r-2", "g-unknown", initialize).to_string())).await.unwrap();
+    let frame = next_frame(&mut socket).await;
+    assert_eq!((frame["type"].as_str(), frame["id"].as_str()), (Some("mcp_result"), Some("r-2")), "{frame}");
 }

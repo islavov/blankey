@@ -84,6 +84,7 @@ async fn unlock(handle: AppHandle, state: State<'_, AppState>, password: String)
     state.app.audit("user", "unlock", "");
     state.touch();
     tray::refresh(&handle);
+    super::claim_relay(&handle);
     Ok(())
 }
 
@@ -103,6 +104,7 @@ async fn unlock_recovery(
     state.app.audit("user", "unlock_recovery", "");
     state.touch();
     tray::refresh(&handle);
+    super::claim_relay(&handle);
     Ok(())
 }
 
@@ -729,6 +731,11 @@ async fn relay_status(relay: RelayState<'_>) -> CmdResult<crate::relay::Info> {
 }
 
 #[tauri::command]
+fn relay_summary(relay: RelayState) -> crate::relay::Summary {
+    relay.summary()
+}
+
+#[tauri::command]
 fn relay_login(relay: RelayState) {
     relay.login();
 }
@@ -796,6 +803,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         fill_save,
         fill_close,
         relay_status,
+        relay_summary,
         relay_login,
         relay_logout,
         relay_revoke,

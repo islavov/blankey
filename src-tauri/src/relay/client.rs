@@ -73,13 +73,18 @@ async fn connect(relay: &Relay, registered: &mut bool) -> Result<Socket, (State,
     let endpoints = relay.endpoints().await.map_err(failed)?;
     if !*registered {
         let known = relay.app.vault().relay_device_id().ok().flatten();
-        let id = relay
+        let registration = relay
             .authorized(move |agent, discovery, token| {
                 oauth::register_device(agent, discovery, token, known.as_deref())
             })
             .await
             .map_err(failed)?;
-        relay.app.vault().set_relay_device_id(Some(&id)).map_err(|e| (State::Offline, e.to_string()))?;
+        {
+            let vault = relay.app.vault();
+            let stored = |e: crate::vault::VaultError| (State::Offline, e.to_string());
+            vault.set_relay_device_id(Some(&registration.device_id)).map_err(stored)?;
+            vault.set_relay_account(registration.account.as_deref()).map_err(stored)?;
+        }
         *registered = true;
     }
     let device_id = relay.app.vault().relay_device_id().ok().flatten().unwrap_or_default();
@@ -112,7 +117,11 @@ async fn connect(relay: &Relay, registered: &mut bool) -> Result<Socket, (State,
 async fn serve(relay: &Arc<Relay>, socket: Socket) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    relay.inner().outgoing = Some(tx.clone());
+    {
+        let mut inner = relay.inner();
+        inner.outgoing = Some(tx.clone());
+        inner.send_primary_claim();
+    }
     let start = tokio::time::Instant::now() + PING_INTERVAL;
     let mut ping = tokio::time::interval_at(start, PING_INTERVAL);
     let mut awaiting_pong = false;
@@ -130,6 +139,7 @@ async fn serve(relay: &Arc<Relay>, socket: Socket) {
                 }
                 match frame["type"].as_str() {
                     Some("pong") => awaiting_pong = false,
+                    Some("primary") => relay.inner().primary_pending = false,
                     Some("mcp") => reply(&tx, mcp(relay.clone(), frame)),
                     Some("approve") => reply(&tx, approve(relay.clone(), frame)),
                     Some("grants") => grants(relay, &frame),

@@ -1,10 +1,10 @@
-import { call } from "../api.js";
+import { call, refreshRelay } from "../api.js";
 import { html, matches, reload, useLoad, when } from "../lib.js";
 import { confirmDialog, dialog, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
 import { Table } from "../ui/table.js";
 
-const STATES = {
+export const STATES = {
   signed_out: "Signed out",
   signing_in: "Signing in…",
   connecting: "Connecting",
@@ -13,19 +13,22 @@ const STATES = {
   account_needs_attention: "Account needs attention",
 };
 
+export async function relaySignIn() {
+  await call("relay_login");
+  toast("Finish signing in in your browser.", 4000);
+  await refreshRelay();
+  reload();
+}
+
 /** Web agents (claude.ai) reaching Blankey through a relay. */
 export function Connections() {
   const info = useLoad(() => call("relay_status"), []);
   if (!info) return null;
 
   const state = info.signed_in || info.state === "signing_in" ? info.state : "signed_out";
-  const signIn = async () => {
-    await call("relay_login");
-    toast("Finish signing in in your browser.", 4000);
-    reload();
-  };
   const signOut = async () => {
     await call("relay_logout");
+    await refreshRelay();
     reload();
   };
 
@@ -59,7 +62,7 @@ export function Connections() {
   const rows = info.grants.map((g) => ({ ...g, id: g.grant_id })).filter((g) => matches(g.client_name, g.redirect_host));
   return html`
     <${Page} title="Connections" subtitle="Web agents such as claude.ai, through a relay"
-      actions=${[info.signed_in ? ["Sign out", signOut] : ["Sign in", signIn, "primary"]]}>
+      actions=${[info.signed_in ? ["Sign out", signOut] : ["Sign in", relaySignIn, "primary"]]}>
       <div class="relay">
         <div class="relay-row">
           <span class="muted">Relay</span>
@@ -74,6 +77,11 @@ export function Connections() {
             <span class="muted">Connector URL</span>
             <span class="mono selectable" id="relay-mcp-url">${info.mcp_url}</span>
             <button class="link" onClick=${() => call("copy_text", { text: info.mcp_url }).then(() => toast("Copied."))}>Copy</button>
+          </div>`}
+        ${info.signed_in && info.account && html`
+          <div class="relay-row">
+            <span class="muted">Account</span>
+            <span class="selectable" id="relay-account">${info.account}</span>
           </div>`}
         <div class="relay-row">
           <span class="muted">Status</span>

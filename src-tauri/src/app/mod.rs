@@ -69,6 +69,13 @@ pub fn lock(handle: &AppHandle) {
     tray::refresh(handle);
 }
 
+/// After an unlock: agents on the relay go to the computer unlocked last.
+pub(super) fn claim_relay(handle: &AppHandle) {
+    if let Some(relay) = online::relay(handle) {
+        relay.claim_primary();
+    }
+}
+
 /// Unlocks with the keychain-wrapped key; with a fingerprint reader it needs a Touch ID scan first.
 pub fn quick_unlock(handle: &AppHandle, reason: &str) -> bool {
     let app = state(handle).app.clone();
@@ -87,6 +94,7 @@ pub fn quick_unlock(handle: &AppHandle, reason: &str) -> bool {
         app.audit("user", "unlock_keychain", "");
         let _ = handle.emit("vault-unlocked", ());
         tray::refresh(handle);
+        claim_relay(handle);
     }
     unlocked
 }
