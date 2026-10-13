@@ -53,6 +53,7 @@ listen("request-created", async () => {
   }
 });
 listen("requests-changed", () => refreshStatus());
+listen("unlock-needed", (event) => update({ gateReason: event.payload }));
 
 (async () => {
   const status = await refreshStatus();

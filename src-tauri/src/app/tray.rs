@@ -96,7 +96,7 @@ fn on_menu(handle: &AppHandle, id: &str) {
         "claude_desktop" => match platform::connect_claude_desktop() {
             Ok(path) => {
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("the config");
-                super::notify(handle, "Blankey", &format!("Added to {name}. Restart Claude Desktop."));
+                super::info(handle, &format!("Blankey was added to {name}.\n\nRestart Claude Desktop to see it."));
             }
             Err(e) => super::alert(handle, &format!("Could not write the config: {e}")),
         },

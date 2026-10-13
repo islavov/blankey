@@ -207,6 +207,11 @@ pub fn run() {
             tray::build(&handle)?;
             let hook_handle = handle.clone();
             app.set_request_hook(move |id| on_request(&hook_handle, id));
+            let unlock_handle = handle.clone();
+            app.set_unlock_hook(move |reason| {
+                let _ = unlock_handle.emit("unlock-needed", reason);
+                show_main(&unlock_handle);
+            });
             start_mcp(&handle);
             start_auto_lock(&handle);
             if let Some(old) = moved_from {
@@ -244,4 +249,9 @@ pub fn run() {
 /// Shows an error box without blocking the caller.
 pub fn alert(handle: &AppHandle, message: &str) {
     handle.dialog().message(message).kind(MessageDialogKind::Warning).title("Blankey").show(|_| {});
+}
+
+/// Shows an OK box without blocking the caller.
+pub fn info(handle: &AppHandle, message: &str) {
+    handle.dialog().message(message).kind(MessageDialogKind::Info).title("Blankey").show(|_| {});
 }
