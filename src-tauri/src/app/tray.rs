@@ -9,8 +9,9 @@ use tauri::{AppHandle, Wry};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
-use super::{icons, platform, state};
+use super::{icons, online, platform, state};
 use crate::keychain;
+use crate::relay::State as RelayState;
 
 const TRAY_ID: &str = "main";
 const ICON_SIZE: u32 = 44;
@@ -48,6 +49,23 @@ fn menu(handle: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &item("claude_desktop", "Configure Claude Desktop", true)?,
         ],
     )?;
+    let relay_menu = Submenu::new(handle, "Online", true)?;
+    if let Some(relay) = online::relay(handle) {
+        let signed_in = relay.signed_in();
+        let status = relay.status().state;
+        let label = if signed_in { status.label() } else { RelayState::SignedOut.label() };
+        relay_menu.append(&item("relay_status", label, false)?)?;
+        if status == RelayState::AccountNeedsAttention {
+            relay_menu.append(&item("relay_account", "Open account page…", true)?)?;
+        }
+        relay_menu.append(&if signed_in {
+            item("relay_logout", "Sign out", true)?
+        } else {
+            item("relay_login", "Sign in to relay…", true)?
+        })?;
+        relay_menu.append(&separator()?)?;
+        relay_menu.append(&item("relay_agents", "Connected agents…", true)?)?;
+    }
     let keyring_label = if keychain::biometric_available() { "Unlock with Touch ID" } else { "Unlock with keychain" };
     let keyring_item = CheckMenuItem::with_id(handle, "keyring", keyring_label, unlocked, keyring, None::<&str>)?;
     let autostart_on = handle.autolaunch().is_enabled().unwrap_or(false);
@@ -63,6 +81,7 @@ fn menu(handle: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &separator()?,
             &mcp,
             &connect,
+            &relay_menu,
             &separator()?,
             &keyring_item,
             &autostart,
@@ -115,6 +134,17 @@ fn on_menu(handle: &AppHandle, id: &str) {
                 super::alert(handle, &format!("Could not change the login item: {e}"));
             }
         }
+        "relay_login" | "relay_logout" | "relay_account" => match (online::relay(handle), id) {
+            (Some(relay), "relay_login") => relay.login(),
+            (Some(relay), "relay_logout") => relay.logout(),
+            (Some(relay), _) => {
+                if let Some(url) = relay.cached_account_url() {
+                    let _ = open::that(url);
+                }
+            }
+            (None, _) => {}
+        },
+        "relay_agents" => online::show_connections(handle),
         "quit" => super::quit(handle),
         _ => {}
     }

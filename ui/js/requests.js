@@ -28,6 +28,7 @@ export async function processRequests() {
       await invoke("set_busy", { busy: true });
       try {
         if (request.kind === "profile_input") await openSheet((close) => html`<${ProfileInput} ...${detail} close=${close} />`);
+        else if (request.kind === "file") await openSheet((close) => html`<${FileRequest} request=${request} close=${close} />`);
         else if (request.kind === "fill") {
           const p = request.payload;
           await openFill({
@@ -124,5 +125,33 @@ function ProfileInput({ request, profile_name, existing, close }) {
       <span class="note">Your data stays in Blankey. The AI assistant only sees the field names and how long the values are.</span>
       <button onClick=${cancel}>Cancel</button>
       <button class="primary" onClick=${() => save()}>Save</button>
+    </div>`;
+}
+
+/** The assistant asks for a document; Blankey keeps a copy of the picked file and gives the assistant only its id. */
+function FileRequest({ request, close }) {
+  const { kind = "", reason } = request.payload;
+
+  const cancel = async () => {
+    await invoke("cancel_request", { id: request.id });
+    close();
+  };
+
+  const choose = async () => {
+    const file = await call("resolve_file_request", { id: request.id }).catch(() => null);
+    if (!file) return;
+    toast(`Shared ${file.name}`);
+    close();
+  };
+
+  return html`
+    <div class="sheet-head">
+      <${SheetHead} icon="doc" title=${`Your AI assistant asks for a ${kind.toUpperCase()} file`} reason=${reason} />
+    </div>
+    <div class="sheet-body"></div>
+    <div class="sheet-foot">
+      <span class="note">Blankey keeps a copy of the file you choose. The assistant can read that file, nothing else on this computer.</span>
+      <button onClick=${cancel}>Cancel</button>
+      <button class="primary" onClick=${choose}>Choose file…</button>
     </div>`;
 }

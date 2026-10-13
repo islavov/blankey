@@ -12,6 +12,11 @@ export async function refreshStatus() {
   return status;
 }
 
+/** The relay sign-in shown in the sidebar; no network on the backend side. */
+export async function refreshRelay() {
+  update({ relay: await invoke("relay_summary") });
+}
+
 /** invoke() that shows errors as a toast and returns to the unlock screen when the vault got locked. */
 export async function call(cmd, args) {
   try {

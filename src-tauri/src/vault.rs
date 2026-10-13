@@ -1,4 +1,4 @@
-//! Encrypted profile store over the same SQLite schema as the Python app (user_version 3).
+//! Encrypted profile store over the Python app's SQLite schema (user_version 3), plus later migrations.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -13,12 +13,16 @@ use crate::keychain::SecretStore;
 
 const REQUEST_PUBLIC_KEY: &str = "request_public_key";
 const REQUEST_PRIVATE_KEY: &str = "request_private_key";
+const RELAY_DEVICE_ID: &str = "relay_device_id";
+const RELAY_CLIENT: &str = "relay_client";
+const RELAY_ACCOUNT: &str = "relay_account";
 const BACKUPS: usize = 3;
 
 /// Schema steps; the step at index i brings a vault to user_version i + 1, the numbering the Python app uses.
 /// Every step must be idempotent (IF NOT EXISTS, add_column), so re-running one after a partial upgrade is safe.
 /// Append only: a shipped step never changes. New vaults run every step, so they match upgraded ones.
-const MIGRATIONS: &[fn(&Connection) -> rusqlite::Result<()>] = &[initial_schema, fill_sets, sealed_requests];
+const MIGRATIONS: &[fn(&Connection) -> rusqlite::Result<()>] =
+    &[initial_schema, fill_sets, sealed_requests, relay_grants, request_grants];
 
 /// The Python app's DDL (peewee): NOT NULL without SQL defaults, so every insert names all its columns.
 fn initial_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -47,6 +51,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS "fillsetrow_name" ON "fill_sets" ("name");
 fn sealed_requests(conn: &Connection) -> rusqlite::Result<()> {
     add_column(conn, "requests", "sealed_payload", "BLOB")?;
     add_column(conn, "requests", "sealed_result", "BLOB")
+}
+
+/// Web agents the user accepted through a relay; plaintext, so the relay client works while the vault is locked.
+fn relay_grants(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS "relay_grants" ("grant_id" TEXT NOT NULL PRIMARY KEY, "relay_url" TEXT NOT NULL, "client_name" TEXT NOT NULL, "redirect_host" TEXT NOT NULL, "accepted_at" TEXT NOT NULL, "revoked_at" TEXT);
+"#,
+    )
+}
+
+/// The relay grant of the agent that made a request; NULL for local clients.
+fn request_grants(conn: &Connection) -> rusqlite::Result<()> {
+    add_column(conn, "requests", "grant_id", "TEXT")
 }
 
 fn add_column(conn: &Connection, table: &str, column: &str, declaration: &str) -> rusqlite::Result<()> {
@@ -178,8 +196,18 @@ pub struct Request {
     pub result: Option<Value>,
     pub created_at: String,
     pub resolved_at: Option<String>,
+    pub grant_id: Option<String>,
     /// payload sealed and the vault is locked
     pub hidden: bool,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct RelayGrant {
+    pub grant_id: String,
+    pub relay_url: String,
+    pub client_name: String,
+    pub redirect_host: String,
+    pub accepted_at: String,
 }
 
 pub fn now() -> String {
@@ -662,11 +690,11 @@ impl Vault {
     // Payloads and results are sealed to the request public key, so a request can be stored while the vault is
     // locked and only an unlocked vault can read it. Kind, status and timestamps stay readable.
 
-    pub fn create_request(&self, kind: &str, payload: &Value) -> Result<i64> {
+    pub fn create_request(&self, kind: &str, payload: &Value, grant: Option<&str>) -> Result<i64> {
         let public = self.meta(REQUEST_PUBLIC_KEY)?.ok_or(VaultError::NoRequestKey)?;
         self.conn.execute(
-            "INSERT INTO requests (kind, payload, status, created_at) VALUES (?1, '{}', 'pending', ?2)",
-            params![kind, now()],
+            "INSERT INTO requests (kind, payload, status, created_at, grant_id) VALUES (?1, '{}', 'pending', ?2, ?3)",
+            params![kind, now(), grant],
         )?;
         let id = self.conn.last_insert_rowid();
         let sealed = crypto::seal(&public, &serde_json::to_vec(payload)?, &request_aad(id, "payload"))?;
@@ -704,16 +732,37 @@ impl Vault {
     }
 
     fn query_requests(&self, clause: &str, args: &[&dyn rusqlite::ToSql]) -> Result<Vec<Request>> {
-        type Row =
-            (i64, String, String, String, Option<String>, String, Option<String>, Option<Vec<u8>>, Option<Vec<u8>>);
+        type Row = (
+            i64,
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<Vec<u8>>,
+            Option<Vec<u8>>,
+            Option<String>,
+        );
         let sql = format!(
-            "SELECT id, kind, status, created_at, resolved_at, payload, result, sealed_payload, sealed_result
+            "SELECT id, kind, status, created_at, resolved_at, payload, result, sealed_payload, sealed_result, grant_id
              FROM requests {clause}"
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows: Vec<Row> = stmt
             .query_map(args, |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                    r.get(8)?,
+                    r.get(9)?,
+                ))
             })?
             .collect::<rusqlite::Result<_>>()?;
         let private = self.seal_private.as_ref();
@@ -722,7 +771,9 @@ impl Vault {
             Ok(serde_json::from_slice(&plain)?)
         };
         let mut out = Vec::new();
-        for (id, kind, status, created_at, resolved_at, payload, result, sealed_payload, sealed_result) in rows {
+        for (id, kind, status, created_at, resolved_at, payload, result, sealed_payload, sealed_result, grant_id) in
+            rows
+        {
             let mut hidden = false;
             let payload = match &sealed_payload {
                 Some(_) if private.is_none() => {
@@ -742,9 +793,100 @@ impl Vault {
                 Value::Object(map) => map,
                 _ => Map::new(),
             };
-            out.push(Request { id, kind, payload, status, result, created_at, resolved_at, hidden });
+            out.push(Request { id, kind, payload, status, result, created_at, resolved_at, grant_id, hidden });
         }
         Ok(out)
+    }
+
+    // -- relay -------------------------------------------------------------
+    // Plaintext metadata: the relay client runs while the vault is locked.
+
+    pub fn add_relay_grant(&self, grant: &RelayGrant) -> Result<()> {
+        self.conn.execute(
+            "REPLACE INTO relay_grants (grant_id, relay_url, client_name, redirect_host, accepted_at, revoked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+            params![grant.grant_id, grant.relay_url, grant.client_name, grant.redirect_host, grant.accepted_at],
+        )?;
+        Ok(())
+    }
+
+    /// Grants on this relay that are not revoked, newest first.
+    pub fn relay_grants(&self, relay_url: &str) -> Result<Vec<RelayGrant>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT grant_id, relay_url, client_name, redirect_host, accepted_at FROM relay_grants
+             WHERE relay_url = ?1 AND revoked_at IS NULL ORDER BY accepted_at DESC",
+        )?;
+        let rows = stmt.query_map([relay_url], |r| {
+            Ok(RelayGrant {
+                grant_id: r.get(0)?,
+                relay_url: r.get(1)?,
+                client_name: r.get(2)?,
+                redirect_host: r.get(3)?,
+                accepted_at: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn relay_grant_allowed(&self, grant_id: &str, relay_url: &str) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM relay_grants WHERE grant_id = ?1 AND relay_url = ?2 AND revoked_at IS NULL)",
+            [grant_id, relay_url],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn revoke_relay_grant(&self, grant_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE relay_grants SET revoked_at = ?1 WHERE grant_id = ?2 AND revoked_at IS NULL",
+            params![now(), grant_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_relay_grants(&self, relay_url: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM relay_grants WHERE relay_url = ?1", [relay_url])?;
+        Ok(())
+    }
+
+    pub fn relay_device_id(&self) -> Result<Option<String>> {
+        self.text_meta(RELAY_DEVICE_ID)
+    }
+
+    pub fn set_relay_device_id(&self, device_id: Option<&str>) -> Result<()> {
+        self.set_text_meta(RELAY_DEVICE_ID, device_id)
+    }
+
+    /// The account the app is signed in to on the relay, as the relay names it (an email address).
+    pub fn relay_account(&self) -> Result<Option<String>> {
+        self.text_meta(RELAY_ACCOUNT)
+    }
+
+    pub fn set_relay_account(&self, account: Option<&str>) -> Result<()> {
+        self.set_text_meta(RELAY_ACCOUNT, account)
+    }
+
+    /// The app's own OAuth client registration on the relay (JSON).
+    pub fn relay_client(&self) -> Result<Option<String>> {
+        self.text_meta(RELAY_CLIENT)
+    }
+
+    pub fn set_relay_client(&self, client: Option<&str>) -> Result<()> {
+        self.set_text_meta(RELAY_CLIENT, client)
+    }
+
+    fn text_meta(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.meta(key)?.map(|v| String::from_utf8_lossy(&v).into_owned()))
+    }
+
+    fn set_text_meta(&self, key: &str, value: Option<&str>) -> Result<()> {
+        match value {
+            Some(value) => self.set_meta(key, value.as_bytes()),
+            None => {
+                self.conn.execute("DELETE FROM meta WHERE key = ?1", [key])?;
+                Ok(())
+            }
+        }
     }
 
     // -- audit & maintenance -----------------------------------------------
@@ -910,7 +1052,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut vault = vault(dir.path());
         vault.lock();
-        let id = vault.create_request("fill", &json!({"reason": "Needed"})).unwrap();
+        let id = vault.create_request("fill", &json!({"reason": "Needed"}), None).unwrap();
         let raw: Vec<u8> = vault.conn().query_row("SELECT sealed_payload FROM requests", [], |r| r.get(0)).unwrap();
         assert!(!String::from_utf8_lossy(&raw).contains("Needed"));
         let request = vault.get_request(id).unwrap();
@@ -926,7 +1068,7 @@ mod tests {
     fn requests_need_a_key_pair() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::open(&dir.path().join("vault.db"), Box::new(MemoryStore::default())).unwrap();
-        assert!(matches!(vault.create_request("fill", &json!({})), Err(VaultError::NoRequestKey)));
+        assert!(matches!(vault.create_request("fill", &json!({}), None), Err(VaultError::NoRequestKey)));
     }
 
     #[test]
@@ -963,6 +1105,40 @@ mod tests {
         assert_eq!(vault.list_profiles().unwrap()[0].name, "John");
     }
 
+    #[test]
+    fn relay_grants_work_while_locked() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = vault(dir.path());
+        vault.lock();
+        let grant = |id: &str, relay: &str| RelayGrant {
+            grant_id: id.into(),
+            relay_url: relay.into(),
+            client_name: "Claude".into(),
+            redirect_host: "claude.ai".into(),
+            accepted_at: now(),
+        };
+        vault.add_relay_grant(&grant("g-1", "https://a")).unwrap();
+        vault.add_relay_grant(&grant("g-2", "https://a")).unwrap();
+        vault.add_relay_grant(&grant("g-3", "https://b")).unwrap();
+        assert!(vault.relay_grant_allowed("g-1", "https://a").unwrap());
+        assert!(!vault.relay_grant_allowed("g-1", "https://b").unwrap());
+
+        vault.revoke_relay_grant("g-1").unwrap();
+        assert!(!vault.relay_grant_allowed("g-1", "https://a").unwrap());
+        let ids: Vec<String> = vault.relay_grants("https://a").unwrap().into_iter().map(|g| g.grant_id).collect();
+        assert_eq!(ids, ["g-2"]);
+
+        vault.clear_relay_grants("https://a").unwrap();
+        assert!(vault.relay_grants("https://a").unwrap().is_empty());
+        assert_eq!(vault.relay_grants("https://b").unwrap().len(), 1);
+
+        assert_eq!(vault.relay_device_id().unwrap(), None);
+        vault.set_relay_device_id(Some("d-1")).unwrap();
+        assert_eq!(vault.relay_device_id().unwrap().as_deref(), Some("d-1"));
+        vault.set_relay_device_id(None).unwrap();
+        assert_eq!(vault.relay_device_id().unwrap(), None);
+    }
+
     /// A vault written by the Python app opens and decrypts unchanged.
     #[test]
     fn reads_python_vault() {
@@ -992,7 +1168,7 @@ mod tests {
         assert_eq!(request.result, Some(json!({"outcome": "saved"})));
 
         // the Python schema has no default for requests.payload
-        let id = vault.create_request("fill", &json!({"reason": "New"})).unwrap();
+        let id = vault.create_request("fill", &json!({"reason": "New"}), None).unwrap();
         assert_eq!(vault.get_request(id).unwrap().payload["reason"], json!("New"));
     }
 }

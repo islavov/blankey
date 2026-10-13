@@ -42,6 +42,19 @@ export function seed() {
     ],
     requests: [],
     previewDelay: 0,
+    relay: {
+      url: "https://relay.blankey.io",
+      official: true,
+      signed_in: true,
+      account: "you@example.com",
+      state: "connected",
+      message: "",
+      account_url: "https://relay.blankey.io/account",
+      mcp_url: "https://relay.blankey.io/mcp",
+      grants: [
+        { grant_id: "g-1", relay_url: "https://relay.blankey.io", client_name: "Claude", redirect_host: "claude.ai", accepted_at: "2026-10-11T09:30:00+00:00", on_relay: true },
+      ],
+    },
   };
 }
 
@@ -63,6 +76,8 @@ export const profileInputRequest = (id = 8) => ({
     ],
   },
 });
+
+export const fileRequest = (id = 10) => ({ id, kind: "file", payload: { kind: "pdf", reason: "The blank NZOK form" } });
 
 const fillSession = (db, args) => ({
   request_id: args.request_id,
@@ -197,6 +212,11 @@ export function createBackend(db = seed()) {
       removeRequest(id);
       return [];
     },
+    resolve_file_request: ({ id }) => {
+      if (db.pickedFile === null) return null;
+      removeRequest(id);
+      return { outcome: "uploaded", file_id: "file:0f8fad5b-d9cb-469f-a165-70867728950e", name: db.pickedFile || "form.pdf", size: 1024 };
+    },
     fill_open: ({ args }) => fillSession(db, args),
     fill_evaluate: ({ args }) => evaluate(args),
     fill_preview: () => ({ nzok: pagesPreview, loan: htmlPreview }),
@@ -206,6 +226,23 @@ export function createBackend(db = seed()) {
       return { fill_set_id: 9, document_ids: args.generate ? [3, 4] : [] };
     },
     fill_close: ({ args }) => removeRequest(args.request_id),
+    relay_status: () => db.relay,
+    relay_summary: () => ({ signed_in: db.relay.signed_in, state: db.relay.state, account: db.relay.account }),
+    relay_login: () => {
+      db.relay.state = "signing_in";
+    },
+    relay_logout: () => {
+      Object.assign(db.relay, { signed_in: false, state: "signed_out", account: null });
+    },
+    relay_revoke: ({ grantId }) => {
+      db.relay.grants = db.relay.grants.filter((g) => g.grant_id !== grantId);
+    },
+    relay_set_url: ({ url }) => {
+      const next = url ?? "https://relay.blankey.io";
+      if (!next.startsWith("https://")) throw `${next} must use https://`;
+      Object.assign(db.relay, { url: next, official: !url, signed_in: false, state: "signing_in", account: null, grants: [] });
+    },
+    relay_open_account: () => null,
   };
 
   const tauri = {

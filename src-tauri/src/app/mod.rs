@@ -3,6 +3,7 @@
 mod commands;
 mod fill;
 pub mod icons;
+mod online;
 mod platform;
 mod tray;
 
@@ -68,6 +69,13 @@ pub fn lock(handle: &AppHandle) {
     tray::refresh(handle);
 }
 
+/// After an unlock: agents on the relay go to the computer unlocked last.
+pub(super) fn claim_relay(handle: &AppHandle) {
+    if let Some(relay) = online::relay(handle) {
+        relay.claim_primary();
+    }
+}
+
 /// Unlocks with the keychain-wrapped key; with a fingerprint reader it needs a Touch ID scan first.
 pub fn quick_unlock(handle: &AppHandle, reason: &str) -> bool {
     let app = state(handle).app.clone();
@@ -86,6 +94,7 @@ pub fn quick_unlock(handle: &AppHandle, reason: &str) -> bool {
         app.audit("user", "unlock_keychain", "");
         let _ = handle.emit("vault-unlocked", ());
         tray::refresh(handle);
+        claim_relay(handle);
     }
     unlocked
 }
@@ -106,7 +115,8 @@ fn on_request(handle: &AppHandle, id: i64) {
     let _ = handle.emit("request-created", id);
 }
 
-fn start_mcp(handle: &AppHandle) {
+/// The MCP server, plus `extra` routes (the relay sign-in callback).
+fn start_mcp(handle: &AppHandle, extra: axum::Router) {
     let state = state(handle);
     let app = state.app.clone();
     let port = app.config.port;
@@ -120,7 +130,7 @@ fn start_mcp(handle: &AppHandle) {
             }
         };
         state_flag(&handle, true);
-        let result = crate::mcp::serve(app, listener, std::future::pending()).await;
+        let result = crate::mcp::serve_with(app, listener, extra, std::future::pending()).await;
         state_flag(&handle, false);
         if let Err(e) = result {
             notify(&handle, "Blankey", &format!("The MCP server stopped: {e}"));
@@ -204,6 +214,7 @@ pub fn run() {
                     .show(move |_| quit_handle.exit(0));
                 return Ok(());
             }
+            let relay = online::init(&handle, &app);
             tray::build(&handle)?;
             let hook_handle = handle.clone();
             app.set_request_hook(move |id| on_request(&hook_handle, id));
@@ -212,7 +223,8 @@ pub fn run() {
                 let _ = unlock_handle.emit("unlock-needed", reason);
                 show_main(&unlock_handle);
             });
-            start_mcp(&handle);
+            start_mcp(&handle, relay.callback_router());
+            relay.start();
             start_auto_lock(&handle);
             if let Some(old) = moved_from {
                 let message = format!(

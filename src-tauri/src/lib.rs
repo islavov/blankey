@@ -5,6 +5,7 @@ pub mod crypto;
 pub mod fieldtypes;
 pub mod keychain;
 pub mod mcp;
+pub mod relay;
 pub mod render;
 pub mod templates;
 pub mod vault;

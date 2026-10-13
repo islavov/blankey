@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Connect web agents such as claude.ai through a relay: sign in from the tray or the new Connections page, allow
+  each agent in the app, revoke it any time. Custom relays are supported (relay protocol v1, `relay/README.md`).
+- `config.toml` is read as TOML; new keys `relay_enabled` and `relay_url`.
+- Typst templates no longer download packages while rendering real data: a template could build a package name
+  from a vault value and send it to the package registry. Only example renders download; real renders use the cache.
+
 ## 0.1.0
 
 First release.

@@ -6,14 +6,15 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
+use rmcp::model::{CallToolResult, ContentBlock, Extensions, Implementation, ServerCapabilities, ServerConfig};
 use rmcp::{tool, tool_handler, tool_router, ServerHandler};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::core::{Blankey, FILL, PROFILE_INPUT};
+use crate::core::{Blankey, FILE, FILE_KINDS, FILL, PROFILE_INPUT};
 use crate::fieldtypes;
+use crate::mcp::{remote, Remote};
 use crate::render::{pdf_form, preview};
 use crate::templates::bindings::example_context;
 use crate::templates::engine::{self, dump};
@@ -67,9 +68,17 @@ Flat PDFs (no form fields, e.g. exports or scans):
    It returns the pages with the boxes outlined: check them and call again with corrected boxes (source_path can
    be omitted then; the original flat PDF is kept). A check box gets "X" when its expression is truthy text.
 3. save_example + render_example, then request_fill as for any PDF form.
+
+Remote sessions (through a Blankey relay) cannot read local paths:
+1. request_file with kind pdf or docx and a reason: the user picks the file in the app.
+2. wait_request returns {file_id, kind, size} when the user has chosen it. Over a relay wait_request returns
+   after at most 50 s: call it again while the status is pending.
+3. Pass the file id ("file:<uuid>") wherever a tool takes path or source_path.
 "#;
 
 pub const TOOL_TIMEOUT_MAX: u64 = 1800;
+/// Relays drop long requests; agents call wait_request again while pending.
+pub const REMOTE_TIMEOUT_MAX: u64 = 50;
 
 type ToolResult = Result<CallToolResult, String>;
 
@@ -92,9 +101,36 @@ pub fn expand(path: &str) -> PathBuf {
     }
 }
 
-fn read_file(path: &str) -> Result<Vec<u8>, String> {
-    let path = expand(path);
-    std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
+/// A local path or a `file:<uuid>` id from request_file; remote sessions only get ids.
+fn source_path(app: &Blankey, remote: Option<&Remote>, path: &str) -> Result<PathBuf, String> {
+    if path.starts_with("file:") {
+        app.upload_path(path, remote.map(|r| r.grant.as_str()))
+    } else if remote.is_some() {
+        Err(format!(
+            "Remote sessions cannot read local paths ({path}): call request_file and pass the file id it returns"
+        ))
+    } else {
+        Ok(expand(path))
+    }
+}
+
+fn read_file(app: &Blankey, remote: Option<&Remote>, path: &str) -> Result<Vec<u8>, String> {
+    std::fs::read(source_path(app, remote, path)?).map_err(|e| format!("{path}: {e}"))
+}
+
+/// Remote agents only see their own requests.
+fn visible(request: Request, remote: Option<&Remote>) -> Result<Request, String> {
+    match remote {
+        Some(r) if request.grant_id.as_deref() != Some(r.grant.as_str()) => {
+            Err(format!("Unknown request {}", request.id))
+        }
+        _ => Ok(request),
+    }
+}
+
+fn wait_timeout(requested: Option<i64>, remote: bool) -> u64 {
+    let max = if remote { REMOTE_TIMEOUT_MAX } else { TOOL_TIMEOUT_MAX };
+    requested.unwrap_or(300).clamp(0, max as i64) as u64
 }
 
 fn string(e: impl std::fmt::Display) -> String {
@@ -193,11 +229,13 @@ pub struct TemplateArgs {
 
 #[derive(Deserialize, JsonSchema)]
 pub struct PathArgs {
+    /// A local path, or a file id from request_file.
     path: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct InspectPdfFormArgs {
+    /// A local path, or a file id from request_file.
     path: String,
     /// 1-based pages to render with every field outlined and named.
     annotate_pages: Option<Vec<usize>>,
@@ -205,6 +243,7 @@ pub struct InspectPdfFormArgs {
 
 #[derive(Deserialize, JsonSchema)]
 pub struct InspectPdfLayoutArgs {
+    /// A local path, or a file id from request_file.
     path: String,
     /// 1-based pages; default all.
     pages: Option<Vec<usize>>,
@@ -223,6 +262,7 @@ pub struct SavePdfOverlayArgs {
     roles: StrMap,
     #[serde(deserialize_with = "lenient::str_map")]
     fields: StrMap,
+    /// A local path, or a file id from request_file.
     source_path: Option<String>,
     #[serde(default, deserialize_with = "lenient::str_map")]
     labels: StrMap,
@@ -240,6 +280,7 @@ pub struct SaveTemplateArgs {
     #[serde(deserialize_with = "lenient::str_map")]
     roles: StrMap,
     description: Option<String>,
+    /// A local path, or a file id from request_file.
     source_path: Option<String>,
     source_text: Option<String>,
 }
@@ -248,6 +289,7 @@ pub struct SaveTemplateArgs {
 pub struct SaveDocxArgs {
     template_id: String,
     name: String,
+    /// A local path, or a file id from request_file.
     source_path: String,
     /// [{find, var, occurrence?}]
     replacements: Vec<Map<String, Value>>,
@@ -318,6 +360,14 @@ pub struct RequestFillArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct RequestFileArgs {
+    #[schemars(extend("enum" = ["pdf", "docx"]))]
+    kind: String,
+    /// Shown to the user: which document you need and what for.
+    reason: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct RequestArgs {
     #[serde(deserialize_with = "lenient::int")]
     request_id: i64,
@@ -327,7 +377,7 @@ pub struct RequestArgs {
 pub struct WaitRequestArgs {
     #[serde(deserialize_with = "lenient::int")]
     request_id: i64,
-    /// Seconds, default 300.
+    /// Seconds, default 300; at most 50 over a relay.
     #[serde(default, deserialize_with = "lenient::opt_int")]
     timeout_s: Option<i64>,
 }
@@ -440,9 +490,10 @@ impl Tools {
     #[tool(
         description = "List the AcroForm fields of a local PDF (name, type, page, rects in PDF points, comb length,\nbutton states). annotate_pages renders those 1-based pages with every field outlined and named."
     )]
-    async fn inspect_pdf_form(&self, Parameters(a): Parameters<InspectPdfFormArgs>) -> ToolResult {
-        self.run(move |_| {
-            let pdf = read_file(&a.path)?;
+    async fn inspect_pdf_form(&self, Parameters(a): Parameters<InspectPdfFormArgs>, ext: Extensions) -> ToolResult {
+        let remote = remote(&ext);
+        self.run(move |app| {
+            let pdf = read_file(app, remote.as_ref(), &a.path)?;
             let fields = pdf_form::inspect_form(&pdf)?;
             let mut out = vec![ContentBlock::text(dump(&fields))];
             for page in a.annotate_pages.unwrap_or_default() {
@@ -456,9 +507,10 @@ impl Tools {
     #[tool(
         description = "Read a local (flat or scanned) PDF to place form boxes: per page its size in points, printed text lines\nwith [x0, y0, x1, y1] boxes (PDF points, origin bottom-left) and existing form fields, plus each page as an\nimage with a coordinate grid (lines every 50 pt, labels every 100 pt). Default pages: all."
     )]
-    async fn inspect_pdf_layout(&self, Parameters(a): Parameters<InspectPdfLayoutArgs>) -> ToolResult {
-        self.run(move |_| {
-            let pdf = read_file(&a.path)?;
+    async fn inspect_pdf_layout(&self, Parameters(a): Parameters<InspectPdfLayoutArgs>, ext: Extensions) -> ToolResult {
+        let remote = remote(&ext);
+        self.run(move |app| {
+            let pdf = read_file(app, remote.as_ref(), &a.path)?;
             let sizes = preview::page_sizes(&pdf)?;
             let mut selected = a.pages.unwrap_or_default();
             if selected.is_empty() {
@@ -493,11 +545,16 @@ impl Tools {
     #[tool(
         description = "Make a PDF form template from a flat PDF: each box {name, page, rect: [x0, y0, x1, y1], type: text|check,\nmax_len?, comb?} (PDF points, origin bottom-left) becomes a form field named `name`. fields maps those names\nto Jinja expressions over roles; labels maps them to human labels for the fill form. Name boxes and roles\ngenerically (applicant, amount, issue_date), not after this document's values. Omit source_path to\nrebuild from the flat PDF saved earlier (replaces all boxes). Returns the template and its pages with the\nboxes outlined, to check placement."
     )]
-    async fn save_pdf_overlay_template(&self, Parameters(a): Parameters<SavePdfOverlayArgs>) -> ToolResult {
+    async fn save_pdf_overlay_template(
+        &self,
+        Parameters(a): Parameters<SavePdfOverlayArgs>,
+        ext: Extensions,
+    ) -> ToolResult {
+        let remote = remote(&ext);
         self.run(move |app| {
             check_id(&a.template_id)?;
             let flat = match &a.source_path {
-                Some(path) => read_file(path)?,
+                Some(path) => read_file(app, remote.as_ref(), path)?,
                 None => {
                     let saved = app.templates.root().join(&a.template_id).join("flat.pdf");
                     std::fs::read(&saved)
@@ -551,9 +608,10 @@ impl Tools {
     #[tool(
         description = "Create or replace a template. kind: pdf_form (source_path = blank PDF form), typst (source_text,\nreads `json(bytes(sys.inputs.data))` for the field values) or docx (source_path, docxtpl Jinja tags).\nfields maps PDF field names / template variables to Jinja expressions over the roles.\nroles maps role names (e.g. applicant, loan) to a short description. Name the template, its roles\nand its variables for the kind of document and party (applicant, counterparty, amount, start_date),\nnot for the particular case in front of you, so the template and its fill sets work for other\ncases too. Omit the source to keep the existing one."
     )]
-    async fn save_template(&self, Parameters(a): Parameters<SaveTemplateArgs>) -> ToolResult {
+    async fn save_template(&self, Parameters(a): Parameters<SaveTemplateArgs>, ext: Extensions) -> ToolResult {
+        let remote = remote(&ext);
         self.run(move |app| {
-            let source = a.source_path.as_deref().map(expand);
+            let source = a.source_path.as_deref().map(|path| source_path(app, remote.as_ref(), path)).transpose()?;
             let existing = app.templates.get(&a.template_id).ok();
             let template = app.templates.save(SaveTemplate {
                 id: &a.template_id,
@@ -577,19 +635,22 @@ impl Tools {
     #[tool(
         description = "Paragraphs of a local .docx (body and table cells) with their run texts and existing {{ }} tags.\nUse the run texts to pick spans for save_docx_template: a span cannot cross a run boundary."
     )]
-    async fn inspect_docx(&self, Parameters(a): Parameters<PathArgs>) -> ToolResult {
-        self.run(move |_| text(&docx::inspect(&expand(&a.path))?)).await
+    async fn inspect_docx(&self, Parameters(a): Parameters<PathArgs>, ext: Extensions) -> ToolResult {
+        let remote = remote(&ext);
+        self.run(move |app| text(&docx::inspect(&source_path(app, remote.as_ref(), &a.path)?)?)).await
     }
 
     #[tool(
         description = "Create a docx template from a filled .docx: each replacement {find, var, occurrence?} replaces the\ntext with {{ var }} (occurrence is 1-based across the document; omit it to replace all). Replacements\napply in order, so put longer spans first (\".......2026\" before \"......\"). fields maps\nvar -> default Jinja expression over roles; labels maps var -> human label shown in the fill form.\nName vars and roles generically (counterparty_name, amount, signing_date), not after the names or\nvalues in this particular document."
     )]
-    async fn save_docx_template(&self, Parameters(a): Parameters<SaveDocxArgs>) -> ToolResult {
+    async fn save_docx_template(&self, Parameters(a): Parameters<SaveDocxArgs>, ext: Extensions) -> ToolResult {
+        let remote = remote(&ext);
         self.run(move |app| {
             check_id(&a.template_id)?;
+            let source = source_path(app, remote.as_ref(), &a.source_path)?;
             let scratch = tempfile_path("docx");
             let replacements: Vec<Value> = a.replacements.into_iter().map(Value::Object).collect();
-            let saved = docx::tokenize(&expand(&a.source_path), &scratch, &replacements).and_then(|report| {
+            let saved = docx::tokenize(&source, &scratch, &replacements).and_then(|report| {
                 let template = app.templates.save(SaveTemplate {
                     id: &a.template_id,
                     name: &a.name,
@@ -630,7 +691,8 @@ impl Tools {
     #[tool(
         description = "Render a template with example data (a saved example name or an inline dict keyed by role).\nReturns warnings, the preview PDF path and PNGs of the selected pages (default: all)."
     )]
-    async fn render_example(&self, Parameters(a): Parameters<RenderExampleArgs>) -> ToolResult {
+    async fn render_example(&self, Parameters(a): Parameters<RenderExampleArgs>, ext: Extensions) -> ToolResult {
+        let remote = remote(&ext).is_some();
         self.run(move |app| {
             let template = app.templates.get(&a.template_id)?;
             let data = match a.example {
@@ -638,10 +700,12 @@ impl Tools {
                 data @ Value::Object(_) => data,
                 _ => return Err("example must be a saved example name or a dict keyed by role".into()),
             };
-            let rendered = engine::render(&template, &example_context(&data))?;
+            let rendered = engine::render_example(&template, &example_context(&data))?;
             let out_path = app.config.previews_dir().join(format!("{}-example.{}", a.template_id, rendered.extension));
             std::fs::write(&out_path, &rendered.content).map_err(string)?;
-            let mut out = vec![ContentBlock::text(dump(&json!({"path": out_path, "warnings": rendered.warnings})))];
+            // a remote agent cannot open the file, and the absolute path reveals the user's home folder
+            let path = if remote { json!(null) } else { json!(out_path) };
+            let mut out = vec![ContentBlock::text(dump(&json!({"path": path, "warnings": rendered.warnings})))];
             if rendered.is_pdf() {
                 for image in preview::render_pages(&rendered.content, &a.pages.unwrap_or_default(), dpi(a.dpi))? {
                     out.push(png(image));
@@ -681,7 +745,12 @@ impl Tools {
     #[tool(
         description = "Ask the user to type data into the app. fields: [{key, label, type, required, hint}] with type one of\ntext, number, date, bool, egn, iban, email, phone. Give profile_id to extend a profile, or\nnew_profile_name to create one. Returns a request id; call wait_request for the outcome."
     )]
-    async fn request_profile_input(&self, Parameters(a): Parameters<RequestProfileInputArgs>) -> ToolResult {
+    async fn request_profile_input(
+        &self,
+        Parameters(a): Parameters<RequestProfileInputArgs>,
+        ext: Extensions,
+    ) -> ToolResult {
+        let grant = remote(&ext).map(|r| r.grant);
         self.run_any(move |app| {
             let new_name = a.new_profile_name.filter(|n| !n.trim().is_empty());
             if a.profile_id.is_none() && new_name.is_none() {
@@ -709,7 +778,7 @@ impl Tools {
                 "fields": a.fields,
                 "reason": a.reason.unwrap_or_default(),
             });
-            let id = app.create_request(PROFILE_INPUT, payload)?;
+            let id = app.create_request(PROFILE_INPUT, payload, grant.as_deref())?;
             text(&json!({"request_id": id, "status": "pending"}))
         })
         .await
@@ -718,7 +787,8 @@ impl Tools {
     #[tool(
         description = "Open the fill form for one or more templates. profiles maps every role to a profile id: find the\nmatching profiles yourself (list_profiles, describe_profile), pick one per role and pass them here instead of\nasking the user to choose; the user confirms in the form. values are non-personal literals per var\n(e.g. {\"loan_amount\": \"34 000\"}); paths pick vault fields per var (e.g. {\"borrower_egn\": \"manager.egn\"}).\nOther vars start from the template default, or from the saved fill set when fill_set_id is given.\nAim to have every var covered before calling: for each var you cannot resolve from the vault or the\nconversation, ask the user whether to give the value now or leave it to be set in Blankey.\nname names the fill set. Returns a request id; call wait_request."
     )]
-    async fn request_fill(&self, Parameters(a): Parameters<RequestFillArgs>) -> ToolResult {
+    async fn request_fill(&self, Parameters(a): Parameters<RequestFillArgs>, ext: Extensions) -> ToolResult {
+        let grant = remote(&ext).map(|r| r.grant);
         self.run_any(move |app| {
             let name = a.name.trim().to_string();
             let loaded = app.fill_templates(&a.templates)?;
@@ -765,7 +835,26 @@ impl Tools {
                 "fill_set_id": a.fill_set_id,
                 "reason": reason,
             });
-            let id = app.create_request(FILL, payload)?;
+            let id = app.create_request(FILL, payload, grant.as_deref())?;
+            text(&json!({"request_id": id, "status": "pending"}))
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Ask the user to pick a pdf or docx file in the app (remote sessions cannot read local paths).\nReturns a request id; wait_request then gives {file_id, kind, size}. Pass file_id as path or source_path."
+    )]
+    async fn request_file(&self, Parameters(a): Parameters<RequestFileArgs>, ext: Extensions) -> ToolResult {
+        let grant = remote(&ext).map(|r| r.grant);
+        self.run(move |app| {
+            let kind = a.kind.trim().trim_start_matches('.').to_lowercase();
+            if !FILE_KINDS.contains(&kind.as_str()) {
+                return Err(format!("kind must be one of {}", FILE_KINDS.join(", ")));
+            }
+            if a.reason.trim().is_empty() {
+                return Err("Pass a reason: the user sees it when picking the file".into());
+            }
+            let id = app.create_request(FILE, json!({"kind": kind, "reason": a.reason.trim()}), grant.as_deref())?;
             text(&json!({"request_id": id, "status": "pending"}))
         })
         .await
@@ -800,11 +889,12 @@ impl Tools {
     #[tool(
         description = "Wait until the user resolves a request (or the timeout passes). Returns status and metadata only."
     )]
-    async fn wait_request(&self, Parameters(a): Parameters<WaitRequestArgs>) -> ToolResult {
-        let timeout = a.timeout_s.unwrap_or(300).clamp(0, TOOL_TIMEOUT_MAX as i64) as u64;
+    async fn wait_request(&self, Parameters(a): Parameters<WaitRequestArgs>, ext: Extensions) -> ToolResult {
+        let remote = remote(&ext);
+        let timeout = wait_timeout(a.timeout_s, remote.is_some());
         let deadline = Instant::now() + Duration::from_secs(timeout);
         loop {
-            let request = self.app.vault().get_request(a.request_id).map_err(string)?;
+            let request = visible(self.app.vault().get_request(a.request_id).map_err(string)?, remote.as_ref())?;
             if request.status != "pending" || Instant::now() >= deadline {
                 return text(&request_view(&request));
             }
@@ -813,15 +903,21 @@ impl Tools {
     }
 
     #[tool(description = "Current status of a request.")]
-    async fn get_request(&self, Parameters(a): Parameters<RequestArgs>) -> ToolResult {
-        self.run_any(move |app| text(&request_view(&app.vault().get_request(a.request_id).map_err(string)?))).await
+    async fn get_request(&self, Parameters(a): Parameters<RequestArgs>, ext: Extensions) -> ToolResult {
+        let remote = remote(&ext);
+        self.run_any(move |app| {
+            text(&request_view(&visible(app.vault().get_request(a.request_id).map_err(string)?, remote.as_ref())?))
+        })
+        .await
     }
 
     #[tool(description = "List requests, optionally filtered by status (pending, done, cancelled).")]
-    async fn list_requests(&self, Parameters(a): Parameters<ListRequestsArgs>) -> ToolResult {
+    async fn list_requests(&self, Parameters(a): Parameters<ListRequestsArgs>, ext: Extensions) -> ToolResult {
+        let remote = remote(&ext);
         self.run_any(move |app| {
             let requests = app.vault().list_requests(a.status.as_deref()).map_err(string)?;
-            text(&requests.iter().map(request_view).collect::<Vec<_>>())
+            let requests = requests.into_iter().filter_map(|r| visible(r, remote.as_ref()).ok());
+            text(&requests.map(|r| request_view(&r)).collect::<Vec<_>>())
         })
         .await
     }
@@ -883,6 +979,23 @@ pub mod tests {
         (pid, source.display().to_string())
     }
 
+    pub fn local() -> Extensions {
+        Extensions::new()
+    }
+
+    /// What rmcp hands a tool for a request the relay client forwarded.
+    pub fn remote() -> Extensions {
+        remote_as("g1")
+    }
+
+    fn remote_as(grant: &str) -> Extensions {
+        let (mut parts, ()) = axum::http::Request::new(()).into_parts();
+        parts.extensions.insert(crate::mcp::Remote { grant: grant.into(), client_name: "Claude".into() });
+        let mut extensions = Extensions::new();
+        extensions.insert(parts);
+        extensions
+    }
+
     fn args<T: DeserializeOwned>(value: Value) -> Parameters<T> {
         Parameters(serde_json::from_value(value).unwrap())
     }
@@ -914,9 +1027,9 @@ pub mod tests {
         }
         assert_eq!(asked.load(Ordering::SeqCst), 3);
         let request = json!({"new_profile_name": "Someone", "fields": [{"key": "name"}], "reason": "unlock"});
-        let (created, _) = out(t.request_profile_input(args(request)).await);
+        let (created, _) = out(t.request_profile_input(args(request), local()).await);
         assert!(created.contains("pending"), "{created}");
-        let (listed, _) = out(t.list_requests(args(json!({}))).await);
+        let (listed, _) = out(t.list_requests(args(json!({})), local()).await);
         assert!(listed.contains("pending"), "{listed}");
     }
 
@@ -934,8 +1047,8 @@ pub mod tests {
             out(t.vault_status().await),
             out(t.list_profiles().await),
             out(t.describe_profile(args(json!({"profile_id": pid}))).await),
-            out(t.inspect_pdf_form(args(json!({"path": source}))).await),
-            out(t.save_template(args(save)).await),
+            out(t.inspect_pdf_form(args(json!({"path": source})), local()).await),
+            out(t.save_template(args(save), local()).await),
             out(t.list_templates().await),
             out(t.get_template(args(json!({"template_id": "t"}))).await),
             out(t
@@ -943,22 +1056,30 @@ pub mod tests {
                     json!({"template_id": "t", "name": "ex", "data": {"applicant": {"name": "Example"}}}),
                 ))
                 .await),
-            out(t.render_example(args(json!({"template_id": "t", "example": "ex"}))).await),
+            out(t.render_example(args(json!({"template_id": "t", "example": "ex"})), local()).await),
             out(t.check_bindings(args(json!({"template_id": "t", "profiles": {"applicant": pid}}))).await),
             out(t
-                .request_fill(args(json!({"templates": ["t"], "profiles": {"applicant": pid}, "name": "leak"})))
+                .request_fill(
+                    args(json!({"templates": ["t"], "profiles": {"applicant": pid}, "name": "leak"})),
+                    local(),
+                )
                 .await),
             out(t
-                .request_profile_input(args(
-                    json!({"fields": [{"key": "email", "type": "email"}], "reason": "r", "profile_id": pid}),
-                ))
+                .request_profile_input(
+                    args(json!({"fields": [{"key": "email", "type": "email"}], "reason": "r", "profile_id": pid})),
+                    local(),
+                )
                 .await),
-            out(t.inspect_docx(args(json!({"path": docx}))).await),
-            out(t.inspect_pdf_layout(args(json!({"path": source}))).await),
+            out(t.request_file(args(json!({"kind": "pdf", "reason": "The blank form"})), local()).await),
+            out(t.inspect_docx(args(json!({"path": docx})), local()).await),
+            out(t.inspect_pdf_layout(args(json!({"path": source})), local()).await),
             out(t
-                .save_docx_template(args(json!({"template_id": "d", "name": "D", "source_path": docx,
+                .save_docx_template(
+                    args(json!({"template_id": "d", "name": "D", "source_path": docx,
                 "replacements": [{"find": "John Smith", "var": "who"}, {"find": "34 000", "var": "amount"}],
-                "roles": {"applicant": "person"}, "fields": {"who": "{{ applicant.name }}"}})))
+                "roles": {"applicant": "person"}, "fields": {"who": "{{ applicant.name }}"}})),
+                    local(),
+                )
                 .await),
         ];
         let profiles: Profiles = [("applicant".to_string(), pid)].into_iter().collect();
@@ -969,9 +1090,9 @@ pub mod tests {
         app.vault().save_fill_set("f", &["d".into()], &profiles, &bindings, None).unwrap();
         outputs.extend([
             out(t.list_documents().await),
-            out(t.get_request(args(json!({"request_id": 1}))).await),
-            out(t.wait_request(args(json!({"request_id": 1, "timeout_s": 0}))).await),
-            out(t.list_requests(args(json!({}))).await),
+            out(t.get_request(args(json!({"request_id": 1})), local()).await),
+            out(t.wait_request(args(json!({"request_id": 1, "timeout_s": 0})), local()).await),
+            out(t.list_requests(args(json!({})), local()).await),
             out(t.list_fill_sets().await),
         ]);
 
@@ -995,15 +1116,19 @@ pub mod tests {
         let t = Tools::new(app.clone());
         let (pid, source) = setup(&app, dir.path());
         out(t
-            .save_template(args(json!({"template_id": "t", "name": "T", "kind": "pdf_form", "source_path": source,
-                "fields": {"name": "{{ applicant.name }}"}, "roles": {"applicant": "person"}})))
+            .save_template(
+                args(json!({"template_id": "t", "name": "T", "kind": "pdf_form", "source_path": source,
+                "fields": {"name": "{{ applicant.name }}"}, "roles": {"applicant": "person"}})),
+                local(),
+            )
             .await);
-        let error = t.request_fill(args(json!({"templates": ["t"], "profiles": {}, "name": "n"}))).await.unwrap_err();
+        let error =
+            t.request_fill(args(json!({"templates": ["t"], "profiles": {}, "name": "n"})), local()).await.unwrap_err();
         assert!(error.contains("Missing profiles"), "{error}");
         // profile ids as strings are accepted
         let fill = json!({"templates": ["t"], "profiles": {"applicant": pid.to_string()}, "name": "n",
                           "paths": {"name": "applicant.nope"}});
-        let error = t.request_fill(args(fill)).await.unwrap_err();
+        let error = t.request_fill(args(fill), local()).await.unwrap_err();
         assert!(error.contains("no vault field"), "{error}");
     }
 
@@ -1013,7 +1138,7 @@ pub mod tests {
         let app = app(dir.path());
         let t = Tools::new(app.clone());
         let source = fixture("flat.pdf").display().to_string();
-        let (layout, grids) = out(t.inspect_pdf_layout(args(json!({"path": source}))).await);
+        let (layout, grids) = out(t.inspect_pdf_layout(args(json!({"path": source})), local()).await);
         assert!(layout.contains("\"Name:\"") && grids == 1, "{layout}");
         let save = json!({
             "template_id": "flat", "name": "Flat",
@@ -1022,14 +1147,98 @@ pub mod tests {
             "fields": {"name": "{{ applicant.name }}", "ghost": "x"},
             "source_path": source,
         });
-        let (summary, images) = out(t.save_pdf_overlay_template(args(save.clone())).await);
+        let (summary, images) = out(t.save_pdf_overlay_template(args(save.clone()), local()).await);
         assert!(summary.contains("Binding without field: ghost") && images == 1);
 
         let mut moved = save;
         moved["boxes"][0]["rect"] = json!([95, 785, 400, 803]);
         moved["source_path"] = Value::Null;
-        out(t.save_pdf_overlay_template(args(moved)).await);
+        out(t.save_pdf_overlay_template(args(moved), local()).await);
         let fields = pdf_form::inspect_form(&app.templates.get("flat").unwrap().source().unwrap()).unwrap();
         assert_eq!(fields[0].rects, [[95.0, 785.0, 400.0, 803.0]]);
+    }
+
+    #[tokio::test]
+    async fn remote_sessions_read_only_requested_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let t = Tools::new(app.clone());
+        let source = fixture("form.pdf").display().to_string();
+        let docx = fixture("filled.docx").display().to_string();
+        let save = json!({"template_id": "t", "name": "T", "kind": "pdf_form", "source_path": source,
+                          "fields": {}, "roles": {}});
+        let overlay = json!({"template_id": "o", "name": "O", "boxes": [], "roles": {}, "fields": {},
+                             "source_path": source});
+        let docx_save = json!({"template_id": "d", "name": "D", "source_path": docx, "replacements": [],
+                               "roles": {}, "fields": {}});
+        let refused = [
+            t.inspect_pdf_form(args(json!({"path": source})), remote()).await,
+            t.inspect_pdf_layout(args(json!({"path": source})), remote()).await,
+            t.save_template(args(save.clone()), remote()).await,
+            t.save_pdf_overlay_template(args(overlay), remote()).await,
+            t.inspect_docx(args(json!({"path": docx})), remote()).await,
+            t.save_docx_template(args(docx_save), remote()).await,
+        ];
+        for result in refused {
+            let error = result.unwrap_err();
+            assert!(error.contains("call request_file"), "{error}");
+        }
+        assert!(app.templates.all().is_empty());
+        out(t.inspect_pdf_form(args(json!({"path": source})), local()).await);
+
+        let error = t.request_file(args(json!({"kind": "xlsx", "reason": "r"})), local()).await.unwrap_err();
+        assert!(error.contains("pdf, docx"), "{error}");
+        let (reply, _) = out(t.request_file(args(json!({"kind": "pdf", "reason": "The blank form"})), remote()).await);
+        let id = serde_json::from_str::<Value>(&reply).unwrap()["request_id"].as_i64().unwrap();
+        let request = app.vault().get_request(id).unwrap();
+        assert_eq!((request.kind.as_str(), request.status.as_str()), ("file", "pending"));
+        assert_eq!(request.payload["kind"], "pdf");
+
+        assert!(app.store_upload(id, &fixture("filled.docx")).unwrap_err().contains(".pdf"));
+        let picked = app.store_upload(id, &fixture("form.pdf")).unwrap();
+        assert_eq!(picked["name"], "form.pdf");
+        assert_eq!(picked["size"], std::fs::metadata(fixture("form.pdf")).unwrap().len());
+        assert!(app.store_upload(id, &fixture("form.pdf")).is_err());
+        let (waited, _) = out(t.wait_request(args(json!({"request_id": id, "timeout_s": 0})), remote()).await);
+        let file_id =
+            serde_json::from_str::<Value>(&waited).unwrap()["result"]["file_id"].as_str().unwrap().to_string();
+        assert!(file_id.starts_with("file:") && !waited.contains(&dir.path().display().to_string()), "{waited}");
+        assert!(!waited.contains("form.pdf"), "the file name stays with the user: {waited}");
+
+        let other = || remote_as("g2");
+        let wait = json!({"request_id": id, "timeout_s": 0});
+        assert!(t.wait_request(args(wait), other()).await.unwrap_err().contains("Unknown request"));
+        assert!(t.get_request(args(json!({"request_id": id})), other()).await.unwrap_err().contains("Unknown request"));
+        assert_eq!(out(t.list_requests(args(json!({})), other()).await).0, "[]");
+        assert!(out(t.list_requests(args(json!({})), remote()).await).0.contains(&file_id));
+        assert!(out(t.list_requests(args(json!({})), local()).await).0.contains(&file_id));
+        let error = t.inspect_pdf_form(args(json!({"path": file_id})), other()).await.unwrap_err();
+        assert!(error.contains("Unknown file id"), "{error}");
+        out(t.inspect_pdf_form(args(json!({"path": file_id})), local()).await);
+
+        let (fields, _) = out(t.inspect_pdf_form(args(json!({"path": file_id})), remote()).await);
+        assert!(fields.contains("name"), "{fields}");
+        let mut save = save;
+        save["source_path"] = json!(file_id);
+        out(t.save_template(args(save), remote()).await);
+
+        let upper = file_id.to_uppercase().replace("FILE:", "file:");
+        let simple = file_id.replace('-', "");
+        for bad in ["file:../x", "file:abc", "file:../../data/vault.db", &upper, &simple, &format!("{file_id}/..")] {
+            let error = t.inspect_pdf_form(args(json!({"path": bad})), remote()).await.unwrap_err();
+            assert!(error.contains("Unknown file id"), "{bad}: {error}");
+        }
+        let missing = format!("file:{}", uuid::Uuid::new_v4());
+        assert!(t.inspect_pdf_form(args(json!({"path": missing})), local()).await.unwrap_err().contains("Unknown"));
+    }
+
+    #[test]
+    fn remote_waits_are_capped() {
+        assert_eq!(wait_timeout(None, false), 300);
+        assert_eq!(wait_timeout(Some(5000), false), TOOL_TIMEOUT_MAX);
+        assert_eq!(wait_timeout(None, true), 50);
+        assert_eq!(wait_timeout(Some(1800), true), 50);
+        assert_eq!(wait_timeout(Some(10), true), 10);
+        assert_eq!(wait_timeout(Some(-3), true), 0);
     }
 }

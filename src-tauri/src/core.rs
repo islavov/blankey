@@ -1,12 +1,13 @@
 //! Application service shared by the MCP server (metadata + examples) and the UI (real values).
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, RwLock};
 use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::config::Config;
 use crate::keychain::SecretStore;
@@ -17,6 +18,10 @@ use crate::vault::{Bindings, FieldInfo, Profiles, Vault};
 
 pub const PROFILE_INPUT: &str = "profile_input";
 pub const FILL: &str = "fill";
+pub const FILE: &str = "file";
+/// Extensions a `file` request can ask for.
+pub const FILE_KINDS: &[&str] = &["pdf", "docx"];
+const UPLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
 
 type RequestHook = Box<dyn Fn(i64) + Send + Sync>;
 type UnlockHook = Box<dyn Fn(&str) + Send + Sync>;
@@ -77,15 +82,80 @@ impl Blankey {
 
     // -- requests ----------------------------------------------------------
 
-    pub fn create_request(&self, kind: &str, payload: Value) -> Result<i64, String> {
+    /// grant: the relay grant of a remote agent; only that agent sees the request and its uploads.
+    pub fn create_request(&self, kind: &str, payload: Value, grant: Option<&str>) -> Result<i64, String> {
         let id = {
             let vault = self.vault();
-            let id = vault.create_request(kind, &payload).map_err(|e| e.to_string())?;
+            let id = vault.create_request(kind, &payload, grant).map_err(|e| e.to_string())?;
             let _ = vault.audit("mcp", &format!("request:{kind}"), &id.to_string());
             id
         };
         (self.on_request.read().unwrap())(id);
         Ok(id)
+    }
+
+    // -- uploads -----------------------------------------------------------
+    // Files the user picked for a `file` request. MCP reads them only by their `file:<uuid>` id.
+
+    pub fn uploads_dir(&self) -> PathBuf {
+        self.config.data_dir.join("uploads")
+    }
+
+    /// One folder per relay grant (hashed: grant ids come from the relay), `local` for local clients.
+    fn upload_owner_dir(&self, grant: Option<&str>) -> PathBuf {
+        let owner = match grant {
+            Some(grant) => data_encoding::HEXLOWER.encode(&Sha256::digest(grant.as_bytes())[..16]),
+            None => "local".into(),
+        };
+        self.uploads_dir().join(owner)
+    }
+
+    /// Copies the picked file into uploads and resolves the request with its id and size. The file name stays
+    /// out of the result (it can be personal data); the returned value adds it for the app.
+    pub fn store_upload(&self, request_id: i64, source: &Path) -> Result<Value, String> {
+        let request = self.vault().get_request(request_id).map_err(|e| e.to_string())?;
+        if request.kind != FILE || request.status != "pending" {
+            return Err(format!("Request {request_id} does not wait for a file"));
+        }
+        let kind = request.payload.get("kind").and_then(Value::as_str).unwrap_or_default();
+        let extension = source.extension().and_then(|e| e.to_str()).unwrap_or_default().to_lowercase();
+        if !FILE_KINDS.contains(&kind) || extension != kind {
+            return Err(format!("Choose a .{kind} file"));
+        }
+        let size = std::fs::metadata(source).map_err(|e| e.to_string())?.len();
+        if size > UPLOAD_MAX_BYTES {
+            return Err(format!("The file is larger than {} MB", UPLOAD_MAX_BYTES / 1024 / 1024));
+        }
+        let uuid = uuid::Uuid::new_v4();
+        let dir = self.upload_owner_dir(request.grant_id.as_deref());
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        std::fs::copy(source, dir.join(format!("{uuid}.{kind}"))).map_err(|e| e.to_string())?;
+        let mut result = json!({"outcome": "uploaded", "file_id": format!("file:{uuid}"), "kind": kind, "size": size});
+        let mut vault = self.vault();
+        vault.resolve_request(request_id, "done", result.clone()).map_err(|e| e.to_string())?;
+        let _ = vault.audit("user", "upload", &format!("request={request_id} file={uuid}"));
+        result["name"] = json!(source.file_name().and_then(|n| n.to_str()).unwrap_or_default());
+        Ok(result)
+    }
+
+    /// The upload behind an exact `file:<uuid>` id. A remote agent (grant) only finds files it asked for; local
+    /// clients, which can read any path anyway, find all.
+    pub fn upload_path(&self, file_id: &str, grant: Option<&str>) -> Result<PathBuf, String> {
+        let unknown = || format!("Unknown file id {file_id:?}; call request_file to get one");
+        let uuid = file_id
+            .strip_prefix("file:")
+            .and_then(|s| uuid::Uuid::parse_str(s).ok().filter(|u| u.hyphenated().to_string() == s))
+            .ok_or_else(unknown)?;
+        let dirs: Vec<PathBuf> = match grant {
+            Some(_) => vec![self.upload_owner_dir(grant)],
+            None => std::fs::read_dir(self.uploads_dir())
+                .map(|entries| entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
+                .unwrap_or_default(),
+        };
+        dirs.iter()
+            .flat_map(|dir| FILE_KINDS.iter().map(move |extension| dir.join(format!("{uuid}.{extension}"))))
+            .find(|path| path.is_file())
+            .ok_or_else(unknown)
     }
 
     // -- metadata (safe for MCP) -------------------------------------------

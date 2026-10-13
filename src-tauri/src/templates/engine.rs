@@ -65,12 +65,18 @@ pub fn resolve(template: &Template, context: &Value) -> (Values, Vec<String>) {
     (values, errors)
 }
 
-pub fn render(template: &Template, context: &Value) -> Result<Rendered, String> {
+/// Renders invented example data: the only case where Typst may download packages (see `typst::compile`).
+pub fn render_example(template: &Template, context: &Value) -> Result<Rendered, String> {
     let (values, errors) = resolve(template, context);
-    render_values(template, &values, errors)
+    render_with(template, &values, errors, true)
 }
 
+/// Renders values that may be real vault data: no network access.
 pub fn render_values(template: &Template, values: &Values, errors: Vec<String>) -> Result<Rendered, String> {
+    render_with(template, values, errors, false)
+}
+
+fn render_with(template: &Template, values: &Values, errors: Vec<String>, downloads: bool) -> Result<Rendered, String> {
     let mut warnings = errors;
     let source = template.source().map_err(|e| format!("{}: {e}", template.source_path().display()))?;
     match template.kind {
@@ -88,7 +94,7 @@ pub fn render_values(template: &Template, values: &Values, errors: Vec<String>) 
         }
         TemplateKind::Typst => {
             let data = serde_json::to_string(values).map_err(|e| e.to_string())?;
-            Ok(Rendered { content: typst::compile(&template.directory, &data)?, extension: "pdf", warnings })
+            Ok(Rendered { content: typst::compile(&template.directory, &data, downloads)?, extension: "pdf", warnings })
         }
         TemplateKind::Docx => {
             let tags = docx::variables(&template.source_path())?;

@@ -17,6 +17,7 @@ export const PLACEHOLDERS = {
 
 const ICONS = {
   activity: '<path d="M8 2.2a5.8 5.8 0 1 1-5.6 4.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M1.6 3.4l.9 3.2 3.1-1" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 4.8V8l2.2 1.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
+  connections: '<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2 8h12M8 2c1.8 1.7 2.6 3.7 2.6 6S9.8 12.3 8 14M8 2C6.2 3.7 5.4 5.7 5.4 8s.8 4.3 2.6 6" fill="none" stroke="currentColor" stroke-width="1.4"/>',
   fillsets: '<rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5 6h6M5 8.5h6M5 11h3.5" stroke="currentColor" stroke-width="1.4"/>',
   documents: '<path d="M4 1.8h5l3 3v9.4H4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9 1.8v3h3" fill="none" stroke="currentColor" stroke-width="1.4"/>',
   templates: '<rect x="2" y="3.5" width="8.5" height="10.5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 3.5V2h8.5v10.5h-3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>',
@@ -33,7 +34,7 @@ export const Icon = ({ name }) => html`<svg viewBox="0 0 16 16" dangerouslySetIn
 // -- app-wide state ------------------------------------------------------------------------
 // Only what crosses components: the rest lives in component state.
 
-export const state = { status: null, page: "activity", search: "", gateReason: "", recoveryKey: null, revision: 0 };
+export const state = { status: null, relay: null, page: "activity", search: "", gateReason: "", recoveryKey: null, revision: 0 };
 const listeners = new Set();
 let version = 0;
 

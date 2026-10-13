@@ -1,9 +1,11 @@
-//! Where the keychain-wrapped vault key lives, and the Touch ID check before using it.
+//! Where the keychain-wrapped vault key and the relay refresh token live, and the Touch ID check before using the
+//! key.
 
 use std::sync::Mutex;
 
 const SERVICE: &str = "blankey";
 const USER: &str = "vault-kek";
+const RELAY_TOKEN_USER: &str = "relay-refresh-token";
 
 pub trait SecretStore: Send {
     fn get(&self) -> Result<Option<String>, String>;
@@ -19,14 +21,23 @@ pub struct OsKeyring {
 
 impl OsKeyring {
     pub fn for_data_dir(data_dir: &std::path::Path, default_dir: &std::path::Path) -> Self {
+        Self::named(USER, data_dir, default_dir)
+    }
+
+    /// The relay's OAuth refresh token, per data dir like the vault key.
+    pub fn relay_token(data_dir: &std::path::Path, default_dir: &std::path::Path) -> Self {
+        Self::named(RELAY_TOKEN_USER, data_dir, default_dir)
+    }
+
+    fn named(user: &str, data_dir: &std::path::Path, default_dir: &std::path::Path) -> Self {
         let canonical = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
         if canonical(data_dir) == canonical(default_dir) {
-            return Self { user: USER.into() };
+            return Self { user: user.into() };
         }
         use sha2::{Digest, Sha256};
         let digest = Sha256::digest(data_dir.to_string_lossy().as_bytes());
         let tag: String = digest.iter().take(6).map(|b| format!("{b:02x}")).collect();
-        Self { user: format!("{USER}-{tag}") }
+        Self { user: format!("{user}-{tag}") }
     }
 
     fn entry(&self) -> Result<keyring::Entry, String> {
