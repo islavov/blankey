@@ -29,12 +29,15 @@ Workflow:
 3. save_template with Jinja bindings per field, e.g. "{{ applicant.address.city }}",
    "{{ 'X' if applicant.citizenship == 'българско' }}", "{{ loan.amount | money }}".
    Checkboxes: any truthy value checks them. Radio groups: return the state name, e.g. "/Choice2".
+   Name templates, roles and variables for the kind of document and party, not for the case at hand:
+   a template is reused across many fills.
 4. save_example + render_example to fill the template with invented example data and look at the result.
 5. check_bindings against real profiles: reports missing/empty keys, overflow (fit_ratio > 1) and
    missing glyphs, without revealing values.
 6. request_profile_input to ask the user to type missing data into the app, then wait_request.
 7. request_fill to have the user fill the template into a named fill set and generate the real document.
-   Documents are always generated from a fill set.
+   Pick the profile for every role yourself from list_profiles and pass it in profiles; do not ask the
+   user to choose. Documents are always generated from a fill set.
 The user exports real documents from the app; you only get their metadata.
 
 Filled .docx documents (contracts, decisions...):
@@ -47,7 +50,9 @@ Filled .docx documents (contracts, decisions...):
 3. request_fill for one or more templates: the user sees every blank with its context and picks the source
    (vault path, your literal, or the template default). Pass non-personal data you know (amounts, rates,
    terms, dates, city) in values, and vault paths in paths. Never put personal data in values: ask for it
-   with request_profile_input instead. wait_request returns the fill set id and document ids.
+   with request_profile_input instead. Cover as many vars as you can before calling, and for the rest ask
+   the user whether to give the value now or leave it to be set in Blankey. wait_request returns the fill
+   set id and document ids.
 4. list_fill_sets shows saved fill sets (sources only); request_fill with fill_set_id reopens one.
 
 Flat PDFs (no form fields, e.g. exports or scans):
@@ -382,7 +387,9 @@ impl Tools {
         .await
     }
 
-    #[tool(description = "List saved templates.")]
+    #[tool(
+        description = "List saved templates. Show the user each template's id next to its name, so they can copy it\nand refer to the template by id later."
+    )]
     async fn list_templates(&self) -> ToolResult {
         self.run(|app| {
             let list: Vec<Value> = app
@@ -461,7 +468,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Make a PDF form template from a flat PDF: each box {name, page, rect: [x0, y0, x1, y1], type: text|check,\nmax_len?, comb?} (PDF points, origin bottom-left) becomes a form field named `name`. fields maps those names\nto Jinja expressions over roles; labels maps them to human labels for the fill form. Omit source_path to\nrebuild from the flat PDF saved earlier (replaces all boxes). Returns the template and its pages with the\nboxes outlined, to check placement."
+        description = "Make a PDF form template from a flat PDF: each box {name, page, rect: [x0, y0, x1, y1], type: text|check,\nmax_len?, comb?} (PDF points, origin bottom-left) becomes a form field named `name`. fields maps those names\nto Jinja expressions over roles; labels maps them to human labels for the fill form. Name boxes and roles\ngenerically (applicant, amount, issue_date), not after this document's values. Omit source_path to\nrebuild from the flat PDF saved earlier (replaces all boxes). Returns the template and its pages with the\nboxes outlined, to check placement."
     )]
     async fn save_pdf_overlay_template(&self, Parameters(a): Parameters<SavePdfOverlayArgs>) -> ToolResult {
         self.run(move |app| {
@@ -519,7 +526,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Create or replace a template. kind: pdf_form (source_path = blank PDF form), typst (source_text,\nreads `json(bytes(sys.inputs.data))` for the field values) or docx (source_path, docxtpl Jinja tags).\nfields maps PDF field names / template variables to Jinja expressions over the roles.\nroles maps role names (e.g. applicant, loan) to a short description. Omit the source to keep\nthe existing one."
+        description = "Create or replace a template. kind: pdf_form (source_path = blank PDF form), typst (source_text,\nreads `json(bytes(sys.inputs.data))` for the field values) or docx (source_path, docxtpl Jinja tags).\nfields maps PDF field names / template variables to Jinja expressions over the roles.\nroles maps role names (e.g. applicant, loan) to a short description. Name the template, its roles\nand its variables for the kind of document and party (applicant, counterparty, amount, start_date),\nnot for the particular case in front of you, so the template and its fill sets work for other\ncases too. Omit the source to keep the existing one."
     )]
     async fn save_template(&self, Parameters(a): Parameters<SaveTemplateArgs>) -> ToolResult {
         self.run(move |app| {
@@ -552,7 +559,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Create a docx template from a filled .docx: each replacement {find, var, occurrence?} replaces the\ntext with {{ var }} (occurrence is 1-based across the document; omit it to replace all). Replacements\napply in order, so put longer spans first (\".......2026\" before \"......\"). fields maps\nvar -> default Jinja expression over roles; labels maps var -> human label shown in the fill form."
+        description = "Create a docx template from a filled .docx: each replacement {find, var, occurrence?} replaces the\ntext with {{ var }} (occurrence is 1-based across the document; omit it to replace all). Replacements\napply in order, so put longer spans first (\".......2026\" before \"......\"). fields maps\nvar -> default Jinja expression over roles; labels maps var -> human label shown in the fill form.\nName vars and roles generically (counterparty_name, amount, signing_date), not after the names or\nvalues in this particular document."
     )]
     async fn save_docx_template(&self, Parameters(a): Parameters<SaveDocxArgs>) -> ToolResult {
         self.run(move |app| {
@@ -686,7 +693,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Open the fill form for one or more templates. profiles maps every role to a profile id. values are\nnon-personal literals per var (e.g. {\"loan_amount\": \"34 000\"}); paths pick vault fields per var\n(e.g. {\"borrower_egn\": \"manager.egn\"}). Other vars start from the template default, or from the saved\nfill set when fill_set_id is given. name names the fill set. Returns a request id; call wait_request."
+        description = "Open the fill form for one or more templates. profiles maps every role to a profile id: find the\nmatching profiles yourself (list_profiles, describe_profile), pick one per role and pass them here instead of\nasking the user to choose; the user confirms in the form. values are non-personal literals per var\n(e.g. {\"loan_amount\": \"34 000\"}); paths pick vault fields per var (e.g. {\"borrower_egn\": \"manager.egn\"}).\nOther vars start from the template default, or from the saved fill set when fill_set_id is given.\nAim to have every var covered before calling: for each var you cannot resolve from the vault or the\nconversation, ask the user whether to give the value now or leave it to be set in Blankey.\nname names the fill set. Returns a request id; call wait_request."
     )]
     async fn request_fill(&self, Parameters(a): Parameters<RequestFillArgs>) -> ToolResult {
         self.run(move |app| {
