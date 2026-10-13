@@ -3,6 +3,7 @@
 use std::io::Write;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, RwLock};
+use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 use serde_json::{json, Map, Value};
@@ -18,19 +19,27 @@ pub const PROFILE_INPUT: &str = "profile_input";
 pub const FILL: &str = "fill";
 
 type RequestHook = Box<dyn Fn(i64) + Send + Sync>;
+type UnlockHook = Box<dyn Fn(&str) + Send + Sync>;
 
 pub struct Blankey {
     pub config: Config,
     vault: Mutex<Vault>,
     pub templates: TemplateStore,
     on_request: RwLock<RequestHook>,
+    on_unlock_needed: RwLock<UnlockHook>,
 }
 
 impl Blankey {
     pub fn new(config: Config, secrets: Box<dyn SecretStore>) -> Result<Self, String> {
         let vault = Vault::open(&config.db_path(), secrets).map_err(|e| e.to_string())?;
         let templates = TemplateStore::new(config.templates_dir());
-        Ok(Self { config, vault: Mutex::new(vault), templates, on_request: RwLock::new(Box::new(|_| {})) })
+        Ok(Self {
+            config,
+            vault: Mutex::new(vault),
+            templates,
+            on_request: RwLock::new(Box::new(|_| {})),
+            on_unlock_needed: RwLock::new(Box::new(|_| {})),
+        })
     }
 
     pub fn vault(&self) -> MutexGuard<'_, Vault> {
@@ -39,6 +48,27 @@ impl Blankey {
 
     pub fn set_request_hook(&self, hook: impl Fn(i64) + Send + Sync + 'static) {
         *self.on_request.write().unwrap() = Box::new(hook);
+    }
+
+    /// Called with the reason when a caller needs the vault unlocked; the app shows the unlock screen.
+    pub fn set_unlock_hook(&self, hook: impl Fn(&str) + Send + Sync + 'static) {
+        *self.on_unlock_needed.write().unwrap() = Box::new(hook);
+    }
+
+    /// Asks the user to unlock and waits up to `timeout` for it. True once the vault is unlocked.
+    pub fn wait_for_unlock(&self, reason: &str, timeout: Duration) -> bool {
+        if self.vault().unlocked() {
+            return true;
+        }
+        (self.on_unlock_needed.read().unwrap())(reason);
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(200));
+            if self.vault().unlocked() {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn audit(&self, actor: &str, action: &str, target: &str) {

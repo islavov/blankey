@@ -22,6 +22,10 @@ use crate::vault::{Profiles, Request};
 
 pub const INSTRUCTIONS: &str = r#"Blankey keeps personal data (PII) encrypted in a local vault and renders document templates.
 You never see real values. You see profiles, their field keys, labels, types and value lengths.
+While the vault is locked only vault_status and the request tools answer at once (request_profile_input,
+request_fill, wait_request, get_request, list_requests): a request opens Blankey and asks the user to
+unlock. Any other tool opens the unlock screen and waits up to 50 s for the user; if it still reports the
+vault as locked, ask the user to unlock Blankey and call again.
 
 Workflow:
 1. inspect_pdf_form on a blank PDF form (or write a Typst template) to learn its fields.
@@ -339,25 +343,44 @@ pub struct ListRequestsArgs {
 #[derive(Clone)]
 pub struct Tools {
     app: Arc<Blankey>,
+    unlock_wait: Duration,
 }
 
 impl Tools {
     pub fn new(app: Arc<Blankey>) -> Self {
-        Self { app }
+        Self { app, unlock_wait: UNLOCK_WAIT }
+    }
+
+    /// Reading or changing data needs the vault unlocked: a locked vault opens Blankey's unlock screen and the
+    /// call waits for the user. A client can still connect, list the tools and send requests while locked.
+    async fn run(&self, f: impl FnOnce(&Arc<Blankey>) -> ToolResult + Send + 'static) -> ToolResult {
+        let app = self.app.clone();
+        let wait = self.unlock_wait;
+        let unlocked = tokio::task::spawn_blocking(move || app.wait_for_unlock(UNLOCK_REASON, wait)).await;
+        if !unlocked.unwrap_or(false) {
+            return Err(LOCKED.into());
+        }
+        self.run_any(f).await
     }
 
     /// Vault, PDF and Typst work is blocking.
-    async fn run(&self, f: impl FnOnce(&Arc<Blankey>) -> ToolResult + Send + 'static) -> ToolResult {
+    async fn run_any(&self, f: impl FnOnce(&Arc<Blankey>) -> ToolResult + Send + 'static) -> ToolResult {
         let app = self.app.clone();
         tokio::task::spawn_blocking(move || f(&app)).await.unwrap_or_else(|e| Err(format!("Tool failed: {e}")))
     }
 }
 
+/// How long a tool call waits for the user to unlock the vault.
+const UNLOCK_WAIT: Duration = Duration::from_secs(50);
+const UNLOCK_REASON: &str = "Your AI assistant needs the vault. Unlock Blankey to continue.";
+const LOCKED: &str =
+    "The vault is locked and the user has not unlocked Blankey yet. Ask them to unlock it, then call again.";
+
 #[tool_router]
 impl Tools {
-    #[tool(description = "Whether the vault exists and is unlocked. Real-value checks need it unlocked.")]
+    #[tool(description = "Whether the vault exists and is unlocked. Every other tool needs it unlocked.")]
     async fn vault_status(&self) -> ToolResult {
-        self.run(|app| {
+        self.run_any(|app| {
             let vault = app.vault();
             text(&json!({"initialized": vault.initialized(), "unlocked": vault.unlocked()}))
         })
@@ -659,7 +682,7 @@ impl Tools {
         description = "Ask the user to type data into the app. fields: [{key, label, type, required, hint}] with type one of\ntext, number, date, bool, egn, iban, email, phone. Give profile_id to extend a profile, or\nnew_profile_name to create one. Returns a request id; call wait_request for the outcome."
     )]
     async fn request_profile_input(&self, Parameters(a): Parameters<RequestProfileInputArgs>) -> ToolResult {
-        self.run(move |app| {
+        self.run_any(move |app| {
             let new_name = a.new_profile_name.filter(|n| !n.trim().is_empty());
             if a.profile_id.is_none() && new_name.is_none() {
                 return Err("Pass profile_id or new_profile_name".into());
@@ -696,7 +719,7 @@ impl Tools {
         description = "Open the fill form for one or more templates. profiles maps every role to a profile id: find the\nmatching profiles yourself (list_profiles, describe_profile), pick one per role and pass them here instead of\nasking the user to choose; the user confirms in the form. values are non-personal literals per var\n(e.g. {\"loan_amount\": \"34 000\"}); paths pick vault fields per var (e.g. {\"borrower_egn\": \"manager.egn\"}).\nOther vars start from the template default, or from the saved fill set when fill_set_id is given.\nAim to have every var covered before calling: for each var you cannot resolve from the vault or the\nconversation, ask the user whether to give the value now or leave it to be set in Blankey.\nname names the fill set. Returns a request id; call wait_request."
     )]
     async fn request_fill(&self, Parameters(a): Parameters<RequestFillArgs>) -> ToolResult {
-        self.run(move |app| {
+        self.run_any(move |app| {
             let name = a.name.trim().to_string();
             let loaded = app.fill_templates(&a.templates)?;
             if loaded.is_empty() || name.is_empty() {
@@ -791,12 +814,12 @@ impl Tools {
 
     #[tool(description = "Current status of a request.")]
     async fn get_request(&self, Parameters(a): Parameters<RequestArgs>) -> ToolResult {
-        self.run(move |app| text(&request_view(&app.vault().get_request(a.request_id).map_err(string)?))).await
+        self.run_any(move |app| text(&request_view(&app.vault().get_request(a.request_id).map_err(string)?))).await
     }
 
     #[tool(description = "List requests, optionally filtered by status (pending, done, cancelled).")]
     async fn list_requests(&self, Parameters(a): Parameters<ListRequestsArgs>) -> ToolResult {
-        self.run(move |app| {
+        self.run_any(move |app| {
             let requests = app.vault().list_requests(a.status.as_deref()).map_err(string)?;
             text(&requests.iter().map(request_view).collect::<Vec<_>>())
         })
@@ -826,6 +849,7 @@ pub mod tests {
     use crate::vault::FieldInput;
     use serde::de::DeserializeOwned;
     use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     pub const PASSWORD: &str = "correct horse battery staple";
     const SENTINEL_NAME: &str = "Sentinel Hiddenwell";
@@ -869,6 +893,31 @@ pub mod tests {
         let texts = result.content.iter().filter_map(|c| c.as_text()).map(|t| t.text.as_str()).collect();
         let images = result.content.iter().filter(|c| c.as_image().is_some()).count();
         (texts, images)
+    }
+
+    #[tokio::test]
+    async fn locked_vault_allows_status_and_requests_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        app.vault().lock();
+        let asked = Arc::new(AtomicUsize::new(0));
+        let counter = asked.clone();
+        app.set_unlock_hook(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let t = Tools { app: app.clone(), unlock_wait: Duration::ZERO };
+        let (status, _) = out(t.vault_status().await);
+        assert!(status.contains("\"unlocked\": false"), "{status}");
+        for result in [t.list_profiles().await, t.list_templates().await, t.list_fill_sets().await] {
+            let err = result.err().unwrap();
+            assert!(err.contains("locked"), "{err}");
+        }
+        assert_eq!(asked.load(Ordering::SeqCst), 3);
+        let request = json!({"new_profile_name": "Someone", "fields": [{"key": "name"}], "reason": "unlock"});
+        let (created, _) = out(t.request_profile_input(args(request)).await);
+        assert!(created.contains("pending"), "{created}");
+        let (listed, _) = out(t.list_requests(args(json!({}))).await);
+        assert!(listed.contains("pending"), "{listed}");
     }
 
     #[tokio::test]

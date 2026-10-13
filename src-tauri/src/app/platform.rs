@@ -25,7 +25,12 @@ pub fn connect_claude_desktop() -> Result<PathBuf, String> {
         .ok_or("The config is not a JSON object")?
         .entry("mcpServers")
         .or_insert_with(|| json!({}));
-    servers["blankey"] = json!({"command": exe, "args": ["mcp"]});
+    let mut server = json!({"command": exe, "args": ["mcp"]});
+    // the bridge and the app it starts must use this app's data dir
+    if let Some(dir) = std::env::var_os("BLANKEY_DATA_DIR") {
+        server["env"] = json!({"BLANKEY_DATA_DIR": dir.to_string_lossy()});
+    }
+    servers["blankey"] = server;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
