@@ -23,7 +23,7 @@ DISTRO="${VERSION_CODENAME:-$ID}"
 scripts/licenses.sh
 scripts/stage-ui.sh
 cd src-tauri
-cargo tauri build --config tauri.release.conf.json "$@"
+cargo tauri build --config tauri.release.conf.json --bundles deb "$@"
 mkdir -p "$ROOT/dist"
 for deb in "${CARGO_TARGET_DIR:-target}"/release/bundle/deb/*.deb; do
     name="$(basename "$deb" .deb)"

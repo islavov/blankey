@@ -1,12 +1,26 @@
 {
   "bundle": {
     "targets": [
-      "deb"
+      "deb",
+      "rpm"
     ],
     "linux": {
       "deb": {
         "depends": [
           "libayatana-appindicator3-1"
+        ],
+        "files": {
+          "/usr/lib/blankey/libpdfium.so": "pdfium/libpdfium.so",
+          "/usr/share/doc/blankey/THIRD_PARTY_LICENSES.html": "THIRD_PARTY_LICENSES.html"
+        }
+      },
+      "rpm": {
+        "depends": [
+          "webkit2gtk4.1",
+          "gtk3",
+          "libayatana-appindicator-gtk3",
+          "librsvg2",
+          "dbus-libs"
         ],
         "files": {
           "/usr/lib/blankey/libpdfium.so": "pdfium/libpdfium.so",
