@@ -36,8 +36,10 @@ They need `cargo install tauri-cli --version "^2"` and `cargo install cargo-abou
 | macOS (Apple Silicon) | `scripts/build_mac.sh` | `.dmg` |
 | Windows x86-64 | `scripts/build_windows.ps1` | NSIS `.exe` and `.msi` |
 | Debian 13 trixie, Ubuntu 26.04 | `scripts/build_deb.sh --install-deps` (on that release) | `.deb` per release |
+| Fedora, AlmaLinux 10 (RHEL 10) | `scripts/build_rpm.sh --install-deps` (on that release) | `.rpm` per release |
 
-`scripts/build_deb_docker.sh debian:trixie` (or `ubuntu:26.04`) runs the .deb build in a container locally.
+`scripts/build_linux_docker.sh debian:trixie` (or `ubuntu:26.04`, `fedora:latest`, `almalinux:10`) runs the Linux
+build in a container locally. On RHEL 10 clones the `.rpm` needs EPEL for `libayatana-appindicator-gtk3`.
 PDFium is fetched for the platform and bundled next to the app. `.docx` output is converted to PDF when
 LibreOffice is installed.
 
