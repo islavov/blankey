@@ -30,8 +30,9 @@ const MCP_TIMEOUT: Duration = Duration::from_secs(58);
 /// the relay gives up on an approval after 120 s
 const APPROVAL_WINDOW: Duration = Duration::from_secs(120);
 const MAX_BODY: usize = 64 << 20;
-const FORWARDED_HEADERS: [&str; 5] =
-    ["content-type", "accept", "mcp-session-id", "mcp-protocol-version", "last-event-id"];
+/// Plus every `mcp-*` header: session and version, and the Mcp-Method/Mcp-Name/Mcp-Param-* that MCP 2026-07-28
+/// requires.
+const FORWARDED_HEADERS: [&str; 3] = ["content-type", "accept", "last-event-id"];
 const RETURNED_HEADERS: [&str; 2] = ["content-type", "mcp-session-id"];
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -233,7 +234,7 @@ async fn forward(relay: &Relay, frame: McpFrame) -> HttpReply {
         .header(header::HOST, format!("127.0.0.1:{}", relay.app.config.port));
     for (name, value) in &frame.headers {
         let name = name.to_ascii_lowercase();
-        if FORWARDED_HEADERS.contains(&name.as_str()) {
+        if FORWARDED_HEADERS.contains(&name.as_str()) || name.starts_with("mcp-") {
             builder = builder.header(name, value);
         }
     }

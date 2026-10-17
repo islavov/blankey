@@ -134,8 +134,9 @@ Relay → app, for each HTTP request the agent sends to `mcp_url`:
  "mcp-session-id": "…", "mcp-protocol-version": "2025-06-18"}, "body": "<JSON-RPC text>"}
 ```
 
-Forward only `content-type`, `accept`, `mcp-session-id`, `mcp-protocol-version` and `last-event-id`; drop any absent
-ones. `method` is `POST`, `GET` or `DELETE`.
+Forward `content-type`, `accept`, `last-event-id` and every `mcp-*` header (`mcp-session-id`, `mcp-protocol-version`,
+and the `mcp-method`, `mcp-name` and `mcp-param-*` that MCP 2026-07-28 requires); drop all others. The app forwards the
+same set to its MCP server. `method` is `POST`, `GET` or `DELETE`.
 
 App → relay:
 

@@ -237,6 +237,16 @@ async fn signs_in_and_answers_frames() {
     let body: Value = serde_json::from_str(reply["body"].as_str().unwrap()).unwrap();
     assert!(body["result"]["instructions"].as_str().unwrap().contains("Blankey"));
 
+    // MCP 2026-07-28 (ChatGPT): no initialize; server/discover needs the Mcp-Method header.
+    let discover = json!({"jsonrpc": "2.0", "id": "d", "method": "server/discover", "params": {"_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}}}});
+    let mut frame = mcp_frame("r-d", "g-ok", discover);
+    frame["headers"]["mcp-protocol-version"] = json!("2026-07-28");
+    frame["headers"]["mcp-method"] = json!("server/discover");
+    let reply = ask(&mut socket, frame).await;
+    assert_eq!(reply["status"], 200, "{reply}");
+    assert!(reply["body"].as_str().unwrap().contains("supportedVersions"));
+
     let reply = ask(&mut socket, mcp_frame("r-2", "g-unknown", initialize)).await;
     assert_eq!(reply["status"], 403);
     let body: Value = serde_json::from_str(reply["body"].as_str().unwrap()).unwrap();
