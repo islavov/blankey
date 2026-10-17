@@ -198,8 +198,12 @@ pub(super) fn get_json<T: serde::de::DeserializeOwned>(agent: &ureq::Agent, url:
     parse(&read(agent.get(url).set("Authorization", &format!("Bearer {token}")).call())?)
 }
 
+/// Only the status counts: reading the empty body of a 204 through some proxies fails with "unexpected end of file".
 pub(super) fn delete(agent: &ureq::Agent, url: &str, token: &str) -> Http<()> {
-    read(agent.delete(url).set("Authorization", &format!("Bearer {token}")).call()).map(|_| ())
+    match agent.delete(url).set("Authorization", &format!("Bearer {token}")).call() {
+        Ok(_) => Ok(()),
+        Err(e) => read(Err(e)).map(|_| ()),
+    }
 }
 
 pub(super) fn post_json(agent: &ureq::Agent, url: &str, token: &str, body: &Value) -> Http<String> {

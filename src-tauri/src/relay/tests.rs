@@ -47,6 +47,8 @@ struct StubState {
     inbox: Mutex<Vec<(String, String, Vec<u8>)>>,
     /// the next blob download stops halfway
     cut_download: AtomicBool,
+    /// the next inbox delete goes through but answers 500, as if the reply was lost
+    lose_delete_reply: AtomicBool,
 }
 
 struct Stub {
@@ -69,6 +71,7 @@ impl Stub {
             revoked_links: Mutex::default(),
             inbox: Mutex::default(),
             cut_download: AtomicBool::new(false),
+            lose_delete_reply: AtomicBool::new(false),
         });
         let routes = Router::new()
             .route("/.well-known/blankey-relay", get(discovery))
@@ -241,6 +244,9 @@ async fn delete_submission(
     let mut inbox = stub.inbox.lock().unwrap();
     let before = inbox.len();
     inbox.retain(|(id, _, _)| *id != sid);
+    if stub.lose_delete_reply.swap(false, Ordering::SeqCst) {
+        return Ok(StatusCode::INTERNAL_SERVER_ERROR);
+    }
     Ok(if inbox.len() < before { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND })
 }
 
@@ -512,12 +518,26 @@ async fn collection_links_reach_the_device() {
     assert_eq!(opened.values["name"], "Jane Roe");
     assert_eq!(opened.files[0].name, "id.pdf");
 
+    assert!(app.unaccepted_submissions().is_empty());
+
     // a submission that arrived while the app was offline lands on the next connection
     stub.state.inbox.lock().unwrap().push(("sub-2".into(), LINK_ID.into(), sealed(json!({"name": "John Doe"}))));
     drop(socket);
-    let _socket = stub.accept().await;
+    let mut socket = stub.accept().await;
     assert_eq!(wait_for_submissions(&app, 2).await.len(), 2);
     assert_eq!(app.vault().get_link(LINK_ID).unwrap().received, 2);
+
+    // the relay deletes it but the answer is lost: the next drain still makes the request
+    stub.state.lose_delete_reply.store(true, Ordering::SeqCst);
+    stub.state.inbox.lock().unwrap().push(("sub-3".into(), LINK_ID.into(), sealed(json!({"name": "Ann Lee"}))));
+    socket.send(inbox_frame("sub-3")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(stub.state.inbox.lock().unwrap().is_empty());
+    assert_eq!(wait_for_submissions(&app, 0).await.len(), 2);
+    assert_eq!(app.unaccepted_submissions(), [(LINK_ID.to_string(), "sub-3".to_string())]);
+    socket.send(inbox_frame("sub-3")).await.unwrap();
+    assert_eq!(wait_for_submissions(&app, 3).await.len(), 3);
+    assert!(app.unaccepted_submissions().is_empty());
 
     relay.revoke_link(LINK_ID).await.unwrap();
     assert_eq!(*stub.state.revoked_links.lock().unwrap(), [LINK_ID]);

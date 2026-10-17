@@ -285,6 +285,26 @@ impl Blankey {
         Ok(self.inbox_dir().join(format!("{sid}.bin")))
     }
 
+    /// `inbox/<sid>.link` holds the link id from the download until the request exists, so a submission the relay
+    /// already deleted still becomes a request on the next drain.
+    fn marker_path(&self, sid: &str) -> Result<PathBuf, String> {
+        Ok(self.inbox_path(sid)?.with_extension("link"))
+    }
+
+    /// (link id, sid) of downloads that have no request yet.
+    pub fn unaccepted_submissions(&self) -> Vec<(String, String)> {
+        let Ok(entries) = std::fs::read_dir(self.inbox_dir()) else { return Vec::new() };
+        entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                let sid = path.file_stem()?.to_str()?.to_string();
+                (path.extension()? == "link" && path.with_extension("bin").exists()).then_some(())?;
+                Some((std::fs::read_to_string(&path).ok()?.trim().to_string(), sid))
+            })
+            .collect()
+    }
+
     /// Downloads the sealed blob to `inbox/<sid>.bin`; already there means an earlier drain got it. Blocking.
     pub fn download_submission(&self, agent: &ureq::Agent, entry: &InboxEntry) -> Result<(), String> {
         let path = self.inbox_path(&entry.sid)?;
@@ -306,6 +326,7 @@ impl Blankey {
             }
             file.flush().map_err(|e| e.to_string())?;
             file.sync_all().map_err(|e| e.to_string())?;
+            std::fs::write(self.marker_path(&entry.sid)?, &entry.link_id).map_err(|e| e.to_string())?;
             std::fs::rename(&part, &path).map_err(|e| e.to_string())
         })();
         if result.is_err() {
@@ -323,7 +344,9 @@ impl Blankey {
             vault.get_link(link_id).map(|l| l.title).unwrap_or_else(|_| "a collection link".into())
         };
         let payload = json!({"link_id": link_id, "sid": sid, "reason": format!("Submission for {title}")});
-        self.create_request(LINK_SUBMISSION, payload, None)
+        let id = self.create_request(LINK_SUBMISSION, payload, None)?;
+        let _ = std::fs::remove_file(self.marker_path(sid)?);
+        Ok(id)
     }
 
     fn submission_request(&self, request_id: i64) -> Result<(String, String), String> {

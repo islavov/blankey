@@ -680,6 +680,7 @@ impl Relay {
             Ok(entries) => entries,
             Err(e) => return eprintln!("relay: cannot list the inbox: {}", e.message()),
         };
+        let listed: Vec<String> = entries.iter().map(|e| e.sid.clone()).collect();
         for entry in entries {
             let (app, agent, pulled) = (self.app.clone(), self.download.clone(), entry.clone());
             if let Err(e) = blocking(move || app.download_submission(&agent, &pulled)).await {
@@ -703,6 +704,16 @@ impl Relay {
             let app = self.app.clone();
             let accepted = blocking(move || app.accept_submission(&entry.link_id, &entry.sid)).await;
             if let Err(e) = accepted {
+                eprintln!("relay: cannot store a submission: {e}");
+            }
+        }
+        // downloaded earlier, gone from the relay (its delete went through even if the answer was lost), no request yet
+        for (link_id, sid) in self.app.unaccepted_submissions() {
+            if listed.contains(&sid) {
+                continue;
+            }
+            let app = self.app.clone();
+            if let Err(e) = blocking(move || app.accept_submission(&link_id, &sid)).await {
                 eprintln!("relay: cannot store a submission: {e}");
             }
         }
