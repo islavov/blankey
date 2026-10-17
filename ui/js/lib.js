@@ -4,6 +4,7 @@ export { html };
 
 export const when = (ts) => (ts ? String(ts).replace("T", " ").slice(0, 16) : "");
 export const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+export const megabytes = (bytes) => `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 
 export const KIND_NAMES = { docx: "Word", pdf_form: "PDF", typst: "Typst" };
 
@@ -22,6 +23,7 @@ const ICONS = {
   documents: '<path d="M4 1.8h5l3 3v9.4H4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9 1.8v3h3" fill="none" stroke="currentColor" stroke-width="1.4"/>',
   templates: '<rect x="2" y="3.5" width="8.5" height="10.5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.5 3.5V2h8.5v10.5h-3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>',
   profiles: '<circle cx="8" cy="5.5" r="2.8" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2.8 14c.6-2.8 2.7-4.2 5.2-4.2s4.6 1.4 5.2 4.2" fill="none" stroke="currentColor" stroke-width="1.4"/>',
+  links: '<path d="M6.8 9.2a2.8 2.8 0 0 0 4 0l2.3-2.3a2.8 2.8 0 0 0-4-4l-1 1" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M9.2 6.8a2.8 2.8 0 0 0-4 0L2.9 9.1a2.8 2.8 0 0 0 4 4l1-1" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
   person: '<circle cx="8" cy="5.2" r="3" fill="currentColor"/><path d="M2.5 14.5c.6-3 2.8-4.6 5.5-4.6s4.9 1.6 5.5 4.6z" fill="currentColor"/>',
   doc: '<path d="M3.5 1.5h5.5l3.5 3.5v9.5h-9z" fill="currentColor"/><path d="M5.5 8h5M5.5 10.5h5" stroke="var(--bg)" stroke-width="1.2"/>',
   sun: '<circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',

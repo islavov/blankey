@@ -52,7 +52,7 @@ fn read(result: Result<ureq::Response, ureq::Error>) -> Http<String> {
     }
 }
 
-fn parse<T: serde::de::DeserializeOwned>(text: &str) -> Http<T> {
+pub(super) fn parse<T: serde::de::DeserializeOwned>(text: &str) -> Http<T> {
     serde_json::from_str(text).map_err(|e| HttpError::Transport(format!("unexpected answer from the relay: {e}")))
 }
 
@@ -194,7 +194,19 @@ fn platform() -> &'static str {
     }
 }
 
-fn post_json(agent: &ureq::Agent, url: &str, token: &str, body: &Value) -> Http<String> {
+pub(super) fn get_json<T: serde::de::DeserializeOwned>(agent: &ureq::Agent, url: &str, token: &str) -> Http<T> {
+    parse(&read(agent.get(url).set("Authorization", &format!("Bearer {token}")).call())?)
+}
+
+/// Only the status counts: reading the empty body of a 204 through some proxies fails with "unexpected end of file".
+pub(super) fn delete(agent: &ureq::Agent, url: &str, token: &str) -> Http<()> {
+    match agent.delete(url).set("Authorization", &format!("Bearer {token}")).call() {
+        Ok(_) => Ok(()),
+        Err(e) => read(Err(e)).map(|_| ()),
+    }
+}
+
+pub(super) fn post_json(agent: &ureq::Agent, url: &str, token: &str, body: &Value) -> Http<String> {
     read(
         agent
             .post(url)

@@ -4,6 +4,7 @@ pub mod core;
 pub mod crypto;
 pub mod fieldtypes;
 pub mod keychain;
+pub mod links;
 pub mod mcp;
 pub mod relay;
 pub mod render;

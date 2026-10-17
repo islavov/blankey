@@ -10,11 +10,12 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::config::Config;
+use crate::fieldtypes;
 use crate::keychain::SecretStore;
 use crate::render::preview;
 use crate::templates::engine::{self, BindingReport, Rendered};
 use crate::templates::{bindings, fill, yaml_dump, Template, TemplateStore};
-use crate::vault::{Bindings, FieldInfo, Profiles, Vault};
+use crate::vault::{Bindings, FieldInfo, FieldInput, Profiles, Vault};
 
 pub const PROFILE_INPUT: &str = "profile_input";
 pub const FILL: &str = "fill";
@@ -22,6 +23,20 @@ pub const FILE: &str = "file";
 /// Extensions a `file` request can ask for.
 pub const FILE_KINDS: &[&str] = &["pdf", "docx"];
 const UPLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
+
+/// The outcome of saving typed values into a profile.
+pub enum ProfileSave {
+    /// nothing was saved
+    Problems(Vec<String>),
+    /// per field: {key, length, status: saved|skipped}
+    Saved { profile_id: i64, fields: Vec<Value> },
+}
+
+/// Where typed values go: an existing profile, or a new one with this name and kind.
+pub enum Target<'a> {
+    Existing(i64),
+    New { name: &'a str, kind: &'a str },
+}
 
 type RequestHook = Box<dyn Fn(i64) + Send + Sync>;
 type UnlockHook = Box<dyn Fn(&str) + Send + Sync>;
@@ -92,6 +107,56 @@ impl Blankey {
         };
         (self.on_request.read().unwrap())(id);
         Ok(id)
+    }
+
+    /// Validates `values` against `specs` ([{key, label, type, required}]) and saves them into the target profile.
+    pub fn save_profile_values(
+        &self,
+        specs: &[Value],
+        values: &IndexMap<String, String>,
+        target: Target,
+    ) -> Result<ProfileSave, String> {
+        let mut errors = Vec::new();
+        let mut items = Vec::new();
+        for spec in specs {
+            let key = spec.get("key").and_then(Value::as_str).unwrap_or("");
+            let label = spec.get("label").and_then(Value::as_str).unwrap_or("");
+            let shown = if label.is_empty() { key } else { label };
+            let field_type =
+                spec.get("type").and_then(Value::as_str).filter(|t| fieldtypes::is_type(t)).unwrap_or("text");
+            let value = values.get(key).map(|v| v.trim().to_string()).unwrap_or_default();
+            if spec.get("required").and_then(Value::as_bool).unwrap_or(false) && value.is_empty() {
+                errors.push(format!("{shown}: required"));
+            } else if let Some(message) = fieldtypes::validate(field_type, &value) {
+                errors.push(format!("{shown}: {message}"));
+            }
+            items.push(FieldInput::new(key, &value, label, field_type));
+        }
+        if matches!(target, Target::New { name, .. } if name.trim().is_empty()) {
+            errors.push("Enter a profile name".into());
+        }
+        if !errors.is_empty() {
+            return Ok(ProfileSave::Problems(errors));
+        }
+        let mut vault = self.vault();
+        let profile_id = match target {
+            Target::Existing(id) => vault.get_profile(id).map_err(|e| e.to_string())?.id,
+            Target::New { name, kind } => vault.create_profile(name.trim(), kind).map_err(|e| e.to_string())?,
+        };
+        vault.set_values(profile_id, &items).map_err(|e| e.to_string())?;
+        let lengths: IndexMap<String, i64> =
+            vault.describe(profile_id).map_err(|e| e.to_string())?.into_iter().map(|f| (f.key, f.length)).collect();
+        let fields = items
+            .iter()
+            .map(|item| {
+                json!({
+                    "key": item.key,
+                    "length": lengths.get(&item.key).copied().unwrap_or(0),
+                    "status": if item.value.is_empty() { "skipped" } else { "saved" },
+                })
+            })
+            .collect();
+        Ok(ProfileSave::Saved { profile_id, fields })
     }
 
     // -- uploads -----------------------------------------------------------

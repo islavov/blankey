@@ -101,15 +101,19 @@ pub fn quick_unlock(handle: &AppHandle, reason: &str) -> bool {
 
 fn on_request(handle: &AppHandle, id: i64) {
     let app = state(handle).app.clone();
+    let request = app.vault().get_request(id).ok();
+    let submission = request.as_ref().is_some_and(|r| r.kind == crate::links::LINK_SUBMISSION);
+    let (title, fallback) = if submission {
+        ("New submission", "Someone sent you data through a collection link. Open Blankey to review it.")
+    } else {
+        ("Request from your AI assistant", "Your AI assistant sent a request. Open Blankey to review it.")
+    };
     // the reason is sealed until the vault is unlocked
-    let reason = app
-        .vault()
-        .get_request(id)
-        .ok()
+    let reason = request
         .and_then(|r| r.payload.get("reason").and_then(|v| v.as_str()).map(str::to_string))
         .filter(|r| !r.is_empty())
-        .unwrap_or_else(|| "Your AI assistant sent a request. Open Blankey to review it.".into());
-    notify(handle, "Request from your AI assistant", &reason);
+        .unwrap_or_else(|| fallback.into());
+    notify(handle, title, &reason);
     tray::refresh(handle);
     show_main(handle);
     let _ = handle.emit("request-created", id);

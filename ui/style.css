@@ -257,6 +257,16 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .input-form { max-width: 640px; margin: 24px auto; display: grid; grid-template-columns: 200px 1fr; gap: 12px 14px; align-items: center; padding: 0 24px; }
 .input-form > label { text-align: right; }
 .input-form .hint { grid-column: 2; margin-top: -8px; }
+.input-form > label.top { align-self: start; padding-top: 14px; }
+.link-form { max-width: 860px; }
+.link-fields { margin-top: 0; }
+.link-fields td:first-child, .link-fields td:nth-child(5) { width: 1%; text-align: center; }
+.link-fields td.paint { cursor: pointer; user-select: none; -webkit-user-select: none; }
+.link-fields td.paint input { pointer-events: none; }
+.files-list { max-width: 640px; margin: 0 auto 24px; padding: 0 24px; display: grid; gap: 8px; }
+.file-row { display: flex; align-items: center; gap: 12px; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+.file-row .thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 4px; flex: none; background: var(--hover); }
+.file-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .fill-split { display: grid; grid-template-columns: minmax(380px, 1fr) minmax(360px, 1fr); height: 100%; }
 .fill-rows { overflow: auto; border-right: 1px solid var(--line); }

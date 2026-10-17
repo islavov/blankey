@@ -22,7 +22,7 @@ const BACKUPS: usize = 3;
 /// Every step must be idempotent (IF NOT EXISTS, add_column), so re-running one after a partial upgrade is safe.
 /// Append only: a shipped step never changes. New vaults run every step, so they match upgraded ones.
 const MIGRATIONS: &[fn(&Connection) -> rusqlite::Result<()>] =
-    &[initial_schema, fill_sets, sealed_requests, relay_grants, request_grants];
+    &[initial_schema, fill_sets, sealed_requests, relay_grants, request_grants, collection_links];
 
 /// The Python app's DDL (peewee): NOT NULL without SQL defaults, so every insert names all its columns.
 fn initial_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -65,6 +65,17 @@ CREATE TABLE IF NOT EXISTS "relay_grants" ("grant_id" TEXT NOT NULL PRIMARY KEY,
 /// The relay grant of the agent that made a request; NULL for local clients.
 fn request_grants(conn: &Connection) -> rusqlite::Result<()> {
     add_column(conn, "requests", "grant_id", "TEXT")
+}
+
+/// Links are plaintext (their spec is public on the relay); the private key of each is a secret. Collected files
+/// keep their bytes in `files/<id>.bin` under a per-file key, and their name, type and key here under the DEK.
+fn collection_links(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS "links" ("link_id" TEXT NOT NULL PRIMARY KEY, "relay_url" TEXT NOT NULL, "url" TEXT NOT NULL, "title" TEXT NOT NULL, "spec" TEXT NOT NULL, "profile_id" INTEGER, "new_profile" TEXT, "created_at" TEXT NOT NULL, "expires_at" TEXT NOT NULL, "max_submissions" INTEGER NOT NULL, "revoked_at" TEXT, "received" INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS "collected_files" ("id" INTEGER NOT NULL PRIMARY KEY, "profile_id" INTEGER, "link_id" TEXT NOT NULL, "size" INTEGER NOT NULL, "created_at" TEXT NOT NULL, "nonce" BLOB NOT NULL, "ciphertext" BLOB NOT NULL, FOREIGN KEY ("profile_id") REFERENCES "profiles" ("id") ON DELETE SET NULL);
+"#,
+    )
 }
 
 fn add_column(conn: &Connection, table: &str, column: &str, declaration: &str) -> rusqlite::Result<()> {
@@ -117,6 +128,8 @@ pub enum VaultError {
     Crypto(#[from] crypto::CryptoError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, VaultError>;
@@ -210,6 +223,37 @@ pub struct RelayGrant {
     pub accepted_at: String,
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Link {
+    pub link_id: String,
+    pub relay_url: String,
+    /// the short URL with the key fingerprint in its fragment
+    pub url: String,
+    pub title: String,
+    pub spec: Value,
+    pub profile_id: Option<i64>,
+    /// name of the profile to create when the link has no profile_id
+    pub new_profile: Option<String>,
+    pub created_at: String,
+    pub expires_at: String,
+    pub max_submissions: i64,
+    pub revoked_at: Option<String>,
+    /// submissions this computer has pulled from the relay
+    pub received: i64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct CollectedFile {
+    pub id: i64,
+    pub profile_id: Option<i64>,
+    pub link_id: String,
+    pub size: i64,
+    pub created_at: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub file_type: String,
+}
+
 pub fn now() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
 }
@@ -220,6 +264,18 @@ fn field_aad(profile_id: i64, key: &str) -> Vec<u8> {
 
 fn request_aad(request_id: i64, part: &str) -> Vec<u8> {
     format!("request:{request_id}|{part}").into_bytes()
+}
+
+fn collected_aad(id: i64) -> Vec<u8> {
+    format!("collected:{id}").into_bytes()
+}
+
+fn collected_data_aad(id: i64) -> Vec<u8> {
+    format!("collected:{id}|data").into_bytes()
+}
+
+fn link_secret(link_id: &str) -> String {
+    format!("link:{link_id}")
 }
 
 fn parse_profiles(text: &str) -> Profiles {
@@ -887,6 +943,176 @@ impl Vault {
                 Ok(())
             }
         }
+    }
+
+    // -- collection links --------------------------------------------------
+
+    /// Stores the link and its private key; needs the vault unlocked.
+    pub fn add_link(&self, link: &Link, private: &[u8]) -> Result<()> {
+        self.require_dek()?;
+        self.conn.execute(
+            "INSERT INTO links (link_id, relay_url, url, title, spec, profile_id, new_profile, created_at, expires_at,
+             max_submissions, revoked_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL)",
+            params![
+                link.link_id,
+                link.relay_url,
+                link.url,
+                link.title,
+                serde_json::to_string(&link.spec)?,
+                link.profile_id,
+                link.new_profile,
+                link.created_at,
+                link.expires_at,
+                link.max_submissions
+            ],
+        )?;
+        self.put_secret(&link_secret(&link.link_id), private)
+    }
+
+    /// Newest first.
+    pub fn list_links(&self) -> Result<Vec<Link>> {
+        self.query_links("ORDER BY created_at DESC", params![])
+    }
+
+    pub fn get_link(&self, link_id: &str) -> Result<Link> {
+        self.query_links("WHERE link_id = ?1", params![link_id])?
+            .pop()
+            .ok_or_else(|| VaultError::NotFound(format!("Unknown link {link_id}")))
+    }
+
+    fn query_links(&self, clause: &str, args: &[&dyn rusqlite::ToSql]) -> Result<Vec<Link>> {
+        let sql = format!(
+            "SELECT link_id, relay_url, url, title, spec, profile_id, new_profile, created_at, expires_at,
+             max_submissions, revoked_at, received FROM links {clause}"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(args, |r| {
+            Ok(Link {
+                link_id: r.get(0)?,
+                relay_url: r.get(1)?,
+                url: r.get(2)?,
+                title: r.get(3)?,
+                spec: serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or_default(),
+                profile_id: r.get(5)?,
+                new_profile: r.get(6)?,
+                created_at: r.get(7)?,
+                expires_at: r.get(8)?,
+                max_submissions: r.get(9)?,
+                revoked_at: r.get(10)?,
+                received: r.get(11)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn count_received(&self, link_id: &str) -> Result<()> {
+        self.conn.execute("UPDATE links SET received = received + 1 WHERE link_id = ?1", [link_id])?;
+        Ok(())
+    }
+
+    /// The link's private key; None once the link is revoked.
+    pub fn link_key(&self, link_id: &str) -> Result<Option<Key>> {
+        self.get_secret(&link_secret(link_id))?.map(|bytes| Ok(crypto::key_from(&bytes)?)).transpose()
+    }
+
+    /// Drops the private key with the link, so a submission still on its way can no longer be opened.
+    pub fn revoke_link(&self, link_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE links SET revoked_at = ?1 WHERE link_id = ?2 AND revoked_at IS NULL",
+            params![now(), link_id],
+        )?;
+        self.conn.execute("DELETE FROM meta WHERE key = ?1", [format!("secret:{}", link_secret(link_id))])?;
+        Ok(())
+    }
+
+    fn files_dir(&self) -> PathBuf {
+        self.path.with_file_name("files")
+    }
+
+    fn collected_path(&self, id: i64) -> PathBuf {
+        self.files_dir().join(format!("{id}.bin"))
+    }
+
+    /// Encrypts the bytes under a fresh key into `files/<id>.bin`; the name, type and key go in the row.
+    pub fn add_collected_file(
+        &mut self,
+        profile_id: Option<i64>,
+        link_id: &str,
+        name: &str,
+        file_type: &str,
+        content: &[u8],
+    ) -> Result<i64> {
+        let dek = self.require_dek()?.clone();
+        let dir = self.files_dir();
+        std::fs::create_dir_all(&dir)?;
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO collected_files (profile_id, link_id, size, created_at, nonce, ciphertext)
+             VALUES (?1, ?2, ?3, ?4, x'', x'')",
+            params![profile_id, link_id, content.len() as i64, now()],
+        )?;
+        let id = tx.last_insert_rowid();
+        let key = crypto::new_key();
+        let meta = serde_json::json!({"name": name, "type": file_type, "key": crypto::encode_b64(key.as_ref())});
+        let (nonce, ct) = crypto::encrypt(dek.as_ref(), &serde_json::to_vec(&meta)?, &collected_aad(id));
+        tx.execute("UPDATE collected_files SET nonce = ?1, ciphertext = ?2 WHERE id = ?3", params![nonce, ct, id])?;
+        std::fs::write(
+            dir.join(format!("{id}.bin")),
+            crypto::encrypt_joined(key.as_ref(), content, &collected_data_aad(id)),
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// Newest first; needs the vault unlocked for the names.
+    pub fn list_collected_files(&self) -> Result<Vec<CollectedFile>> {
+        Ok(self.query_collected("ORDER BY id DESC", params![])?.into_iter().map(|(file, _)| file).collect())
+    }
+
+    fn query_collected(&self, clause: &str, args: &[&dyn rusqlite::ToSql]) -> Result<Vec<(CollectedFile, Key)>> {
+        let dek = self.require_dek()?;
+        let sql = format!(
+            "SELECT id, profile_id, link_id, size, created_at, nonce, ciphertext FROM collected_files {clause}"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        type Row = (i64, Option<i64>, String, i64, String, Vec<u8>, Vec<u8>);
+        let rows: Vec<Row> = stmt
+            .query_map(args, |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        rows.into_iter()
+            .map(|(id, profile_id, link_id, size, created_at, nonce, ct)| {
+                let meta: Value =
+                    serde_json::from_slice(&crypto::decrypt(dek.as_ref(), &nonce, &ct, &collected_aad(id))?)?;
+                let text = |name: &str| meta.get(name).and_then(Value::as_str).unwrap_or_default().to_string();
+                let key = crypto::key_from(&crypto::decode_b64(&text("key"))?)?;
+                let file = CollectedFile {
+                    id,
+                    profile_id,
+                    link_id,
+                    size,
+                    created_at,
+                    name: text("name"),
+                    file_type: text("type"),
+                };
+                Ok((file, key))
+            })
+            .collect()
+    }
+
+    pub fn load_collected_file(&self, id: i64) -> Result<(CollectedFile, Vec<u8>)> {
+        let (file, key) = self
+            .query_collected("WHERE id = ?1", params![id])?
+            .pop()
+            .ok_or_else(|| VaultError::NotFound(format!("Unknown file {id}")))?;
+        let blob = std::fs::read(self.collected_path(id))?;
+        let content = crypto::decrypt_joined(key.as_ref(), &blob, &collected_data_aad(id))?;
+        Ok((file, content))
+    }
+
+    pub fn delete_collected_file(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM collected_files WHERE id = ?1", [id])?;
+        let _ = std::fs::remove_file(self.collected_path(id));
+        Ok(())
     }
 
     // -- audit & maintenance -----------------------------------------------

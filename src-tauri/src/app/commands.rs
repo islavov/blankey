@@ -10,12 +10,13 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::DialogExt;
 
 use super::{fill, platform, tray, AppState};
-use crate::core::{FILE, FILL, PROFILE_INPUT};
+use crate::core::{ProfileSave, Target, FILE, FILL, PROFILE_INPUT};
 use crate::fieldtypes;
 use crate::keychain;
+use crate::links::{link_state, LinkDraft, Submission, COLLECTION_LINK, LINK_SUBMISSION};
 use crate::templates::preview::{self, Preview};
 use crate::templates::{docx, TemplateKind};
-use crate::vault::{FieldInput, Request};
+use crate::vault::{CollectedFile, FieldInput, Link, Request};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -323,6 +324,63 @@ fn delete_documents(state: State<AppState>, ids: Vec<i64>) -> CmdResult<()> {
     Ok(())
 }
 
+#[derive(Serialize)]
+struct CollectedRow {
+    #[serde(flatten)]
+    file: CollectedFile,
+    link_title: String,
+    profile_name: Option<String>,
+}
+
+/// Files that came in through collection links.
+#[tauri::command]
+fn list_collected_files(state: State<AppState>) -> CmdResult<Vec<CollectedRow>> {
+    let vault = state.app.vault();
+    let titles: IndexMap<String, String> =
+        vault.list_links().map_err(err)?.into_iter().map(|l| (l.link_id, l.title)).collect();
+    let names: IndexMap<i64, String> =
+        vault.list_profiles().map_err(err)?.into_iter().map(|p| (p.id, p.name)).collect();
+    Ok(vault
+        .list_collected_files()
+        .map_err(err)?
+        .into_iter()
+        .map(|file| CollectedRow {
+            link_title: titles.get(&file.link_id).cloned().unwrap_or_default(),
+            profile_name: file.profile_id.and_then(|id| names.get(&id).cloned()),
+            file,
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn open_collected_files(state: State<AppState>, ids: Vec<i64>) -> CmdResult<()> {
+    for id in ids {
+        let (file, content) = state.app.vault().load_collected_file(id).map_err(err)?;
+        platform::open_document(&file.name, &content)?;
+        state.app.audit("user", "open_collected_file", &id.to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn export_collected_file(handle: AppHandle, state: State<'_, AppState>, id: i64) -> CmdResult<Option<String>> {
+    let name = state.app.vault().load_collected_file(id).map_err(err)?.0.name;
+    let target = handle.dialog().file().set_title("Export").set_file_name(&name).blocking_save_file();
+    let Some(target) = target.and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    state.app.export_collected_file(id, &target)?;
+    Ok(Some(target.display().to_string()))
+}
+
+#[tauri::command]
+fn delete_collected_files(state: State<AppState>, ids: Vec<i64>) -> CmdResult<()> {
+    let vault = state.app.vault();
+    for id in ids {
+        vault.delete_collected_file(id).map_err(err)?;
+        let _ = vault.audit("user", "delete_collected_file", &id.to_string());
+    }
+    Ok(())
+}
+
 // -- fill sets -----------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -416,6 +474,8 @@ fn request_label(kind: &str) -> &str {
         "generate" => "Generate document",
         FILL => "Fill documents",
         FILE => "File",
+        LINK_SUBMISSION => "Submission",
+        COLLECTION_LINK => "Collection link",
         other => other,
     }
 }
@@ -430,6 +490,12 @@ fn request_outcome(request: &Request) -> String {
     let outcome = result.get("outcome").and_then(Value::as_str).unwrap_or("");
     if request.status == "pending" {
         return "Waiting for you".into();
+    }
+    match (request.kind.as_str(), outcome) {
+        (LINK_SUBMISSION, "revoked") => return "Dropped: the link was revoked".into(),
+        (LINK_SUBMISSION, "damaged") => return "Dropped: could not be opened".into(),
+        (LINK_SUBMISSION, "discarded") => return "Discarded".into(),
+        _ => {}
     }
     if request.status == "cancelled" || outcome == "cancelled" {
         return "Cancelled".into();
@@ -460,6 +526,13 @@ fn request_outcome(request: &Request) -> String {
             text
         }
         FILE => format!("Shared {}", result.get("name").and_then(Value::as_str).unwrap_or("a file")),
+        LINK_SUBMISSION => {
+            let saved = result.get("fields").and_then(Value::as_array).into_iter().flatten();
+            let saved = saved.filter(|f| f.get("status").and_then(Value::as_str) == Some("saved")).count();
+            let files = result.get("files").and_then(Value::as_array).map_or(0, Vec::len);
+            format!("Saved {}, {}", plural(saved, "field"), plural(files, "file"))
+        }
+        COLLECTION_LINK => "Link created".into(),
         _ => {
             if outcome.is_empty() {
                 request.status.clone()
@@ -579,7 +652,11 @@ fn next_request(state: State<AppState>) -> CmdResult<Option<RequestDetail>> {
 
 #[tauri::command]
 fn cancel_request(handle: AppHandle, state: State<AppState>, id: i64) -> CmdResult<()> {
-    state.app.vault().resolve_request(id, "cancelled", json!({"outcome": "cancelled"})).map_err(err)?;
+    if state.app.vault().get_request(id).map_err(err)?.kind == LINK_SUBMISSION {
+        state.app.drop_submission(id, "discarded")?;
+    } else {
+        state.app.vault().resolve_request(id, "cancelled", json!({"outcome": "cancelled"})).map_err(err)?;
+    }
     tray::refresh(&handle);
     Ok(())
 }
@@ -596,48 +673,17 @@ fn resolve_profile_input(
     let app = &state.app;
     let request = app.vault().get_request(id).map_err(err)?;
     let specs = request.payload.get("fields").and_then(Value::as_array).cloned().unwrap_or_default();
-    let mut errors = Vec::new();
-    let mut items = Vec::new();
-    for spec in &specs {
-        let key = spec.get("key").and_then(Value::as_str).unwrap_or("");
-        let label = spec.get("label").and_then(Value::as_str).unwrap_or("");
-        let shown = if label.is_empty() { key } else { label };
-        let field_type = spec.get("type").and_then(Value::as_str).filter(|t| fieldtypes::is_type(t)).unwrap_or("text");
-        let value = values.get(key).map(|v| v.trim().to_string()).unwrap_or_default();
-        if spec.get("required").and_then(Value::as_bool).unwrap_or(false) && value.is_empty() {
-            errors.push(format!("{shown}: required"));
-        } else if let Some(message) = fieldtypes::validate(field_type, &value) {
-            errors.push(format!("{shown}: {message}"));
-        }
-        items.push(FieldInput::new(key, &value, label, field_type));
-    }
-    let mut profile_id = request.payload.get("profile_id").and_then(Value::as_i64);
-    let new_name = profile_name.unwrap_or_default().trim().to_string();
-    if profile_id.is_none() && new_name.is_empty() {
-        errors.push("Enter a profile name".into());
-    }
-    if !errors.is_empty() {
-        return Ok(errors);
-    }
+    let new_name = profile_name.unwrap_or_default();
+    let kind = request.payload.get("new_profile").and_then(|p| p.get("kind")).and_then(Value::as_str).unwrap_or("");
+    let target = match request.payload.get("profile_id").and_then(Value::as_i64) {
+        Some(id) => Target::Existing(id),
+        None => Target::New { name: &new_name, kind },
+    };
+    let (profile_id, statuses) = match app.save_profile_values(&specs, &values, target)? {
+        ProfileSave::Problems(problems) => return Ok(problems),
+        ProfileSave::Saved { profile_id, fields } => (profile_id, fields),
+    };
     let mut vault = app.vault();
-    if profile_id.is_none() {
-        let kind = request.payload.get("new_profile").and_then(|p| p.get("kind")).and_then(Value::as_str).unwrap_or("");
-        profile_id = Some(vault.create_profile(&new_name, kind).map_err(err)?);
-    }
-    let profile_id = profile_id.expect("profile chosen");
-    vault.set_values(profile_id, &items).map_err(err)?;
-    let lengths: IndexMap<String, i64> =
-        vault.describe(profile_id).map_err(err)?.into_iter().map(|f| (f.key, f.length)).collect();
-    let statuses: Vec<Value> = items
-        .iter()
-        .map(|item| {
-            json!({
-                "key": item.key,
-                "length": lengths.get(&item.key).copied().unwrap_or(0),
-                "status": if item.value.is_empty() { "skipped" } else { "saved" },
-            })
-        })
-        .collect();
     vault
         .resolve_request(id, "done", json!({"outcome": "saved", "profile_id": profile_id, "fields": statuses}))
         .map_err(err)?;
@@ -664,6 +710,113 @@ async fn resolve_file_request(handle: AppHandle, state: State<'_, AppState>, id:
     tray::refresh(&handle);
     let _ = handle.emit("requests-changed", ());
     Ok(Some(result))
+}
+
+// -- collection links --------------------------------------------------------------
+
+#[derive(Serialize)]
+struct LinkRow {
+    #[serde(flatten)]
+    link: Link,
+    /// open, expired, revoked or full; from the relay when it answers
+    state: String,
+    submissions: i64,
+    fields: Vec<String>,
+    profile_name: Option<String>,
+}
+
+/// The links made on this computer, with the relay's counts when it can be reached.
+#[tauri::command]
+async fn list_links(state: State<'_, AppState>, relay: RelayState<'_>) -> CmdResult<Vec<LinkRow>> {
+    let (links, names) = {
+        let vault = state.app.vault();
+        let names: IndexMap<i64, String> =
+            vault.list_profiles().map_err(err)?.into_iter().map(|p| (p.id, p.name)).collect();
+        (vault.list_links().map_err(err)?, names)
+    };
+    let remote = match relay.signed_in() && !links.is_empty() {
+        true => relay.remote_links().await.unwrap_or_default(),
+        false => Vec::new(),
+    };
+    Ok(links
+        .into_iter()
+        .map(|link| {
+            let counted = remote.iter().find(|r| r.id == link.link_id && link.relay_url == relay.url());
+            let fields = link.spec["fields"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|f| f.get("label").and_then(Value::as_str).map(str::to_string))
+                .collect();
+            LinkRow {
+                state: counted.map_or_else(|| link_state(&link).to_string(), |r| r.state.clone()),
+                submissions: counted.map_or(link.received, |r| r.submissions),
+                fields,
+                profile_name: link.profile_id.and_then(|id| names.get(&id).cloned()).or(link.new_profile.clone()),
+                link,
+            }
+        })
+        .collect())
+}
+
+/// With request_id: the user confirmed a link an agent drafted, which gets the URL as the request's result.
+#[tauri::command]
+async fn create_link(
+    handle: AppHandle,
+    state: State<'_, AppState>,
+    relay: RelayState<'_>,
+    draft: LinkDraft,
+    request_id: Option<i64>,
+) -> CmdResult<Link> {
+    let link = relay.create_link(&draft).await?;
+    if let Some(id) = request_id {
+        let result = json!({"outcome": "created", "link_id": link.link_id, "url": link.url});
+        state.app.vault().resolve_request(id, "done", result).map_err(err)?;
+        tray::refresh(&handle);
+        let _ = handle.emit("requests-changed", ());
+    }
+    Ok(link)
+}
+
+#[tauri::command]
+async fn revoke_link(relay: RelayState<'_>, link_id: String) -> CmdResult<()> {
+    relay.revoke_link(&link_id).await
+}
+
+#[tauri::command]
+async fn open_submission(state: State<'_, AppState>, id: i64) -> CmdResult<Submission> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || app.open_submission(id)).await.map_err(err)?
+}
+
+/// Saves a submission into an existing profile (profile_id) or a new one (profile_name), keeping the files at the
+/// `keep` indexes. Returns problems without saving when there are any.
+#[tauri::command]
+async fn resolve_submission(
+    handle: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    profile_id: Option<i64>,
+    profile_name: Option<String>,
+    values: IndexMap<String, String>,
+    keep: Vec<usize>,
+) -> CmdResult<Vec<String>> {
+    let app = state.app.clone();
+    let problems = tauri::async_runtime::spawn_blocking(move || {
+        let name = profile_name.unwrap_or_default();
+        let target = match profile_id {
+            Some(id) => Target::Existing(id),
+            None => Target::New { name: &name, kind: "person" },
+        };
+        app.resolve_submission(id, target, &values, &keep)
+    })
+    .await
+    .map_err(err)??;
+    if problems.is_empty() {
+        tray::refresh(&handle);
+        let _ = handle.emit("requests-changed", ());
+    }
+    Ok(problems)
 }
 
 // -- fill form -------------------------------------------------------------------
@@ -787,6 +940,10 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         open_documents,
         export_document,
         delete_documents,
+        list_collected_files,
+        open_collected_files,
+        export_collected_file,
+        delete_collected_files,
         list_fill_sets,
         generate_fill_set,
         export_fill_set,
@@ -797,6 +954,11 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         cancel_request,
         resolve_profile_input,
         resolve_file_request,
+        list_links,
+        create_link,
+        revoke_link,
+        open_submission,
+        resolve_submission,
         fill_open,
         fill_evaluate,
         fill_preview,

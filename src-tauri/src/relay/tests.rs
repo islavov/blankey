@@ -7,10 +7,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::extract::{Query, State as Shared};
+use axum::extract::{Path as UrlPath, Query, State as Shared};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Form, Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -40,6 +40,15 @@ struct StubState {
     /// authorization code -> PKCE challenge
     codes: Mutex<HashMap<String, String>>,
     revoked: Mutex<Vec<String>>,
+    /// bodies of POST /device/links
+    links: Mutex<Vec<Value>>,
+    revoked_links: Mutex<Vec<String>>,
+    /// (sid, link id, sealed blob)
+    inbox: Mutex<Vec<(String, String, Vec<u8>)>>,
+    /// the next blob download stops halfway
+    cut_download: AtomicBool,
+    /// the next inbox delete goes through but answers 500, as if the reply was lost
+    lose_delete_reply: AtomicBool,
 }
 
 struct Stub {
@@ -58,6 +67,11 @@ impl Stub {
             auto_sign_in: AtomicBool::new(true),
             codes: Mutex::default(),
             revoked: Mutex::default(),
+            links: Mutex::default(),
+            revoked_links: Mutex::default(),
+            inbox: Mutex::default(),
+            cut_download: AtomicBool::new(false),
+            lose_delete_reply: AtomicBool::new(false),
         });
         let routes = Router::new()
             .route("/.well-known/blankey-relay", get(discovery))
@@ -70,6 +84,11 @@ impl Stub {
                 post(|| async { Json(json!({"device_id": DEVICE_ID, "account": "you@example.com"})) }),
             )
             .route("/device/grants/revoke", post(revoke))
+            .route("/device/links", post(create_link).get(list_links))
+            .route("/device/links/{id}", delete(revoke_link))
+            .route("/device/inbox", get(list_inbox))
+            .route("/device/inbox/{sid}", delete(delete_submission))
+            .route("/blob/{sid}", get(blob))
             .with_state(state.clone());
         tokio::spawn(async move { axum::serve(http, routes).await });
         Self { state, sockets }
@@ -152,6 +171,95 @@ async fn token(Shared(stub): Shared<Arc<StubState>>, Form(form): Form<HashMap<St
 async fn revoke(Shared(stub): Shared<Arc<StubState>>, Json(body): Json<Value>) -> StatusCode {
     stub.revoked.lock().unwrap().push(body["grant"].as_str().unwrap_or_default().into());
     StatusCode::NO_CONTENT
+}
+
+const LINK_ID: &str = "Ab3dE9z";
+
+fn own_device(query: &HashMap<String, String>) -> Result<(), StatusCode> {
+    (query.get("device_id").map(String::as_str) == Some(DEVICE_ID)).then_some(()).ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn create_link(
+    Shared(stub): Shared<Arc<StubState>>,
+    Query(query): Query<HashMap<String, String>>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    own_device(&query)?;
+    stub.links.lock().unwrap().push(body);
+    Ok(Json(json!({"id": LINK_ID, "url": format!("{}/s/{LINK_ID}", stub.url)})))
+}
+
+async fn list_links(
+    Shared(stub): Shared<Arc<StubState>>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, StatusCode> {
+    own_device(&query)?;
+    let revoked = stub.revoked_links.lock().unwrap().contains(&LINK_ID.to_string());
+    let links: Vec<Value> = stub
+        .links
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|body| {
+            json!({"id": LINK_ID, "state": if revoked { "revoked" } else { "open" }, "submissions": 2,
+                   "max_submissions": body["max_submissions"]})
+        })
+        .collect();
+    Ok(Json(json!({"links": links})))
+}
+
+async fn revoke_link(
+    Shared(stub): Shared<Arc<StubState>>,
+    UrlPath(id): UrlPath<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<StatusCode, StatusCode> {
+    own_device(&query)?;
+    stub.revoked_links.lock().unwrap().push(id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_inbox(
+    Shared(stub): Shared<Arc<StubState>>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, StatusCode> {
+    own_device(&query)?;
+    let inbox: Vec<Value> = stub
+        .inbox
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(sid, link, blob)| {
+            json!({"sid": sid, "link_id": link, "size": blob.len(), "url": format!("{}/blob/{sid}", stub.url)})
+        })
+        .collect();
+    Ok(Json(json!({"inbox": inbox})))
+}
+
+async fn delete_submission(
+    Shared(stub): Shared<Arc<StubState>>,
+    UrlPath(sid): UrlPath<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<StatusCode, StatusCode> {
+    own_device(&query)?;
+    let mut inbox = stub.inbox.lock().unwrap();
+    let before = inbox.len();
+    inbox.retain(|(id, _, _)| *id != sid);
+    if stub.lose_delete_reply.swap(false, Ordering::SeqCst) {
+        return Ok(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    Ok(if inbox.len() < before { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND })
+}
+
+/// A presigned GET: no bearer token.
+async fn blob(Shared(stub): Shared<Arc<StubState>>, UrlPath(sid): UrlPath<String>) -> Response {
+    let found = stub.inbox.lock().unwrap().iter().find(|(id, _, _)| *id == sid).map(|(_, _, blob)| blob.clone());
+    match found {
+        Some(blob) if stub.cut_download.swap(false, Ordering::SeqCst) => {
+            blob[..blob.len() / 2].to_vec().into_response()
+        }
+        Some(blob) => blob.into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// Sends a frame and returns the device's answer with the same id, answering pings meanwhile.
@@ -346,4 +454,93 @@ async fn claims_primary_on_unlock_until_the_relay_confirms() {
     socket.send(Message::text(mcp_frame("r-2", "g-unknown", initialize).to_string())).await.unwrap();
     let frame = next_frame(&mut socket).await;
     assert_eq!((frame["type"].as_str(), frame["id"].as_str()), (Some("mcp_result"), Some("r-2")), "{frame}");
+}
+
+async fn wait_for_submissions(app: &Blankey, count: usize) -> Vec<crate::vault::Request> {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let requests: Vec<_> = app
+            .vault()
+            .list_requests(Some("pending"))
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.kind == crate::links::LINK_SUBMISSION)
+            .collect();
+        if requests.len() >= count || tokio::time::Instant::now() > deadline {
+            return requests;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn collection_links_reach_the_device() {
+    use crate::links::tests::{draft, plaintext};
+
+    let dir = tempfile::tempdir().unwrap();
+    let stub = Stub::start(1).await;
+    let (relay, app) = signed_in_app(dir.path(), &stub).await;
+    let mut socket = stub.accept().await;
+    wait_for(&relay, State::Connected).await;
+
+    let link = relay.create_link(&draft()).await.unwrap();
+    let body = stub.state.links.lock().unwrap()[0].clone();
+    let public = URL_SAFE_NO_PAD.decode(body["public_key"].as_str().unwrap()).unwrap();
+    assert_eq!(link.url, format!("{}/s/{LINK_ID}#{}", stub.url(), crate::crypto::fingerprint(&public)));
+    assert_eq!(app.vault().get_link(LINK_ID).unwrap(), link);
+    assert!(!body.to_string().contains("New tenant"), "the target profile stays on this computer: {body}");
+    assert_eq!(body["spec"]["fields"].as_array().unwrap().len(), 2);
+    let remote = relay.remote_links().await.unwrap();
+    assert_eq!((remote[0].id.as_str(), remote[0].submissions), (LINK_ID, 2));
+
+    let sealed = |values: Value| {
+        let plain = plaintext(values, &[("id.pdf", "application/pdf", b"%PDF-1.7 scan")]);
+        crate::crypto::seal(&public, &plain, format!("link:{LINK_ID}").as_bytes()).unwrap()
+    };
+    let inbox_frame = |sid: &str| Message::text(json!({"v": 1, "type": "inbox", "id": sid}).to_string());
+
+    // the download is cut short: nothing is deleted on the relay and no request is made
+    stub.state.cut_download.store(true, Ordering::SeqCst);
+    stub.state.inbox.lock().unwrap().push(("sub-1".into(), LINK_ID.into(), sealed(json!({"name": "Jane Roe"}))));
+    socket.send(inbox_frame("sub-1")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(stub.state.inbox.lock().unwrap().len(), 1);
+    assert!(wait_for_submissions(&app, 0).await.is_empty());
+    assert_eq!(std::fs::read_dir(app.inbox_dir()).unwrap().count(), 0, "no partial download is left");
+
+    // the next frame retries it
+    socket.send(inbox_frame("sub-1")).await.unwrap();
+    let requests = wait_for_submissions(&app, 1).await;
+    assert_eq!(requests.len(), 1);
+    assert!(stub.state.inbox.lock().unwrap().is_empty(), "deleted on the relay once on disk");
+    assert!(app.inbox_dir().join("sub-1.bin").exists());
+    let opened = app.open_submission(requests[0].id).unwrap();
+    assert_eq!(opened.values["name"], "Jane Roe");
+    assert_eq!(opened.files[0].name, "id.pdf");
+
+    assert!(app.unaccepted_submissions().is_empty());
+
+    // a submission that arrived while the app was offline lands on the next connection
+    stub.state.inbox.lock().unwrap().push(("sub-2".into(), LINK_ID.into(), sealed(json!({"name": "John Doe"}))));
+    drop(socket);
+    let mut socket = stub.accept().await;
+    assert_eq!(wait_for_submissions(&app, 2).await.len(), 2);
+    assert_eq!(app.vault().get_link(LINK_ID).unwrap().received, 2);
+
+    // the relay deletes it but the answer is lost: the next drain still makes the request
+    stub.state.lose_delete_reply.store(true, Ordering::SeqCst);
+    stub.state.inbox.lock().unwrap().push(("sub-3".into(), LINK_ID.into(), sealed(json!({"name": "Ann Lee"}))));
+    socket.send(inbox_frame("sub-3")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(stub.state.inbox.lock().unwrap().is_empty());
+    assert_eq!(wait_for_submissions(&app, 0).await.len(), 2);
+    assert_eq!(app.unaccepted_submissions(), [(LINK_ID.to_string(), "sub-3".to_string())]);
+    socket.send(inbox_frame("sub-3")).await.unwrap();
+    assert_eq!(wait_for_submissions(&app, 3).await.len(), 3);
+    assert!(app.unaccepted_submissions().is_empty());
+
+    relay.revoke_link(LINK_ID).await.unwrap();
+    assert_eq!(*stub.state.revoked_links.lock().unwrap(), [LINK_ID]);
+    assert!(app.vault().link_key(LINK_ID).unwrap().is_none());
+    assert!(app.vault().get_link(LINK_ID).unwrap().revoked_at.is_some());
 }

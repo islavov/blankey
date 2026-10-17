@@ -11,3 +11,6 @@
 *.db-wal
 /node_modules
 /target-*/
+/docs/online-design.md
+/docs/chat-design.md
+/docs/collection-links-plan.md

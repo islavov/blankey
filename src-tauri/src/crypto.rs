@@ -9,7 +9,7 @@ use hkdf::Hkdf;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
@@ -171,15 +171,32 @@ fn seal_key(shared: &[u8], ephemeral: &[u8], public: &[u8]) -> Key {
     key
 }
 
+/// `ephemeral_pub(32) || nonce(12) || ciphertext`; the relay's collect page (seal.js) builds the same bytes.
 pub fn seal(public: &[u8], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, CryptoError> {
-    let public: [u8; 32] = public.try_into().map_err(|_| CryptoError::Malformed)?;
     let ephemeral = StaticSecret::random_from_rng(OsRng);
-    let ephemeral_public = PublicKey::from(&ephemeral).to_bytes();
+    let nonce: [u8; NONCE_SIZE] = random_bytes(NONCE_SIZE).try_into().unwrap();
+    seal_with(&ephemeral, &nonce, public, plaintext, aad)
+}
+
+fn seal_with(
+    ephemeral: &StaticSecret,
+    nonce: &[u8; NONCE_SIZE],
+    public: &[u8],
+    plaintext: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let public: [u8; 32] = public.try_into().map_err(|_| CryptoError::Malformed)?;
+    let ephemeral_public = PublicKey::from(ephemeral).to_bytes();
     let shared = ephemeral.diffie_hellman(&PublicKey::from(public));
     let key = seal_key(shared.as_bytes(), &ephemeral_public, &public);
-    let mut out = ephemeral_public.to_vec();
-    out.extend(encrypt_joined(key.as_ref(), plaintext, aad));
-    Ok(out)
+    let cipher = Aes256Gcm::new_from_slice(key.as_ref()).expect("32-byte key");
+    let ct = cipher.encrypt(Nonce::from_slice(nonce), Payload { msg: plaintext, aad }).expect("AES-GCM encryption");
+    Ok([&ephemeral_public[..], nonce, &ct].concat())
+}
+
+/// What a collection link carries in its fragment: base64url(SHA-256(public)[..12]), 16 characters.
+pub fn fingerprint(public: &[u8]) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&Sha256::digest(public)[..12])
 }
 
 pub fn unseal(private: &[u8], sealed: &[u8], aad: &[u8]) -> Result<Vec<u8>, CryptoError> {
@@ -214,6 +231,65 @@ mod tests {
         let sealed = seal(&public, b"hello", b"aad").unwrap();
         assert_eq!(unseal(private.as_ref(), &sealed, b"aad").unwrap(), b"hello");
         assert!(unseal(private.as_ref(), &sealed, b"other").is_err());
+    }
+
+    /// The relay copies tests/data/seal_vectors.json into its own tests, so seal.js must produce the same bytes.
+    #[test]
+    fn seal_vectors() {
+        let hex = data_encoding::HEXLOWER;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/seal_vectors.json");
+        let cases = [
+            (
+                "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+                "c8c7c6c5c4c3c2c1c0bfbebdbcbbbab9b8b7b6b5b4b3b2b1b0afaeadacabaaa9",
+                "00070e151c232a31383f464d",
+                "link:XchaBj2",
+                b"hello".to_vec(),
+            ),
+            (
+                "05121f2c394653606d7a8794a1aebbc8d5e2effc091623303d4a5764717e8b98",
+                "0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabca",
+                "fffefdfcfbfaf9f8f7f6f5f4",
+                "link:Ab3dE9z",
+                vector_plaintext(),
+            ),
+        ];
+        let vectors: Vec<serde_json::Value> = cases
+            .iter()
+            .map(|(private, ephemeral, nonce, aad, plaintext)| {
+                let private: [u8; 32] = hex.decode(private.as_bytes()).unwrap().try_into().unwrap();
+                let ephemeral: [u8; 32] = hex.decode(ephemeral.as_bytes()).unwrap().try_into().unwrap();
+                let nonce: [u8; NONCE_SIZE] = hex.decode(nonce.as_bytes()).unwrap().try_into().unwrap();
+                let public = PublicKey::from(&StaticSecret::from(private)).to_bytes();
+                let sealed =
+                    seal_with(&StaticSecret::from(ephemeral), &nonce, &public, plaintext, aad.as_bytes()).unwrap();
+                assert_eq!(unseal(&private, &sealed, aad.as_bytes()).unwrap(), *plaintext);
+                serde_json::json!({
+                    "recipient_private": hex.encode(&private),
+                    "recipient_public": hex.encode(&public),
+                    "ephemeral_private": hex.encode(&ephemeral),
+                    "nonce": hex.encode(&nonce),
+                    "aad": aad,
+                    "plaintext": hex.encode(plaintext),
+                    "sealed": hex.encode(&sealed),
+                    "fingerprint": fingerprint(&public),
+                })
+            })
+            .collect();
+        let expected = serde_json::to_string_pretty(&serde_json::json!({"vectors": vectors})).unwrap() + "\n";
+        match std::fs::read_to_string(&path) {
+            Ok(existing) => assert_eq!(existing, expected, "seal output changed; seal.js must change with it"),
+            Err(_) => std::fs::write(&path, expected).unwrap(),
+        }
+    }
+
+    /// A small submission in the collect page's layout: u32 BE header length, header JSON, file bytes.
+    fn vector_plaintext() -> Vec<u8> {
+        let header = r#"{"v":1,"values":{"name":"Иван"},"files":[{"name":"a.bin","type":"application/octet-stream","size":4}],"submitted_at":"2026-10-17T12:00:00.000Z"}"#;
+        let mut out = (header.len() as u32).to_be_bytes().to_vec();
+        out.extend(header.as_bytes());
+        out.extend([0, 1, 2, 0xff]);
+        out
     }
 
     #[test]
