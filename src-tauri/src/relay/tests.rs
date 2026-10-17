@@ -128,6 +128,7 @@ async fn authorize(Shared(stub): Shared<Arc<StubState>>, Query(query): Query<Has
         return (StatusCode::OK, "Sign in").into_response();
     }
     assert_eq!((query["scope"].as_str(), query["code_challenge_method"].as_str()), ("device", "S256"));
+    assert_eq!(query["resource"], format!("{}/device", stub.url));
     let code = format!("code-{}", stub.codes.lock().unwrap().len());
     stub.codes.lock().unwrap().insert(code.clone(), query["code_challenge"].clone());
     Redirect::to(&format!("{}?code={code}&state={}", query["redirect_uri"], query["state"])).into_response()

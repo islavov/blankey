@@ -15,6 +15,10 @@ pub struct Discovery {
     pub device_revoke: String,
     pub mcp_url: String,
     pub account_url: String,
+    /// The OAuth resource the app's tokens are for; sent as `resource` when signing in. Optional: older relays
+    /// have one resource and do not name it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_resource: Option<String>,
 }
 
 impl Discovery {
@@ -29,6 +33,9 @@ impl Discovery {
             check_url(url, "https", "http")?;
         }
         check_url(&self.device_connect, "wss", "ws")?;
+        if let Some(resource) = &self.device_resource {
+            check_url(resource, "https", "http")?;
+        }
         Ok(self)
     }
 }
@@ -76,6 +83,7 @@ pub(crate) mod tests {
             device_revoke: format!("{base}/device/grants/revoke"),
             mcp_url: format!("{base}/mcp"),
             account_url: format!("{base}/account"),
+            device_resource: Some(format!("{base}/device")),
         }
     }
 
