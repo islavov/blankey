@@ -323,7 +323,8 @@ impl Relay {
         let state = oauth::random_token();
         let code = self.callbacks.expect(&state);
         let result = async {
-            (self.browser)(&oauth::authorize_url(&endpoints.metadata, &client, &pkce.challenge, &state)?)?;
+            let resource = endpoints.discovery.device_resource.as_deref();
+            (self.browser)(&oauth::authorize_url(&endpoints.metadata, &client, &pkce.challenge, &state, resource)?)?;
             match tokio::time::timeout(SIGN_IN_TIMEOUT, code).await {
                 Ok(Ok(code)) => code.map_err(|e| format!("Sign-in failed: {e}")),
                 _ => Err("Sign-in timed out. Try again.".to_string()),

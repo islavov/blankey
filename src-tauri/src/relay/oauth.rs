@@ -132,8 +132,18 @@ pub fn pkce() -> Pkce {
     Pkce { verifier, challenge }
 }
 
-pub fn authorize_url(metadata: &Metadata, client: &Client, challenge: &str, state: &str) -> Result<String, String> {
+/// `resource` is the relay's `device_resource`, when it names one.
+pub fn authorize_url(
+    metadata: &Metadata,
+    client: &Client,
+    challenge: &str,
+    state: &str,
+    resource: Option<&str>,
+) -> Result<String, String> {
     let mut url = Url::parse(&metadata.authorization_endpoint).map_err(|e| e.to_string())?;
+    if let Some(resource) = resource {
+        url.query_pairs_mut().append_pair("resource", resource);
+    }
     url.query_pairs_mut()
         .append_pair("response_type", "code")
         .append_pair("client_id", &client.client_id)

@@ -128,6 +128,7 @@ async fn authorize(Shared(stub): Shared<Arc<StubState>>, Query(query): Query<Has
         return (StatusCode::OK, "Sign in").into_response();
     }
     assert_eq!((query["scope"].as_str(), query["code_challenge_method"].as_str()), ("device", "S256"));
+    assert_eq!(query["resource"], format!("{}/device", stub.url));
     let code = format!("code-{}", stub.codes.lock().unwrap().len());
     stub.codes.lock().unwrap().insert(code.clone(), query["code_challenge"].clone());
     Redirect::to(&format!("{}?code={code}&state={}", query["redirect_uri"], query["state"])).into_response()
@@ -235,6 +236,16 @@ async fn signs_in_and_answers_frames() {
     assert_eq!(reply["headers"]["content-type"], "application/json");
     let body: Value = serde_json::from_str(reply["body"].as_str().unwrap()).unwrap();
     assert!(body["result"]["instructions"].as_str().unwrap().contains("Blankey"));
+
+    // MCP 2026-07-28 (ChatGPT): no initialize; server/discover needs the Mcp-Method header.
+    let discover = json!({"jsonrpc": "2.0", "id": "d", "method": "server/discover", "params": {"_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}}}});
+    let mut frame = mcp_frame("r-d", "g-ok", discover);
+    frame["headers"]["mcp-protocol-version"] = json!("2026-07-28");
+    frame["headers"]["mcp-method"] = json!("server/discover");
+    let reply = ask(&mut socket, frame).await;
+    assert_eq!(reply["status"], 200, "{reply}");
+    assert!(reply["body"].as_str().unwrap().contains("supportedVersions"));
 
     let reply = ask(&mut socket, mcp_frame("r-2", "g-unknown", initialize)).await;
     assert_eq!(reply["status"], 403);

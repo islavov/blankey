@@ -37,9 +37,13 @@ agent --POST /mcp (Bearer)--> relay --WebSocket frame--> Blankey app --> local M
   "device_connect": "wss://relay.example.com/device/connect",
   "device_revoke": "https://relay.example.com/device/grants/revoke",
   "mcp_url": "https://relay.example.com/mcp",
-  "account_url": "https://relay.example.com/account"
+  "account_url": "https://relay.example.com/account",
+  "device_resource": "https://relay.example.com/device"
 }
 ```
+
+`device_resource` is optional: the OAuth resource the app's tokens are for (see below). Relays with a single resource
+for everything leave it out.
 
 The app refuses a relay whose `protocol` it does not support, and any URL that is not `https`/`wss` unless the host is
 `localhost` or `127.0.0.1` (for development). `account_url` is shown to the user (sign up, billing, devices).
@@ -49,11 +53,13 @@ The app refuses a relay whose `protocol` it does not support, and any URL that i
 The relay is an OAuth 2.1 authorization server:
 
 - RFC 8414 metadata at `{issuer}/.well-known/oauth-authorization-server`
-- RFC 9728 protected-resource metadata at `{issuer}/.well-known/oauth-protected-resource`. The resource is the
-  relay's origin (`issuer`), so one token audience covers `mcp_url` and the device endpoints; scopes keep them apart.
-  Clients that send `resource` must send that value. `401` responses from `mcp_url` carry
-  `WWW-Authenticate: Bearer resource_metadata="<that url>"`; a token with the wrong scope gets `403`
-  `insufficient_scope`
+- Two protected resources (RFC 8707, RFC 9728): `mcp_url` for agents, as MCP clients name the MCP URL in `resource`,
+  and `device_resource` for the device endpoints. Each publishes its metadata at
+  `{issuer}/.well-known/oauth-protected-resource/<path>` (`/mcp`, `/device`); `401` responses carry
+  `WWW-Authenticate: Bearer resource_metadata="<that url>"`. A token is bound to one resource and refused (`401`) on
+  the other. An agent's authorization request without `resource` gets `mcp_url`; a `scope=device` request without
+  one gets `device_resource`, so apps that do not send it keep working. A relay without `device_resource` has one
+  resource, its origin, for both
 - RFC 7591 dynamic client registration; public clients (`token_endpoint_auth_method: none`)
 - Authorization code with PKCE (`S256` only), refresh tokens with rotation
 
@@ -72,7 +78,8 @@ loopback address, so a web agent cannot obtain a device token.
 1. Registers itself (DCR) with `client_name: "Blankey"` and the redirect URI
    `http://127.0.0.1:{port}/relay/callback`, where `{port}` is the app's local MCP port. It registers again when the
    port changes. Relays should also accept any port on a loopback redirect (RFC 8252 §7.3).
-2. Opens the system browser on the authorization endpoint with `scope=device`, PKCE and `state`; the user signs in on
+2. Opens the system browser on the authorization endpoint with `scope=device`, `resource=<device_resource>` (when the
+   relay names one), PKCE and `state`; the user signs in on
    the relay.
 3. Exchanges the code; keeps the refresh token in the OS keychain.
 4. `POST device_register` with `Authorization: Bearer <device token>` and `{"name": "<host name>", "platform":
@@ -127,8 +134,9 @@ Relay → app, for each HTTP request the agent sends to `mcp_url`:
  "mcp-session-id": "…", "mcp-protocol-version": "2025-06-18"}, "body": "<JSON-RPC text>"}
 ```
 
-Forward only `content-type`, `accept`, `mcp-session-id`, `mcp-protocol-version` and `last-event-id`; drop any absent
-ones. `method` is `POST`, `GET` or `DELETE`.
+Forward `content-type`, `accept`, `last-event-id` and every `mcp-*` header (`mcp-session-id`, `mcp-protocol-version`,
+and the `mcp-method`, `mcp-name` and `mcp-param-*` that MCP 2026-07-28 requires); drop all others. The app forwards the
+same set to its MCP server. `method` is `POST`, `GET` or `DELETE`.
 
 App → relay:
 
