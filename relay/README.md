@@ -24,6 +24,8 @@ agent --POST /mcp (Bearer)--> relay --WebSocket frame--> Blankey app --> local M
 - Remote sessions cannot read local files by path; agents get files through `request_file`, which the user answers
   with a file picker; the agent gets a file id and size, never the file name. Each agent (grant) only sees its own
   requests and files. Long waits are capped (`wait_request` ≤ 50 s per call over a relay).
+- Collection links: the relay stores one sealed blob per submission and never sees its plaintext or the key
+  fingerprint in the link's fragment (see Collection links below).
 
 ## Discovery
 
@@ -38,12 +40,15 @@ agent --POST /mcp (Bearer)--> relay --WebSocket frame--> Blankey app --> local M
   "device_revoke": "https://relay.example.com/device/grants/revoke",
   "mcp_url": "https://relay.example.com/mcp",
   "account_url": "https://relay.example.com/account",
-  "device_resource": "https://relay.example.com/device"
+  "device_resource": "https://relay.example.com/device",
+  "device_links": "https://relay.example.com/device/links",
+  "device_inbox": "https://relay.example.com/device/inbox"
 }
 ```
 
 `device_resource` is optional: the OAuth resource the app's tokens are for (see below). Relays with a single resource
-for everything leave it out.
+for everything leave it out. `device_links` and `device_inbox` are optional too: relays without collection links
+leave them out, and older apps ignore them.
 
 The app refuses a relay whose `protocol` it does not support, and any URL that is not `https`/`wss` unless the host is
 `localhost` or `127.0.0.1` (for development). `account_url` is shown to the user (sign up, billing, devices).
@@ -177,6 +182,45 @@ App → relay: `{"v": 1, "type": "grants", "id": "q-1"}`; relay → app:
 "created_at": "2026-10-12T10:00:00Z"}]}`: the grants this device accepted that the relay still honours. The app shows
 them on the Connections page.
 
+## Collection links
+
+A collection link is a public form on the relay that someone else fills in for the user. The browser seals the
+answers and files to an X25519 key that only the device that made the link holds; the relay passes on one opaque blob.
+
+Device endpoints (device token; every call names the device with `?device_id=<id>`):
+
+- `POST device_links {public_key, spec, expires_at, max_submissions}` → `201 {id, url}`; `402` when the account needs
+  attention. `public_key` is the raw X25519 key, base64url. `url` is `<relay>/s/<id>`; the app appends
+  `#<fingerprint>`, with `fingerprint = base64url(SHA-256(public_key)[..12])` (16 characters).
+- `GET device_links` → `{links: [{id, url, state, submissions, max_submissions, created_at, expires_at,
+  revoked_at}]}`, `state` being `open`, `expired`, `revoked` or `full`.
+- `DELETE device_links/<id>` → `204`: revokes the link and deletes whatever is waiting for it. The app deletes the
+  private key first, so nothing still on its way can be opened.
+- `GET device_inbox` → `{inbox: [{sid, link_id, size, url}]}`: complete submissions; `url` is a presigned GET (no
+  bearer token) valid for 10 minutes.
+- `DELETE device_inbox/<sid>` → `204`. The app calls it once the blob is on disk, and only then creates the request.
+
+Relay → app when a submission completes, with no reply: `{"v": 1, "type": "inbox", "id": "<sid>"}`. Delivery goes to
+the device that made the link, not to the primary one. The app also drains `device_inbox` after each connect, so
+submissions that arrive while it is offline still land.
+
+The spec, public and served to anyone with the link:
+`{title, from, note, fields: [{key, label, type, hint, required}], files: {max_files, kinds}}`. It holds no values and
+no profile. `type` is one of the app's field types; `max_files` is 0 to 10; `kinds` are HTML `accept` tokens (`.pdf`,
+`image/*`), empty for any file.
+
+Wire format: `crypto::seal` (`ephemeral_pub(32) || nonce(12) || AES-256-GCM ciphertext`, key from X25519 and
+HKDF-SHA256 with an empty salt and info `"blankey:seal" || ephemeral_pub || recipient_pub`) under AAD `link:<id>`. The
+plaintext is `u32 BE header length || header JSON || file bytes back to back`, the header being
+`{"v":1,"values":{"<key>":"…"},"files":[{"name","type","size"}],"submitted_at"}`. Files are up to 50 MB each and the
+blob up to `max_files × 50 MB + 1 MB`. `src-tauri/tests/data/seal_vectors.json` holds vectors (seal and fingerprint)
+that a browser implementation must reproduce; a Rust test keeps them current.
+
+The form page is one static HTML file for every link, with its scripts under SRI and a strict CSP. Its script checks
+the served public key against the fragment and refuses to seal on a mismatch or a missing fragment. The relay could
+still serve a page that skips that check; monitoring the served page from the app and serving it from a separate
+static origin are the documented next steps.
+
 ## Revoking
 
 `POST device_revoke` with the device token and `{"grant": "g-abc"}` → `204`. The relay must stop accepting tokens of
@@ -193,6 +237,8 @@ Any stack works (Workers, Node, Go…) as long as it speaks the above over TLS. 
 - `approve` before issuing agent codes, and on a device's first request for a grant; tokens tied to the grant
 - `mcp` frames per request, 60 s wait, 503 when no device is online, 403 for a grant the device refused
 - revocation
+- optionally, collection links: `device_links`, `device_inbox`, the `inbox` frame and a form page that seals in the
+  browser
 
 To test: run it locally, set the app's relay to `http://localhost:<port>`, sign in from the app, then connect
 [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to `mcp_url`: it registers, you accept it in

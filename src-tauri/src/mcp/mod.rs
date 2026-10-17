@@ -100,7 +100,7 @@ mod tests {
             assert_eq!(status, 200, "{reply}");
             assert!(reply["result"]["instructions"].as_str().unwrap().contains("Blankey"));
             let (_, tools) = post(port, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), None);
-            assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 22);
+            assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 24);
             let call = json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                               "params": {"name": "get_template", "arguments": {"template_id": "nope"}}});
             let (_, reply) = post(port, call.clone(), None);

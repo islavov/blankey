@@ -5,6 +5,7 @@ import { Activity } from "./pages/activity.js";
 import { Connections, relaySignIn, STATES } from "./pages/connections.js";
 import { Documents } from "./pages/documents.js";
 import { FillSets } from "./pages/fillsets.js";
+import { Links } from "./pages/links.js";
 import { Profiles } from "./pages/profiles.js";
 import { Templates } from "./pages/templates.js";
 import { currentTheme, setTheme } from "./theme.js";
@@ -16,12 +17,13 @@ const PAGES = {
   documents: { title: "Documents", component: Documents },
   templates: { title: "Templates", component: Templates },
   profiles: { title: "Profiles", component: Profiles },
+  links: { title: "Collection links", component: Links },
 };
 
 const SECTIONS = [
   ["Assistant", ["activity", "connections"]],
   ["Library", ["fillsets", "documents", "templates"]],
-  ["Vault", ["profiles"]],
+  ["Vault", ["profiles", "links"]],
 ];
 
 export function App() {

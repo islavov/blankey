@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Collection links (Vault → Collection links): a short link to a web form on the relay where someone else types the
+  fields of a profile and attaches files, up to 50 MB each. What they send is encrypted in their browser to this
+  computer, arrives even while Blankey is locked or offline, and is reviewed on Activity before it is saved into a
+  profile. Kept files are encrypted in the vault and listed on Documents. Agents can draft links
+  (`create_collection_link`, confirmed in the app) and list them (`list_collection_links`); they never see what
+  was sent.
+
 ## 0.1.0
 
 First release.

@@ -41,6 +41,24 @@ export function seed() {
       { id: "loan", name: "Loan contract", kind: "docx", blanks: 2, used_by: [], description: "" },
     ],
     requests: [],
+    links: [
+      {
+        link_id: "XchaBj2",
+        url: "https://relay.blankey.io/s/XchaBj2#k4Fp9QzR2mWx7aLc",
+        title: "Tenant details",
+        profile_id: 1,
+        new_profile: null,
+        created_at: "2026-10-17T09:00:00+00:00",
+        expires_at: "2026-10-24T09:00:00Z",
+        max_submissions: 3,
+        state: "open",
+        submissions: 1,
+        fields: ["Full name", "Email"],
+        profile_name: "John",
+      },
+    ],
+    collected: [],
+    submissions: {},
     previewDelay: 0,
     relay: {
       url: "https://relay.blankey.io",
@@ -74,6 +92,40 @@ export const profileInputRequest = (id = 8) => ({
       { key: "email", label: "Email", type: "email", required: true },
       { key: "vip", label: "VIP", type: "bool", hint: "Priority customer" },
     ],
+  },
+});
+
+export const submissionRequest = (id = 12) => ({ id, kind: "link_submission", payload: { link_id: "XchaBj2", sid: "s-1", reason: "Submission for Tenant details" } });
+
+export const submission = (id = 12) => ({
+  request_id: id,
+  link: { link_id: "XchaBj2", title: "Tenant details", profile_id: null, new_profile: "New tenant" },
+  fields: [
+    { key: "name", label: "Full name", type: "text", hint: "", required: true },
+    { key: "pets", label: "Pets", type: "bool", hint: "", required: false },
+  ],
+  values: { name: "Jane Roe", pets: "yes" },
+  files: [
+    { index: 0, name: "id-card.png", type: "image/png", size: 2048, thumbnail: "data:image/png;base64,iVBORw0KGgo=" },
+    { index: 1, name: "payslip.pdf", type: "application/pdf", size: 3 * 1024 * 1024, thumbnail: null },
+  ],
+  submitted_at: "2026-10-17T12:00:00.000Z",
+});
+
+export const linkRequest = (id = 14) => ({
+  id,
+  kind: "collection_link",
+  payload: {
+    reason: "Collect the tenant's contact details",
+    title: "Contact details",
+    profile_id: 1,
+    fields: [
+      { key: "name", label: "Name", type: "text", required: true },
+      { key: "phone", label: "Phone", type: "text" },
+    ],
+    max_files: 0,
+    expires_days: 30,
+    max_submissions: 1,
   },
 });
 
@@ -165,6 +217,32 @@ export function createBackend(db = seed()) {
       db.sets = db.sets.filter((s) => s.id !== id);
     },
     list_documents: () => db.docs,
+    list_collected_files: () => db.collected,
+    open_collected_files: () => null,
+    export_collected_file: () => "/tmp/payslip.pdf",
+    delete_collected_files: ({ ids }) => {
+      db.collected = db.collected.filter((f) => !ids.includes(f.id));
+    },
+    list_links: () => db.links,
+    create_link: ({ draft, requestId }) => {
+      if (!draft.title.trim()) throw "Give the link a title";
+      const link = { link_id: "Ab3dE9z", url: "https://relay.blankey.io/s/Ab3dE9z#qqj_9wO1CyKX9Pbh", title: draft.title };
+      db.links.unshift({ ...link, state: "open", submissions: 0, max_submissions: draft.max_submissions, fields: draft.fields.map((f) => f.label), expires_at: "2026-10-24T09:00:00Z" });
+      if (requestId) removeRequest(requestId);
+      return link;
+    },
+    revoke_link: ({ linkId }) => {
+      db.links.find((l) => l.link_id === linkId).state = "revoked";
+    },
+    open_submission: ({ id }) => {
+      if (!db.submissions[id]) throw "This submission was for a revoked link, so it was dropped.";
+      return db.submissions[id];
+    },
+    resolve_submission: ({ id, values }) => {
+      if (!values.name) return ["Full name: required"];
+      removeRequest(id);
+      return [];
+    },
     open_documents: () => null,
     export_document: () => "/tmp/doc.pdf",
     delete_documents: ({ ids }) => {

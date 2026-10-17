@@ -16,15 +16,20 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use axum::Router;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::config::{Config, OFFICIAL_RELAY};
 use crate::core::Blankey;
+use crate::crypto;
 use crate::keychain::SecretStore;
-use crate::vault::RelayGrant;
+use crate::links::{InboxEntry, LinkDraft};
+use crate::vault::{now, Link, RelayGrant};
 use discovery::Discovery;
 use oauth::{Client, HttpError, Metadata};
 
@@ -32,6 +37,8 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(600);
 const GRANTS_TIMEOUT: Duration = Duration::from_secs(5);
 const SWITCH_REVOKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Submissions are up to 500 MB: no overall timeout, only for connecting and for each read.
+const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -87,6 +94,16 @@ impl<F: Fn(&Approval) -> bool + Send + Sync> Approver for F {
 #[derive(Clone, Debug, Deserialize)]
 pub struct RemoteGrant {
     pub grant: String,
+}
+
+/// A collection link as the relay counts it (`GET /device/links`).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RemoteLink {
+    pub id: String,
+    /// open, expired, revoked or full
+    pub state: String,
+    pub submissions: i64,
+    pub max_submissions: i64,
 }
 
 #[derive(Serialize)]
@@ -173,6 +190,10 @@ pub struct Relay {
     browser: Browser,
     runtime: Handle,
     http: ureq::Agent,
+    /// presigned downloads of submissions
+    download: ureq::Agent,
+    /// one inbox drain at a time, so a submission is never taken twice
+    inbox: tokio::sync::Mutex<()>,
     mcp: Router,
     callbacks: oauth::Callbacks,
     status: watch::Sender<Status>,
@@ -213,6 +234,12 @@ impl Relay {
             runtime,
             // few calls far apart: a pooled keep-alive connection the server has since closed would fail a POST
             http: ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).max_idle_connections(0).build(),
+            download: ureq::AgentBuilder::new()
+                .timeout_connect(HTTP_TIMEOUT)
+                .timeout_read(DOWNLOAD_READ_TIMEOUT)
+                .max_idle_connections(0)
+                .build(),
+            inbox: tokio::sync::Mutex::new(()),
             mcp,
             callbacks: oauth::Callbacks::default(),
             status: watch::channel(status).0,
@@ -532,6 +559,155 @@ impl Relay {
         }
     }
 
+    // -- collection links ----------------------------------------------------------------------------------
+
+    fn device_id(&self) -> Result<String, String> {
+        self.app.vault().relay_device_id().ok().flatten().ok_or_else(|| "Sign in to the relay first.".to_string())
+    }
+
+    /// Makes the link's key pair, registers the public key and spec on the relay and keeps the private key in the
+    /// vault. The stored URL carries the key's fingerprint in its fragment, which the relay never sees.
+    pub async fn create_link(&self, draft: &LinkDraft) -> Result<Link, String> {
+        let spec = draft.spec()?;
+        if !self.app.vault().unlocked() {
+            return Err("Vault is locked".into());
+        }
+        let device = self.device_id()?;
+        let (private, public) = crypto::new_seal_keypair();
+        let expires_at = draft.expires_at();
+        let body = json!({
+            "public_key": URL_SAFE_NO_PAD.encode(public),
+            "spec": spec,
+            "expires_at": expires_at,
+            "max_submissions": draft.max_submissions,
+        });
+        #[derive(Deserialize)]
+        struct Created {
+            id: String,
+            url: String,
+        }
+        let call_device = device.clone();
+        let created: Created = self
+            .authorized(move |agent, discovery, token| {
+                let url = device_url(discovery.device_links.as_deref(), &[], &call_device)?;
+                oauth::parse(&oauth::post_json(agent, &url, token, &body)?)
+            })
+            .await
+            .map_err(link_failure)?;
+        discovery::check_url(&created.url, "https", "http")?;
+        let link = Link {
+            link_id: created.id.clone(),
+            relay_url: self.url(),
+            url: format!("{}#{}", created.url, crypto::fingerprint(&public)),
+            title: spec.title.clone(),
+            spec: serde_json::to_value(&spec).map_err(|e| e.to_string())?,
+            profile_id: draft.profile_id,
+            new_profile: draft.new_profile.clone().filter(|_| draft.profile_id.is_none()),
+            created_at: now(),
+            expires_at,
+            max_submissions: draft.max_submissions as i64,
+            revoked_at: None,
+            received: 0,
+        };
+        let stored = self.app.vault().add_link(&link, private.as_ref());
+        if let Err(e) = stored {
+            // nothing here could open what the link receives
+            let _ = self.delete_remote_link(device, created.id).await;
+            return Err(e.to_string());
+        }
+        self.app.audit("user", "create_link", &link.link_id);
+        Ok(link)
+    }
+
+    /// This device's links with the relay's counts.
+    pub async fn remote_links(&self) -> Result<Vec<RemoteLink>, String> {
+        let device = self.device_id()?;
+        #[derive(Deserialize)]
+        struct Links {
+            links: Vec<RemoteLink>,
+        }
+        self.authorized(move |agent, discovery, token| {
+            let url = device_url(discovery.device_links.as_deref(), &[], &device)?;
+            Ok(oauth::get_json::<Links>(agent, &url, token)?.links)
+        })
+        .await
+        .map_err(Failure::message)
+    }
+
+    /// Drops the private key here first, so nothing sent to the link opens even if telling the relay fails.
+    pub async fn revoke_link(&self, link_id: &str) -> Result<(), String> {
+        self.app.vault().revoke_link(link_id).map_err(|e| e.to_string())?;
+        self.app.audit("user", "revoke_link", link_id);
+        if let Ok(device) = self.device_id() {
+            if let Err(e) = self.delete_remote_link(device, link_id.to_string()).await {
+                eprintln!("relay: the relay was not told about the revoked link {link_id}: {}", e.message());
+            }
+        }
+        Ok(())
+    }
+
+    async fn delete_remote_link(&self, device: String, link_id: String) -> Result<(), Failure> {
+        self.authorized(move |agent, discovery, token| {
+            let url = device_url(discovery.device_links.as_deref(), &[&link_id], &device)?;
+            match oauth::delete(agent, &url, token) {
+                Err(HttpError::Status(404, _)) => Ok(()),
+                result => result,
+            }
+        })
+        .await
+    }
+
+    /// Pulls every waiting submission: downloads it (still sealed), deletes it on the relay, then creates the
+    /// request. A failure before the delete leaves the relay copy for the next drain.
+    pub(crate) async fn drain_inbox(&self) {
+        let _draining = self.inbox.lock().await;
+        let Ok(device) = self.device_id() else { return };
+        #[derive(Deserialize)]
+        struct Inbox {
+            inbox: Vec<InboxEntry>,
+        }
+        let list_device = device.clone();
+        let listed = self
+            .authorized(move |agent, discovery, token| {
+                if discovery.device_inbox.is_none() {
+                    return Ok(Vec::new());
+                }
+                let url = device_url(discovery.device_inbox.as_deref(), &[], &list_device)?;
+                Ok(oauth::get_json::<Inbox>(agent, &url, token)?.inbox)
+            })
+            .await;
+        let entries = match listed {
+            Ok(entries) => entries,
+            Err(e) => return eprintln!("relay: cannot list the inbox: {}", e.message()),
+        };
+        for entry in entries {
+            let (app, agent, pulled) = (self.app.clone(), self.download.clone(), entry.clone());
+            if let Err(e) = blocking(move || app.download_submission(&agent, &pulled)).await {
+                eprintln!("relay: cannot download submission {}: {e}", entry.sid);
+                continue;
+            }
+            let (device, sid) = (device.clone(), entry.sid.clone());
+            let deleted = self
+                .authorized(move |agent, discovery, token| {
+                    let url = device_url(discovery.device_inbox.as_deref(), &[&sid], &device)?;
+                    match oauth::delete(agent, &url, token) {
+                        Err(HttpError::Status(404, _)) => Ok(()),
+                        result => result,
+                    }
+                })
+                .await;
+            if let Err(e) = deleted {
+                eprintln!("relay: cannot delete submission {} on the relay: {}", entry.sid, e.message());
+                continue;
+            }
+            let app = self.app.clone();
+            let accepted = blocking(move || app.accept_submission(&entry.link_id, &entry.sid)).await;
+            if let Err(e) = accepted {
+                eprintln!("relay: cannot store a submission: {e}");
+            }
+        }
+    }
+
     /// Moves to another relay: checks its discovery document first, then forgets the old relay (grants, device,
     /// client, token; grants are revoked there best-effort) and starts signing in. None means the official relay.
     pub async fn set_url(self: &Arc<Self>, url: Option<&str>) -> Result<(), String> {
@@ -571,6 +747,26 @@ impl Relay {
         self.app.audit("user", "relay_switch", &url);
         self.login();
         Ok(())
+    }
+}
+
+/// `{base}/{segments}?device_id=…`: a link and its submissions belong to the device that holds the key.
+fn device_url(base: Option<&str>, segments: &[&str], device_id: &str) -> Result<String, HttpError> {
+    let base = base.ok_or_else(|| HttpError::Transport("This relay does not offer collection links.".into()))?;
+    let mut url = url::Url::parse(base).map_err(|e| HttpError::Transport(e.to_string()))?;
+    if !segments.is_empty() {
+        url.path_segments_mut().map_err(|_| HttpError::Transport(format!("Bad relay URL {base}")))?.extend(segments);
+    }
+    url.query_pairs_mut().append_pair("device_id", device_id);
+    Ok(url.into())
+}
+
+fn link_failure(failure: Failure) -> String {
+    let message = failure.message();
+    if message.contains("account_needs_attention") {
+        "Your relay account needs attention. Open Account and billing on the Connections page.".into()
+    } else {
+        message
     }
 }
 

@@ -14,6 +14,7 @@ use serde_json::{json, Map, Value};
 
 use crate::core::{Blankey, FILE, FILE_KINDS, FILL, PROFILE_INPUT};
 use crate::fieldtypes;
+use crate::links::{link_state, LinkDraft, SpecField, COLLECTION_LINK, DEFAULT_MAX_FILES, LINK_SUBMISSION};
 use crate::mcp::{remote, Remote};
 use crate::render::{pdf_form, preview};
 use crate::templates::bindings::example_context;
@@ -24,7 +25,7 @@ use crate::vault::{Profiles, Request};
 pub const INSTRUCTIONS: &str = r#"Blankey keeps personal data (PII) encrypted in a local vault and renders document templates.
 You never see real values. You see profiles, their field keys, labels, types and value lengths.
 While the vault is locked only vault_status and the request tools answer at once (request_profile_input,
-request_fill, wait_request, get_request, list_requests): a request opens Blankey and asks the user to
+request_fill, create_collection_link, wait_request, get_request, list_requests): a request opens Blankey and asks the user to
 unlock. Any other tool opens the unlock screen and waits up to 50 s for the user; if it still reports the
 vault as locked, ask the user to unlock Blankey and call again.
 
@@ -74,6 +75,12 @@ Remote sessions (through a Blankey relay) cannot read local paths:
 2. wait_request returns {file_id, kind, size} when the user has chosen it. Over a relay wait_request returns
    after at most 50 s: call it again while the status is pending.
 3. Pass the file id ("file:<uuid>") wherever a tool takes path or source_path.
+
+Collection links (needs a relay sign-in): a short link to a web form that another person fills in. Their
+answers and files are encrypted in their browser to this computer and land in a profile; you never see them.
+1. create_collection_link with the fields to ask for (and files), and the profile to save into.
+2. The user confirms it in Blankey; wait_request then returns the url to send. The url is not secret.
+3. list_collection_links shows each link's url, status and how many submissions came in.
 "#;
 
 pub const TOOL_TIMEOUT_MAX: u64 = 1800;
@@ -118,8 +125,11 @@ fn read_file(app: &Blankey, remote: Option<&Remote>, path: &str) -> Result<Vec<u
     std::fs::read(source_path(app, remote, path)?).map_err(|e| format!("{path}: {e}"))
 }
 
-/// Remote agents only see their own requests.
+/// Remote agents only see their own requests; nobody sees submissions to collection links.
 fn visible(request: Request, remote: Option<&Remote>) -> Result<Request, String> {
+    if request.kind == LINK_SUBMISSION {
+        return Err(format!("Unknown request {}", request.id));
+    }
     match remote {
         Some(r) if request.grant_id.as_deref() != Some(r.grant.as_str()) => {
             Err(format!("Unknown request {}", request.id))
@@ -365,6 +375,37 @@ pub struct RequestFileArgs {
     kind: String,
     /// Shown to the user: which document you need and what for.
     reason: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct CreateCollectionLinkArgs {
+    /// The form's title, shown to the person who fills it in.
+    title: String,
+    /// Shown above the form.
+    note: Option<String>,
+    /// Who is asking, shown next to the user's account email.
+    from: Option<String>,
+    /// The profile the answers go into; or new_profile_name.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    profile_id: Option<i64>,
+    new_profile_name: Option<String>,
+    /// [{key, label, type, required, hint}]
+    #[serde(default)]
+    fields: Vec<SpecField>,
+    /// Files to ask for, 0 to 10 (default 5), up to 50 MB each.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    max_files: Option<i64>,
+    /// Allowed file kinds as extensions or types (".pdf", "image/*"); empty allows any.
+    #[serde(default)]
+    kinds: Vec<String>,
+    /// 1 to 90, default 7.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    expires_days: Option<i64>,
+    /// 1 to 100, default 1.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    max_submissions: Option<i64>,
+    /// Shown to the user when confirming the link.
+    reason: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -922,6 +963,81 @@ impl Tools {
         .await
     }
 
+    #[tool(
+        description = "Ask the user to create a collection link: a short URL to a web form where someone else types the\nfields (and attaches files) for a profile. fields: [{key, label, type, required, hint}] with type one of\ntext, number, date, bool, egn, iban, email, phone. Give profile_id to fill an existing profile or new_profile_name.\nThe user confirms it in the app; wait_request then returns {link_id, url}. The answers never reach you."
+    )]
+    async fn create_collection_link(
+        &self,
+        Parameters(a): Parameters<CreateCollectionLinkArgs>,
+        ext: Extensions,
+    ) -> ToolResult {
+        let grant = remote(&ext).map(|r| r.grant);
+        self.run_any(move |app| {
+            let new_profile = a.new_profile_name.filter(|n| !n.trim().is_empty());
+            if a.profile_id.is_none() && new_profile.is_none() {
+                return Err("Pass profile_id or new_profile_name".into());
+            }
+            if let Some(id) = a.profile_id {
+                app.vault().get_profile(id).map_err(string)?;
+            }
+            let count =
+                |value: Option<i64>, default: u32| value.map_or(default, |v| v.clamp(0, u32::MAX as i64) as u32);
+            let draft = LinkDraft {
+                title: a.title,
+                from: a.from.unwrap_or_default(),
+                note: a.note.unwrap_or_default(),
+                profile_id: a.profile_id,
+                new_profile: new_profile.filter(|_| a.profile_id.is_none()),
+                fields: a.fields,
+                max_files: count(a.max_files, DEFAULT_MAX_FILES),
+                kinds: a.kinds,
+                expires_days: count(a.expires_days, 7),
+                max_submissions: count(a.max_submissions, 1),
+            };
+            let spec = draft.spec()?;
+            let mut payload = serde_json::to_value(&draft).map_err(string)?;
+            let reason = a.reason.filter(|r| !r.trim().is_empty()).unwrap_or_else(|| format!("Collect {}", spec.title));
+            payload["reason"] = json!(reason);
+            let id = app.create_request(COLLECTION_LINK, payload, grant.as_deref())?;
+            text(&json!({"request_id": id, "status": "pending"}))
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Collection links made on this computer: url, status, the fields they ask for and how many\nsubmissions came in. No submitted values."
+    )]
+    async fn list_collection_links(&self) -> ToolResult {
+        self.run_any(|app| {
+            let links = app.vault().list_links().map_err(string)?;
+            let list: Vec<Value> = links
+                .iter()
+                .map(|link| {
+                    let fields: Vec<Value> = link.spec["fields"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|f| json!({"key": f["key"], "label": f["label"]}))
+                        .collect();
+                    json!({
+                        "id": link.link_id,
+                        "title": link.title,
+                        "url": link.url,
+                        "status": link_state(link),
+                        "fields": fields,
+                        "max_files": link.spec["files"]["max_files"],
+                        "received": link.received,
+                        "max_submissions": link.max_submissions,
+                        "profile_id": link.profile_id,
+                        "expires_at": link.expires_at,
+                    })
+                })
+                .collect();
+            text(&list)
+        })
+        .await
+    }
+
     #[tool(description = "Generated real documents (metadata only; the user exports them from the app).")]
     async fn list_documents(&self) -> ToolResult {
         self.run(|app| text(&app.vault().list_documents().map_err(string)?)).await
@@ -1088,6 +1204,27 @@ pub mod tests {
         app.vault().resolve_request(1, "done", json!({"fill_set_id": fill_set, "document_ids": docs})).unwrap();
         let bindings = json!({"amount": {"value": SENTINEL_NAME}}).as_object().cloned().unwrap();
         app.vault().save_fill_set("f", &["d".into()], &profiles, &bindings, None).unwrap();
+
+        use crate::links::tests::{plaintext, stored_link, submit};
+        let public = stored_link(&app, "Ab3dE9z");
+        let sent = plaintext(
+            json!({"name": SENTINEL_NAME, "email": "sentinel@example.com"}),
+            &[("Hiddenwell.pdf", "application/pdf", SENTINEL_EGN.as_bytes())],
+        );
+        let saved = submit(&app, "Ab3dE9z", &public, &sent, "sub-saved");
+        let values = app.open_submission(saved).unwrap().values;
+        let target = crate::core::Target::Existing(pid);
+        assert!(app.resolve_submission(saved, target, &values, &[0]).unwrap().is_empty());
+        let waiting = submit(&app, "Ab3dE9z", &public, &sent, "sub-waiting");
+        for id in [saved, waiting] {
+            let hidden = t.get_request(args(json!({"request_id": id})), local()).await.unwrap_err();
+            assert!(hidden.contains("Unknown request"), "{hidden}");
+            let hidden = t.wait_request(args(json!({"request_id": id, "timeout_s": 0})), local()).await.unwrap_err();
+            assert!(hidden.contains("Unknown request"), "{hidden}");
+        }
+        let link = json!({"title": "More details", "profile_id": pid, "fields": [{"key": "phone", "type": "phone"}]});
+        outputs
+            .extend([out(t.list_collection_links().await), out(t.create_collection_link(args(link), local()).await)]);
         outputs.extend([
             out(t.list_documents().await),
             out(t.get_request(args(json!({"request_id": 1})), local()).await),
@@ -1104,9 +1241,56 @@ pub mod tests {
         };
         let all = [outputs.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join("\n"), audit.join("\n")].join("\n")
             + &String::from_utf8_lossy(&preview);
-        for secret in [SENTINEL_NAME, SENTINEL_EGN, "Sentinel", "Hiddenwell"] {
+        for secret in [SENTINEL_NAME, SENTINEL_EGN, "Sentinel", "Hiddenwell", "sentinel@"] {
             assert!(!all.contains(secret), "leaked {secret}");
         }
+        let tools = outputs.iter().map(|(t, _)| t.as_str()).collect::<String>();
+        assert!(!tools.contains("link_submission"), "submissions are not listed");
+    }
+
+    #[tokio::test]
+    async fn collection_links_are_confirmed_by_the_user() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let t = Tools::new(app.clone());
+        let (pid, _) = setup(&app, dir.path());
+        let bad = [
+            json!({"title": "x", "fields": [{"key": "a"}]}),
+            json!({"title": "", "profile_id": pid, "fields": [{"key": "a"}]}),
+            json!({"title": "x", "profile_id": pid, "fields": [{"key": "a b"}]}),
+            json!({"title": "x", "profile_id": pid, "fields": [{"key": "a", "type": "colour"}]}),
+            json!({"title": "x", "profile_id": pid, "max_files": 0}),
+            json!({"title": "x", "profile_id": pid, "fields": [{"key": "a"}], "max_files": 11}),
+            json!({"title": "x", "profile_id": 999, "fields": [{"key": "a"}]}),
+        ];
+        for link in bad {
+            assert!(t.create_collection_link(args(link.clone()), local()).await.is_err(), "{link}");
+        }
+        let link = json!({"title": "Tenant details", "new_profile_name": "Tenant", "max_files": "2",
+                          "fields": [{"key": "name", "label": "Full name", "required": true}]});
+        let (reply, _) = out(t.create_collection_link(args(link), remote()).await);
+        let id = serde_json::from_str::<Value>(&reply).unwrap()["request_id"].as_i64().unwrap();
+        let request = app.vault().get_request(id).unwrap();
+        assert_eq!(request.kind, COLLECTION_LINK);
+        let draft: LinkDraft = serde_json::from_value(Value::Object(request.payload.clone())).unwrap();
+        assert_eq!(
+            (draft.new_profile.as_deref(), draft.max_files, draft.fields[0].field_type.as_str()),
+            (Some("Tenant"), 2, "text")
+        );
+
+        let url = "https://relay.example.com/s/Ab3dE9z#qqj_9wO1CyKX9Pbh";
+        app.vault()
+            .resolve_request(id, "done", json!({"outcome": "created", "link_id": "Ab3dE9z", "url": url}))
+            .unwrap();
+        let (waited, _) = out(t.wait_request(args(json!({"request_id": id, "timeout_s": 0})), remote()).await);
+        assert!(waited.contains(url), "{waited}");
+
+        crate::links::tests::stored_link(&app, "Ab3dE9z");
+        let (listed, _) = out(t.list_collection_links().await);
+        let listed: Value = serde_json::from_str(&listed).unwrap();
+        assert_eq!(listed[0]["status"], "open");
+        assert_eq!(listed[0]["fields"][0], json!({"key": "name", "label": "Full name"}));
+        assert!(listed[0]["url"].as_str().unwrap().contains("/s/Ab3dE9z#"));
     }
 
     #[tokio::test]

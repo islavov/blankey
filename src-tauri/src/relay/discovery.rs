@@ -19,6 +19,11 @@ pub struct Discovery {
     /// have one resource and do not name it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_resource: Option<String>,
+    /// Collection links; optional, relays without them leave them out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_links: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_inbox: Option<String>,
 }
 
 impl Discovery {
@@ -33,8 +38,8 @@ impl Discovery {
             check_url(url, "https", "http")?;
         }
         check_url(&self.device_connect, "wss", "ws")?;
-        if let Some(resource) = &self.device_resource {
-            check_url(resource, "https", "http")?;
+        for url in [&self.device_resource, &self.device_links, &self.device_inbox].into_iter().flatten() {
+            check_url(url, "https", "http")?;
         }
         Ok(self)
     }
@@ -84,6 +89,8 @@ pub(crate) mod tests {
             mcp_url: format!("{base}/mcp"),
             account_url: format!("{base}/account"),
             device_resource: Some(format!("{base}/device")),
+            device_links: Some(format!("{base}/device/links")),
+            device_inbox: Some(format!("{base}/device/inbox")),
         }
     }
 
