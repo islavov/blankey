@@ -63,6 +63,48 @@ test("new link: ticked profile fields and custom fields make the draft", async (
   assert.equal(rows().length, 2);
 });
 
+test("new link: pressing a checkbox and dragging down the column paints it", async () => {
+  backend.db.fields[1].push({ key: "phone", label: "Phone", type: "text", value: "" });
+  await action("New link");
+  const cells = (cls) => $$(`.link-fields input.${cls}`).map((input) => input.parentElement);
+  const states = (cls) => $$(`.link-fields input.${cls}`).map((input) => input.checked);
+  const drag = async (from, over) => {
+    from.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    await settle();
+    for (const cell of over) {
+      cell.dispatchEvent(new MouseEvent("mouseenter"));
+      await settle();
+    }
+    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    await settle();
+  };
+
+  const [first, second, third] = cells("ask");
+  await drag(first, [second, third]);
+  assert.deepEqual(states("ask"), [true, true, true]);
+  // starting on a ticked box unticks the ones passed over
+  await drag(second, [third]);
+  assert.deepEqual(states("ask"), [true, false, false]);
+  // after mouseup, passing over boxes changes nothing
+  cells("ask")[1].dispatchEvent(new MouseEvent("mouseenter"));
+  await settle();
+  assert.deepEqual(states("ask"), [true, false, false]);
+  // the required column paints on its own
+  await drag(cells("required")[0], [cells("required")[1], cells("ask")[2]]);
+  assert.deepEqual(states("required"), [true, true, false]);
+  assert.deepEqual(states("ask"), [true, false, false]);
+
+  // keys toggle and paint the Ask column too
+  const keys = $$(".link-fields td.mono");
+  await drag(keys[1], [keys[2]]);
+  assert.deepEqual(states("ask"), [true, true, true]);
+  await drag(keys[0], []);
+  assert.deepEqual(states("ask"), [false, true, true]);
+
+  await click(byText(".sheet-foot button", "Cancel"));
+  backend.db.fields[1].pop();
+});
+
 test("new link into a new profile needs its name", async () => {
   await action("New link");
   await choose($(".sheet select[name=profile]"), "new");

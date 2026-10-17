@@ -1,4 +1,4 @@
-import { useEffect, useState } from "../../vendor/preact-htm.js";
+import { useEffect, useRef, useState } from "../../vendor/preact-htm.js";
 import { call, invoke } from "../api.js";
 import { html, matches, plural, reload, state, useLoad, useRemembered, useStore, when } from "../lib.js";
 import { confirmDialog, toast } from "../ui/feedback.js";
@@ -83,6 +83,29 @@ export function openLinkSheet(draft = {}, requestId = null) {
   return openSheet((close) => html`<${LinkSheet} draft=${draft} requestId=${requestId} close=${close} />`);
 }
 
+/**
+ * Mouse handlers that paint a checkbox column: pressing flips the box, and dragging down the column gives every box
+ * passed over that same value. On cells, so the whole cell (and the key next to Ask) is a target.
+ */
+function paintable(paint, column, checked, set) {
+  return {
+    onMouseDown: (e) => {
+      e.preventDefault();
+      paint.current = { column, value: !checked };
+      set(!checked);
+    },
+    onMouseEnter: () => {
+      if (paint.current?.column === column && checked !== paint.current.value) set(paint.current.value);
+    },
+  };
+}
+
+/** A paintable checkbox cell; the keyboard still toggles the box. */
+const PaintCell = ({ column, checked, set, paint, cls }) => html`
+  <td class="paint" ...${paintable(paint, column, checked, set)}>
+    <input type="checkbox" class=${cls} checked=${checked} onChange=${(e) => set(e.target.checked)} />
+  </td>`;
+
 let nextRow = 0;
 const customRow = (f = {}) => ({ uid: nextRow++, key: f.key || "", label: f.label || "", type: f.type || "text", required: !!f.required });
 
@@ -102,6 +125,13 @@ function LinkSheet({ draft, requestId, close }) {
   const [days, setDays] = useState(String(draft.expires_days ?? 7));
   const [maxSubmissions, setMaxSubmissions] = useState(String(draft.max_submissions ?? 1));
   const [problem, setProblem] = useState("");
+  const paint = useRef(null);
+
+  useEffect(() => {
+    const stop = () => (paint.current = null);
+    document.addEventListener("mouseup", stop);
+    return () => document.removeEventListener("mouseup", stop);
+  }, []);
 
   useEffect(() => {
     if (profiles && profileId === null) setProfileId(profiles[0]?.id ?? "new");
@@ -134,8 +164,9 @@ function LinkSheet({ draft, requestId, close }) {
 
   if (!profiles) return null;
 
-  const setAsk = (key, patch) => setAsked({ ...asked, [key]: { ...asked[key], ...patch } });
-  const setRow = (uid, patch) => setCustom(custom.map((r) => (r.uid === uid ? { ...r, ...patch } : r)));
+  // functional updates: a drag changes several rows before the next render
+  const setAsk = (key, patch) => setAsked((all) => ({ ...all, [key]: { ...all[key], ...patch } }));
+  const setRow = (uid, patch) => setCustom((rows) => rows.map((r) => (r.uid === uid ? { ...r, ...patch } : r)));
 
   const cancel = async () => {
     if (requestId) await invoke("cancel_request", { id: requestId });
@@ -181,11 +212,14 @@ function LinkSheet({ draft, requestId, close }) {
     <div class="sheet-body">
       <form class="input-form link-form" autocomplete="off" onSubmit=${(e) => (e.preventDefault(), create())}>
         <label>Title</label>
-        <input type="text" name="title" value=${title} placeholder="Tenant details" onInput=${(e) => setTitle(e.target.value)} />
+        <input type="text" name="title" value=${title} placeholder="e.g. Details for your loan application" onInput=${(e) => setTitle(e.target.value)} />
+        <div class="hint muted small">The heading of the form and the name of the browser tab.</div>
         <label>From</label>
-        <input type="text" name="from" value=${from} placeholder="Your name, shown with your account email" onInput=${(e) => setFrom(e.target.value)} />
+        <input type="text" name="from" value=${from} placeholder="e.g. Maria at Example Lending" onInput=${(e) => setFrom(e.target.value)} />
+        <div class="hint muted small">Shown as "Requested by", next to the email of your relay account.</div>
         <label>Note</label>
-        <textarea name="note" rows="2" value=${note} onInput=${(e) => setNote(e.target.value)}></textarea>
+        <textarea name="note" rows="2" value=${note} placeholder="e.g. Please send these by Friday. A photo of each page is fine." onInput=${(e) => setNote(e.target.value)}></textarea>
+        <div class="hint muted small">Shown under the heading, above the fields.</div>
         <label>Save into</label>
         <${Select} name="profile" value=${profileId ?? ""} options=${profileOptions} onChange=${(v) => setProfileId(v === "new" ? "new" : Number(v))} />
         ${profileId === "new" && html`
@@ -198,11 +232,11 @@ function LinkSheet({ draft, requestId, close }) {
             ${profileFields.map(
               (f) => html`
                 <tr key=${f.key}>
-                  <td><input type="checkbox" class="ask" checked=${asked[f.key]?.ask} onChange=${(e) => setAsk(f.key, { ask: e.target.checked })} /></td>
-                  <td class="mono">${f.key}</td>
+                  <${PaintCell} column="ask" cls="ask" paint=${paint} checked=${!!asked[f.key]?.ask} set=${(ask) => setAsk(f.key, { ask })} />
+                  <td class="mono paint" ...${paintable(paint, "ask", !!asked[f.key]?.ask, (ask) => setAsk(f.key, { ask }))}>${f.key}</td>
                   <td><input type="text" value=${asked[f.key]?.label || ""} onInput=${(e) => setAsk(f.key, { label: e.target.value })} /></td>
                   <td class="muted">${f.type}</td>
-                  <td><input type="checkbox" checked=${asked[f.key]?.required} onChange=${(e) => setAsk(f.key, { required: e.target.checked })} /></td>
+                  <${PaintCell} column="required" cls="required" paint=${paint} checked=${!!asked[f.key]?.required} set=${(required) => setAsk(f.key, { required })} />
                   <td></td>
                 </tr>`
             )}
@@ -213,14 +247,17 @@ function LinkSheet({ draft, requestId, close }) {
                   <td><input type="text" class="key mono" value=${r.key} placeholder="address.city" spellcheck="false" onInput=${(e) => setRow(r.uid, { key: e.target.value })} /></td>
                   <td><input type="text" class="label" value=${r.label} onInput=${(e) => setRow(r.uid, { label: e.target.value })} /></td>
                   <td><${Select} class="type" value=${r.type} options=${types} onChange=${(type) => setRow(r.uid, { type })} /></td>
-                  <td><input type="checkbox" checked=${r.required} onChange=${(e) => setRow(r.uid, { required: e.target.checked })} /></td>
+                  <${PaintCell} column="required" cls="required" paint=${paint} checked=${r.required} set=${(required) => setRow(r.uid, { required })} />
                   <td><button type="button" class="remove ghost" title="Remove field" onClick=${() => setCustom(custom.filter((x) => x.uid !== r.uid))}>✕</button></td>
                 </tr>`
             )}
           </tbody>
         </table>
         <span></span>
-        <div><button type="button" onClick=${() => setCustom([...custom, customRow()])}>Add field</button></div>
+        <div class="check-row">
+          <button type="button" onClick=${() => setCustom([...custom, customRow()])}>Add field</button>
+          <span class="muted small">Tip: click a key to ask for it, or press a checkbox or key and drag down the column to tick or untick several at once.</span>
+        </div>
         <label>Files</label>
         <div class="check-row">
           <input type="number" name="max_files" min="0" max="10" style="width:70px" value=${maxFiles} onInput=${(e) => setMaxFiles(e.target.value)} />
