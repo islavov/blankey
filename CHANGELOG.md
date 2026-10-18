@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.3
+
+- Anonymous usage statistics: a minute after launch and then every hour, Blankey posts to the official relay how
+  many profiles and templates it holds and, by month, how many documents it generated, templates and fill sets it
+  saved and profiles it created, with its version, platform and a random install id. Nothing about the documents,
+  profiles or templates themselves is sent. Turn it off on the Connections page (Statistics).
+- Signed in to Blankey Online, the app reports the same monthly numbers for the device after each connect and every
+  hour.
+
 ## 0.2.2
 
 - Collection links can be deleted: the link stops working and goes away with whatever it received that was not saved;
