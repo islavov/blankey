@@ -559,6 +559,11 @@ async fn collection_links_reach_the_device() {
     relay.revoke_link(LINK_ID).await.unwrap();
     assert_eq!(*stub.state.revoked_links.lock().unwrap(), [LINK_ID]);
     assert!(app.vault().get_link(LINK_ID).unwrap().revoked_at.is_some());
+
+    // deleting it revokes it on the relay again and forgets it here
+    relay.delete_link(LINK_ID).await.unwrap();
+    assert_eq!(*stub.state.revoked_links.lock().unwrap(), [LINK_ID, LINK_ID]);
+    assert!(app.vault().get_link(LINK_ID).is_err());
 }
 
 async fn wait_for_language(relay: &Relay, wanted: Option<&str>) {

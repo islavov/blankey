@@ -1059,6 +1059,16 @@ impl Vault {
         Ok(())
     }
 
+    /// Removes the link, its key and its submission rows; files already kept stay. The caller deletes the blobs.
+    pub fn delete_link(&mut self, link_id: &str) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM link_submissions WHERE link_id = ?1", [link_id])?;
+        tx.execute("DELETE FROM links WHERE link_id = ?1", [link_id])?;
+        tx.execute("DELETE FROM meta WHERE key = ?1", [format!("secret:{}", link_secret(link_id))])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn add_submission(&self, sid: &str, link_id: &str, request_id: i64, size: i64) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO link_submissions (sid, link_id, request_id, size, received_at, status)

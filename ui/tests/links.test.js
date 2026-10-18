@@ -14,15 +14,21 @@ before(async () => {
 
 const rows = () => $$(".page > table.grid > tbody > tr, .links-main > table.grid > tbody > tr").map((tr) => tr.textContent.replace(/\s+/g, " ").trim());
 
-test("collection links: listed with their counts; Copy copies the full link", async () => {
+test("collection links: one line per link; fields and Copy are in the panel beside it", async () => {
   await goTo("Collection links");
   assert.equal(text(".toolbar h2"), "Collection links");
   const [row] = rows();
   assert.ok(row.includes("Tenant details") && row.includes("relay.blankey.io/s/XchaBj2") && row.includes("2/3"), row);
   assert.ok(row.includes("2026-10-17 12:00") && row.includes("1 to review"), row);
   assert.ok(!row.includes("k4Fp9QzR2mWx7aLc"), "the fragment is not shown");
-  await click(byText(".grid button", "Copy"));
+  assert.ok(!row.includes("Full name"), "the fields are only in the panel");
+  assert.ok(!$$(".links-main th").some((th) => th.textContent === "Fields"));
+
+  await click($(".links-main tbody tr"));
+  assert.equal(text(".side .small:not(.muted)"), "Full name, Email");
+  await click(byText(".side button", "Copy"));
   assert.deepEqual(backend.called("copy_text").at(-1), { text: "https://relay.blankey.io/s/XchaBj2#k4Fp9QzR2mWx7aLc" });
+  await click($(".side .close"));
 });
 
 test("collection links: filters and search narrow the list", async () => {
@@ -53,7 +59,7 @@ test("collection links: a link's submissions open again, the waiting one to revi
   backend.db.submissions["s-2"] = submission(12, "s-2");
   await click($$(".grid tbody tr").find((tr) => tr.textContent.includes("Tenant details")));
   assert.equal(text(".side h3"), "Tenant details");
-  assert.ok(!$$(".links-main th").some((th) => th.textContent === "Fields"), "the table narrows beside the panel");
+  assert.ok(!$$(".links-main th").some((th) => th.textContent === "Expires"), "the table narrows beside the panel");
   const subRows = () => $$(".side .sub-item").map((item) => item.textContent.replace(/\s+/g, " ").trim());
   assert.equal(subRows().length, 2);
   assert.ok(subRows()[0].includes("To review") && subRows()[0].includes("Review"), subRows()[0]);
@@ -75,7 +81,7 @@ test("collection links: a link's submissions open again, the waiting one to revi
 
   await click($(".side .close"));
   assert.equal($(".side"), null);
-  assert.ok($$(".links-main th").some((th) => th.textContent === "Fields"));
+  assert.ok($$(".links-main th").some((th) => th.textContent === "Expires"));
 });
 
 test("new link: ticked profile fields and custom fields make the draft", async () => {
@@ -181,6 +187,23 @@ test("revoke asks first", async () => {
   await submit($(".modal form"));
   assert.deepEqual(backend.called("revoke_link").at(-1), { linkId: "XchaBj2" });
   assert.ok(rows().some((r) => r.includes("Tenant details") && r.includes("Revoked")));
+});
+
+test("delete asks first and removes the link", async () => {
+  backend.db.links.push({ ...backend.db.links[0], link_id: "Gone123", url: "https://relay.blankey.io/s/Gone123#x", title: "Old intake", pending: 0 });
+  await goTo("Activity");
+  await goTo("Collection links");
+  await click($$(".links-main tbody tr").find((tr) => tr.textContent.includes("Old intake")));
+  await action("Delete");
+  assert.equal(text(".modal h3"), 'Delete "Old intake"?');
+  await click(byText(".modal button", "Cancel"));
+  assert.equal(backend.called("delete_link").length, 0);
+
+  await action("Delete");
+  await submit($(".modal form"));
+  assert.deepEqual(backend.called("delete_link").at(-1), { linkId: "Gone123" });
+  assert.ok(!rows().some((r) => r.includes("Old intake")));
+  assert.equal($(".side"), null);
 });
 
 test("documents: collected files sit with generated ones and use their own commands", async () => {

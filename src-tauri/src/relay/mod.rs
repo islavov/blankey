@@ -689,6 +689,17 @@ impl Relay {
         Ok(())
     }
 
+    /// Revokes the link on the relay (which keeps no deleted links) and removes it here with what it received.
+    pub async fn delete_link(&self, link_id: &str) -> Result<(), String> {
+        self.app.delete_link(link_id)?;
+        if let Ok(device) = self.device_id() {
+            if let Err(e) = self.delete_remote_link(device, link_id.to_string()).await {
+                eprintln!("relay: the relay was not told about the deleted link {link_id}: {}", e.message());
+            }
+        }
+        Ok(())
+    }
+
     async fn delete_remote_link(&self, device: String, link_id: String) -> Result<(), Failure> {
         self.authorized(move |agent, discovery, token| {
             let url = device_url(discovery.device_links.as_deref(), &[&link_id], &device)?;

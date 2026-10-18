@@ -246,6 +246,9 @@ export function createBackend(db = seed()) {
       if (requestId) removeRequest(requestId);
       return link;
     },
+    delete_link: ({ linkId }) => {
+      db.links = db.links.filter((l) => l.link_id !== linkId);
+    },
     revoke_link: ({ linkId }) => {
       db.links.find((l) => l.link_id === linkId).state = "revoked";
     },
