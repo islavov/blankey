@@ -523,6 +523,28 @@ impl Relay {
         inner.send_primary_claim();
     }
 
+    /// Tells the relay what the app did on this computer, by month, as absolute numbers it can set
+    /// (`relay/README.md`, Reports). Sent after each connect and every so often while connected.
+    pub fn report(&self) {
+        let Some(outgoing) = self.inner().outgoing.clone() else { return };
+        let months = kept_months();
+        let counts = match self.app.vault().usage_months(&months) {
+            Ok(counts) => counts,
+            Err(e) => {
+                eprintln!("relay: cannot count local usage: {e}");
+                return;
+            }
+        };
+        let frame = json!({
+            "v": 1,
+            "type": "report",
+            "id": format!("u-{}", oauth::random_token()),
+            "app": env!("CARGO_PKG_VERSION"),
+            "months": counts,
+        });
+        let _ = outgoing.send(frame.to_string());
+    }
+
     /// Accepted agents on the current relay.
     pub fn grants(&self) -> Vec<RelayGrant> {
         let url = self.url();
@@ -814,6 +836,20 @@ impl Relay {
         self.login();
         Ok(())
     }
+}
+
+/// The months the relay keeps numbers for: the current one and the three before it, UTC, newest first.
+fn kept_months() -> Vec<String> {
+    use chrono::Datelike;
+    let now = chrono::Utc::now();
+    let (mut year, mut month) = (now.year(), now.month());
+    (0..4)
+        .map(|_| {
+            let name = format!("{year:04}-{month:02}");
+            (year, month) = if month == 1 { (year - 1, 12) } else { (year, month - 1) };
+            name
+        })
+        .collect()
 }
 
 /// `{base}/{segments}?device_id=…`: a link and its submissions belong to the device that holds the key.

@@ -1,6 +1,6 @@
 //! Encrypted profile store over the Python app's SQLite schema (user_version 3), plus later migrations.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -17,6 +17,13 @@ const RELAY_DEVICE_ID: &str = "relay_device_id";
 const RELAY_CLIENT: &str = "relay_client";
 const RELAY_ACCOUNT: &str = "relay_account";
 const RELAY_LANGUAGE: &str = "relay_language";
+/// Audit actions the app reports to the relay as monthly numbers, and the kind each is reported as.
+const REPORTED_ACTIONS: [(&str, &str); 4] = [
+    ("generate", "doc_generated"),
+    ("save_template", "template_saved"),
+    ("save_fill_set", "fill_set_saved"),
+    ("create_profile", "profile_created"),
+];
 const BACKUPS: usize = 3;
 
 /// Schema steps; the step at index i brings a vault to user_version i + 1, the numbering the Python app uses.
@@ -1220,6 +1227,34 @@ impl Vault {
             params![now(), actor, action, target],
         )?;
         Ok(())
+    }
+
+    /// How often each reported action happened per month (`YYYY-MM`, UTC) since the first of `months`'s oldest one,
+    /// every month and kind present with a zero when nothing happened. Plain metadata, so it works while locked.
+    pub fn usage_months(&self, months: &[String]) -> Result<BTreeMap<String, BTreeMap<&'static str, u64>>> {
+        let mut report: BTreeMap<String, BTreeMap<&'static str, u64>> = months
+            .iter()
+            .map(|month| (month.clone(), REPORTED_ACTIONS.iter().map(|(_, kind)| (*kind, 0)).collect()))
+            .collect();
+        let Some(oldest) = months.iter().min() else { return Ok(report) };
+        let placeholders =
+            REPORTED_ACTIONS.iter().enumerate().map(|(i, _)| format!("?{}", i + 2)).collect::<Vec<_>>().join(", ");
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT substr(ts, 1, 7), action, count(*) FROM audit WHERE ts >= ?1 AND action IN ({placeholders}) GROUP BY 1, 2"
+        ))?;
+        let mut values: Vec<&dyn rusqlite::ToSql> = vec![oldest];
+        values.extend(REPORTED_ACTIONS.iter().map(|(action, _)| action as &dyn rusqlite::ToSql));
+        let rows = stmt.query_map(values.as_slice(), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, u64>(2)?))
+        })?;
+        for row in rows {
+            let (month, action, n) = row?;
+            let Some(counts) = report.get_mut(&month) else { continue };
+            if let Some((_, kind)) = REPORTED_ACTIONS.iter().find(|(a, _)| *a == action) {
+                counts.insert(kind, n);
+            }
+        }
+        Ok(report)
     }
 
     /// Rotates vault.db.1 .. vault.db.3 and writes a fresh copy to vault.db.1.

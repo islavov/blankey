@@ -183,6 +183,24 @@ App → relay: `{"v": 1, "type": "grants", "id": "q-1"}`; relay → app:
 "created_at": "2026-10-12T10:00:00Z"}]}`: the grants this device accepted that the relay still honours. The app shows
 them on the Connections page.
 
+### Reports
+
+App → relay, after each connect and every hour while connected: what the app did on this computer, as monthly
+numbers from its local audit log.
+
+```json
+{"v": 1, "type": "report", "id": "u-1", "app": "0.2.2",
+ "months": {"2026-10": {"doc_generated": 5, "template_saved": 1, "fill_set_saved": 2, "profile_created": 0},
+            "2026-09": {"doc_generated": 12, "template_saved": 0, "fill_set_saved": 0, "profile_created": 0}}}
+```
+
+`months` holds absolute counts per month (`YYYY-MM`, UTC) for the current month and the three before it: documents
+generated from templates, templates saved, fill sets saved, profiles created. The relay sets the device's numbers to
+these values, never adds, so a repeated report changes nothing; it drops months outside that window and kinds it does
+not know. Nothing about the documents themselves is sent. Relay → app: `{"v": 1, "type": "report", "id": "u-1",
+"ok": true}`, or `"ok": false` with an `error` such as `invalid`. The socket already names the device, so a report is
+only ever applied to the device that sent it. A relay without reports ignores the frame like any unknown type.
+
 ## Collection links
 
 A collection link is a public form on the relay that someone else fills in for the user. The browser seals the
@@ -249,6 +267,7 @@ Any stack works (Workers, Node, Go…) as long as it speaks the above over TLS. 
 - revocation
 - optionally, collection links: `device_links`, `device_inbox`, the `inbox` frame and a form page that seals in the
   browser
+- optionally, `report` frames: store the device's monthly numbers and answer `ok`
 
 To test: run it locally, set the app's relay to `http://localhost:<port>`, sign in from the app, then connect
 [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to `mcp_url`: it registers, you accept it in
