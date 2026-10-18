@@ -16,7 +16,7 @@ use crate::keychain;
 use crate::links::{link_state, LinkDraft, Submission, COLLECTION_LINK, LINK_SUBMISSION};
 use crate::templates::preview::{self, Preview};
 use crate::templates::{docx, TemplateKind};
-use crate::vault::{CollectedFile, FieldInput, Link, Request};
+use crate::vault::{CollectedFile, FieldInput, Link, Request, SubmissionInfo};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -653,7 +653,8 @@ fn next_request(state: State<AppState>) -> CmdResult<Option<RequestDetail>> {
 #[tauri::command]
 fn cancel_request(handle: AppHandle, state: State<AppState>, id: i64) -> CmdResult<()> {
     if state.app.vault().get_request(id).map_err(err)?.kind == LINK_SUBMISSION {
-        state.app.drop_submission(id, "discarded")?;
+        let sid = state.app.submission_of(id)?;
+        state.app.discard_submission(&sid)?;
     } else {
         state.app.vault().resolve_request(id, "cancelled", json!({"outcome": "cancelled"})).map_err(err)?;
     }
@@ -721,6 +722,9 @@ struct LinkRow {
     /// open, expired, revoked or full; from the relay when it answers
     state: String,
     submissions: i64,
+    /// received here and not handled yet
+    pending: usize,
+    last_received: Option<String>,
     fields: Vec<String>,
     profile_name: Option<String>,
 }
@@ -728,11 +732,11 @@ struct LinkRow {
 /// The links made on this computer, with the relay's counts when it can be reached.
 #[tauri::command]
 async fn list_links(state: State<'_, AppState>, relay: RelayState<'_>) -> CmdResult<Vec<LinkRow>> {
-    let (links, names) = {
+    let (links, names, received) = {
         let vault = state.app.vault();
         let names: IndexMap<i64, String> =
             vault.list_profiles().map_err(err)?.into_iter().map(|p| (p.id, p.name)).collect();
-        (vault.list_links().map_err(err)?, names)
+        (vault.list_links().map_err(err)?, names, vault.list_submissions(None).map_err(err)?)
     };
     let remote = match relay.signed_in() && !links.is_empty() {
         true => relay.remote_links().await.unwrap_or_default(),
@@ -748,9 +752,12 @@ async fn list_links(state: State<'_, AppState>, relay: RelayState<'_>) -> CmdRes
                 .flatten()
                 .filter_map(|f| f.get("label").and_then(Value::as_str).map(str::to_string))
                 .collect();
+            let mine = received.iter().filter(|r| r.link_id == link.link_id);
             LinkRow {
                 state: counted.map_or_else(|| link_state(&link).to_string(), |r| r.state.clone()),
                 submissions: counted.map_or(link.received, |r| r.submissions),
+                pending: mine.clone().filter(|r| r.status == "pending").count(),
+                last_received: mine.map(|r| r.received_at.clone()).max(),
                 fields,
                 profile_name: link.profile_id.and_then(|id| names.get(&id).cloned()).or(link.new_profile.clone()),
                 link,
@@ -783,10 +790,41 @@ async fn revoke_link(relay: RelayState<'_>, link_id: String) -> CmdResult<()> {
     relay.revoke_link(&link_id).await
 }
 
+#[derive(Serialize)]
+struct SubmissionRow {
+    #[serde(flatten)]
+    info: SubmissionInfo,
+    profile_name: Option<String>,
+}
+
+/// Submissions received for a link, newest first; metadata only.
 #[tauri::command]
-async fn open_submission(state: State<'_, AppState>, id: i64) -> CmdResult<Submission> {
+fn list_submissions(state: State<AppState>, link_id: String) -> CmdResult<Vec<SubmissionRow>> {
+    let vault = state.app.vault();
+    let names: IndexMap<i64, String> =
+        vault.list_profiles().map_err(err)?.into_iter().map(|p| (p.id, p.name)).collect();
+    Ok(vault
+        .list_submissions(Some(&link_id))
+        .map_err(err)?
+        .into_iter()
+        .map(|info| SubmissionRow { profile_name: info.profile_id.and_then(|id| names.get(&id).cloned()), info })
+        .collect())
+}
+
+/// By request id (a waiting request) or by sid (from the Collection links page).
+#[tauri::command]
+async fn open_submission(state: State<'_, AppState>, id: Option<i64>, sid: Option<String>) -> CmdResult<Submission> {
     let app = state.app.clone();
-    tauri::async_runtime::spawn_blocking(move || app.open_submission(id)).await.map_err(err)?
+    tauri::async_runtime::spawn_blocking(move || {
+        let sid = match (sid, id) {
+            (Some(sid), _) => sid,
+            (None, Some(id)) => app.submission_of(id)?,
+            (None, None) => return Err("Pass a submission".to_string()),
+        };
+        app.open_submission(&sid)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Saves a submission into an existing profile (profile_id) or a new one (profile_name), keeping the files at the
@@ -795,7 +833,7 @@ async fn open_submission(state: State<'_, AppState>, id: i64) -> CmdResult<Submi
 async fn resolve_submission(
     handle: AppHandle,
     state: State<'_, AppState>,
-    id: i64,
+    sid: String,
     profile_id: Option<i64>,
     profile_name: Option<String>,
     values: IndexMap<String, String>,
@@ -808,7 +846,7 @@ async fn resolve_submission(
             Some(id) => Target::Existing(id),
             None => Target::New { name: &name, kind: "person" },
         };
-        app.resolve_submission(id, target, &values, &keep)
+        app.resolve_submission(&sid, target, &values, &keep)
     })
     .await
     .map_err(err)??;
@@ -817,6 +855,39 @@ async fn resolve_submission(
         let _ = handle.emit("requests-changed", ());
     }
     Ok(problems)
+}
+
+#[tauri::command]
+fn discard_submission(handle: AppHandle, state: State<AppState>, sid: String) -> CmdResult<()> {
+    state.app.discard_submission(&sid)?;
+    tray::refresh(&handle);
+    let _ = handle.emit("requests-changed", ());
+    Ok(())
+}
+
+/// Opens one submitted file with the default app, from a private temp folder cleared on lock.
+#[tauri::command]
+async fn open_submission_file(state: State<'_, AppState>, sid: String, index: usize) -> CmdResult<()> {
+    let app = state.app.clone();
+    let (name, content) =
+        tauri::async_runtime::spawn_blocking(move || app.submission_file(&sid, index)).await.map_err(err)??;
+    platform::open_document(&name, &content)
+}
+
+#[tauri::command]
+async fn export_submission_file(
+    handle: AppHandle,
+    state: State<'_, AppState>,
+    sid: String,
+    index: usize,
+) -> CmdResult<Option<String>> {
+    let app = state.app.clone();
+    let (name, content) =
+        tauri::async_runtime::spawn_blocking(move || app.submission_file(&sid, index)).await.map_err(err)??;
+    let target = handle.dialog().file().set_title("Export").set_file_name(&name).blocking_save_file();
+    let Some(target) = target.and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    std::fs::write(&target, content).map_err(err)?;
+    Ok(Some(target.display().to_string()))
 }
 
 // -- fill form -------------------------------------------------------------------
@@ -957,8 +1028,12 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         list_links,
         create_link,
         revoke_link,
+        list_submissions,
         open_submission,
         resolve_submission,
+        discard_submission,
+        open_submission_file,
+        export_submission_file,
         fill_open,
         fill_evaluate,
         fill_preview,

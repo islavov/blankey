@@ -1005,11 +1005,14 @@ impl Tools {
     }
 
     #[tool(
-        description = "Collection links made on this computer: url, status, the fields they ask for and how many\nsubmissions came in. No submitted values."
+        description = "Collection links made on this computer: url, status, the fields they ask for, how many\nsubmissions came in and how many wait for the user. No submitted values."
     )]
     async fn list_collection_links(&self) -> ToolResult {
         self.run_any(|app| {
-            let links = app.vault().list_links().map_err(string)?;
+            let (links, submissions) = {
+                let vault = app.vault();
+                (vault.list_links().map_err(string)?, vault.list_submissions(None).map_err(string)?)
+            };
             let list: Vec<Value> = links
                 .iter()
                 .map(|link| {
@@ -1027,6 +1030,10 @@ impl Tools {
                         "fields": fields,
                         "max_files": link.spec["files"]["max_files"],
                         "received": link.received,
+                        "pending": submissions
+                            .iter()
+                            .filter(|r| r.link_id == link.link_id && r.status == "pending")
+                            .count(),
                         "max_submissions": link.max_submissions,
                         "profile_id": link.profile_id,
                         "expires_at": link.expires_at,
@@ -1212,9 +1219,9 @@ pub mod tests {
             &[("Hiddenwell.pdf", "application/pdf", SENTINEL_EGN.as_bytes())],
         );
         let saved = submit(&app, "Ab3dE9z", &public, &sent, "sub-saved");
-        let values = app.open_submission(saved).unwrap().values;
+        let values = app.open_submission("sub-saved").unwrap().values;
         let target = crate::core::Target::Existing(pid);
-        assert!(app.resolve_submission(saved, target, &values, &[0]).unwrap().is_empty());
+        assert!(app.resolve_submission("sub-saved", target, &values, &[0]).unwrap().is_empty());
         let waiting = submit(&app, "Ab3dE9z", &public, &sent, "sub-waiting");
         for id in [saved, waiting] {
             let hidden = t.get_request(args(json!({"request_id": id})), local()).await.unwrap_err();
