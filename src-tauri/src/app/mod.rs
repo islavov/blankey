@@ -44,6 +44,9 @@ pub fn state(handle: &AppHandle) -> tauri::State<'_, AppState> {
 pub fn show_main(handle: &AppHandle) {
     #[cfg(target_os = "macos")]
     let _ = handle.set_activation_policy(tauri::ActivationPolicy::Regular);
+    // after the switch to a Dock app, which shows the binary's own icon; AppKit wants the main thread
+    #[cfg(all(target_os = "macos", debug_assertions))]
+    let _ = handle.run_on_main_thread(platform::set_dock_icon);
     if let Some(window) = handle.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
