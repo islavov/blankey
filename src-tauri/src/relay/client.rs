@@ -47,7 +47,7 @@ pub(super) async fn run(relay: Arc<Relay>) {
             Ok(socket) => {
                 relay.set_status(State::Connected, "");
                 serve(&relay, socket).await;
-                relay.set_status(State::Connecting, "The connection to the relay was lost.");
+                relay.set_status(State::Connecting, "The connection to the online server was lost.");
                 backoff = MIN_BACKOFF;
             }
             Err((State::SignedOut, message)) => {
@@ -109,7 +109,7 @@ async fn connect(relay: &Relay, registered: &mut bool) -> Result<Socket, (State,
                 *registered = false;
                 (State::Connecting, String::new())
             }
-            code => (State::Offline, format!("The relay answered {code}.")),
+            code => (State::Offline, format!("The online server answered {code}.")),
         }),
         Err(e) => Err(offline(&e)),
     }

@@ -235,7 +235,7 @@ test("signed out with no links: the page offers to sign in", async () => {
   backend.db.links = [];
   await goTo("Collection links");
   await settle();
-  assert.ok(text(".empty").startsWith("Sign in to the relay to make collection links."));
+  assert.ok(text(".empty").startsWith("Sign in to Blankey Online to make collection links."));
   await click(byText(".empty button", "Sign in"));
   assert.equal(backend.called("relay_login").length, 1);
 });

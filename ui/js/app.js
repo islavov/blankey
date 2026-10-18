@@ -40,10 +40,10 @@ export function App() {
           ${ids.map((id) => html`<${NavItem} id=${id} active=${id === page} pending=${id === "activity" && status.pending} />`)}`)}
         </nav>
         <div class="sidebar-foot">
+          <${RelayStatus} />
           <${McpStatus} status=${status} />
           <div class="foot-actions">
             <button id="lock-btn" title=${t("Lock the vault")} onClick=${() => invoke("lock")}><${Icon} name="lock" /> ${t("Lock")}</button>
-            <${RelayButton} />
             <${ThemeSwitch} />
           </div>
         </div>
@@ -66,27 +66,27 @@ const McpStatus = ({ status }) => html`
     ${status.mcp_running ? t("MCP on port {port}", { port: new URL(status.mcp_url).port }) : t("MCP is down")}
   </div>`;
 
-/** Relay sign-in next to Lock: "Sign in" while signed out, the account's user name once signed in. */
-function RelayButton() {
+/** The relay connection above the MCP status: the signed-in account, or a way to sign in. */
+function RelayStatus() {
   const { relay } = useStore();
   useEffect(() => {
     refreshRelay().catch(() => {});
   }, []);
   if (!relay) return null;
   if (relay.state === "signing_in") {
-    return html`<button id="relay-btn" disabled><${Icon} name="connections" /> ${t("Signing in…")}</button>`;
+    return html`<button id="relay-btn" class="foot-status" disabled><${Icon} name="connections" /> ${t("Signing in…")}</button>`;
   }
   if (!relay.signed_in) {
     return html`
-      <button id="relay-btn" title=${t("Sign in to the relay so web agents such as claude.ai can reach Blankey")}
-        onClick=${() => relaySignIn().catch(() => {})}><${Icon} name="connections" /> ${t("Sign in")}</button>`;
+      <button id="relay-btn" class="foot-status" title=${t("Sign in to Blankey Online so web agents such as claude.ai can reach Blankey")}
+        onClick=${() => relaySignIn().catch(() => {})}><${Icon} name="connections" /> ${t("Sign in to Blankey Online")}</button>`;
   }
-  const name = relay.account ? relay.account.split("@")[0] : t("Signed in");
-  const title = `${relay.account ?? t("Relay")}: ${stateLabel(relay.state)}`;
+  const account = relay.account ?? t("Signed in");
+  const title = t("Blankey Online: {account}, {state}", { account, state: stateLabel(relay.state) });
   const dot = relay.state === "connected" ? "up" : "down";
   return html`
-    <button id="relay-btn" title=${title} onClick=${() => update({ page: "connections", search: "" })}>
-      <span class=${`dot ${dot}`}></span><span class="relay-name">${name}</span>
+    <button id="relay-btn" class="foot-status" title=${title} onClick=${() => update({ page: "connections", search: "" })}>
+      <span class=${`dot ${dot}`}></span><span class="relay-name">${account}</span>
     </button>`;
 }
 

@@ -70,13 +70,13 @@ Flat PDFs (no form fields, e.g. exports or scans):
    be omitted then; the original flat PDF is kept). A check box gets "X" when its expression is truthy text.
 3. save_example + render_example, then request_fill as for any PDF form.
 
-Remote sessions (through a Blankey relay) cannot read local paths:
+Remote sessions (through Blankey Online) cannot read local paths:
 1. request_file with kind pdf or docx and a reason: the user picks the file in the app.
-2. wait_request returns {file_id, kind, size} when the user has chosen it. Over a relay wait_request returns
+2. wait_request returns {file_id, kind, size} when the user has chosen it. Over Blankey Online wait_request returns
    after at most 50 s: call it again while the status is pending.
 3. Pass the file id ("file:<uuid>") wherever a tool takes path or source_path.
 
-Collection links (needs a relay sign-in): a short link to a web form that another person fills in. Their
+Collection links (needs a Blankey Online sign-in): a short link to a web form that another person fills in. Their
 answers and files are encrypted in their browser to this computer and land in a profile; you never see them.
 1. create_collection_link with the fields to ask for (and files), and the profile to save into. Use the keys
    your templates bind to, so the answers fill them directly.
@@ -443,7 +443,7 @@ pub struct RequestArgs {
 pub struct WaitRequestArgs {
     #[serde(deserialize_with = "lenient::int")]
     request_id: i64,
-    /// Seconds, default 300; at most 50 over a relay.
+    /// Seconds, default 300; at most 50 over Blankey Online.
     #[serde(default, deserialize_with = "lenient::opt_int")]
     timeout_s: Option<i64>,
 }

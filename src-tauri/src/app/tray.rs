@@ -68,7 +68,7 @@ fn menu(handle: &AppHandle) -> tauri::Result<Menu<Wry>> {
         relay_menu.append(&if signed_in {
             item("relay_logout", mark("Sign out"), true)?
         } else {
-            item("relay_login", mark("Sign in to relay…"), true)?
+            item("relay_login", mark("Sign in to Blankey Online…"), true)?
         })?;
         relay_menu.append(&separator()?)?;
         relay_menu.append(&item("relay_agents", mark("Connected agents…"), true)?)?;

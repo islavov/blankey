@@ -83,7 +83,7 @@ export function Links() {
     return html`
       <${Page} title=${t("Collection links")} subtitle=${t("Ask someone for their data")}>
         <${Empty}>
-          ${t("Sign in to the relay to make collection links.")}<br />
+          ${t("Sign in to Blankey Online to make collection links.")}<br />
           <span class="small">${t("The person you send a link to fills in a form. What they send is encrypted in their browser and only opens on this computer.")}</span>
           <div style="margin-top:14px"><button class="primary" onClick=${() => relaySignIn().catch(() => {})}>${t("Sign in")}</button></div>
         </${Empty}>
@@ -311,7 +311,7 @@ function LinkSheet({ draft, requestId, close }) {
         <div class="hint muted small">${t("The heading of the form and the name of the browser tab.")}</div>
         <label>${t("From")}</label>
         <input type="text" name="from" value=${from} placeholder=${t("e.g. Maria at Example Lending")} onInput=${(e) => setFrom(e.target.value)} />
-        <div class="hint muted small">${t("Shown as \"Requested by\", next to the email of your relay account.")}</div>
+        <div class="hint muted small">${t("Shown as \"Requested by\", next to the email of your Blankey Online account.")}</div>
         <label>${t("Note")}</label>
         <textarea name="note" rows="2" value=${note} placeholder=${t("e.g. Please send these by Friday. A photo of each page is fine.")} onInput=${(e) => setNote(e.target.value)}></textarea>
         <div class="hint muted small">${t("Shown under the heading, above the fields.")}</div>
