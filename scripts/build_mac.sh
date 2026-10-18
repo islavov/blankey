@@ -5,6 +5,9 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 [ -f src-tauri/pdfium/libpdfium.dylib ] || scripts/fetch-pdfium.sh
+if [ -z "${BLANKEY_TELEMETRY_KEY:-}" ]; then
+    echo "warning: BLANKEY_TELEMETRY_KEY is not set; this build sends anonymous statistics with the development key, which the official relay ignores" >&2
+fi
 scripts/licenses.sh
 scripts/stage-ui.sh
 cd src-tauri

@@ -19,6 +19,9 @@ if (-not (Test-Path (Join-Path $PdfiumDir "pdfium.dll"))) {
     Remove-Item -Recurse -Force $Tmp
 }
 
+if (-not $env:BLANKEY_TELEMETRY_KEY) {
+    Write-Warning "BLANKEY_TELEMETRY_KEY is not set; this build sends anonymous statistics with the development key, which the official relay ignores"
+}
 bash scripts/licenses.sh
 if ($LASTEXITCODE -ne 0) { throw "licenses.sh failed" }
 bash scripts/stage-ui.sh

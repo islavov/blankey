@@ -72,13 +72,17 @@ impl Telemetry {
         }
     }
 
-    /// Saves the choice; turning off tells the relay once, turning on reports right away.
+    /// Saves the choice; turning off tells the relay once, turning on reports right away. The relay's answer never
+    /// matters here: a wrong key or no network is logged, the choice stands.
     pub async fn set_enabled(&self, enabled: bool) -> Result<(), String> {
         *self.enabled.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = enabled;
         let config = Config { telemetry: enabled, ..self.app.config.clone() };
         config.save().map_err(|e| e.to_string())?;
         self.app.audit("user", if enabled { "telemetry_on" } else { "telemetry_off" }, "");
-        self.send(!enabled).await
+        if let Err(e) = self.send(!enabled).await {
+            eprintln!("telemetry: {e}");
+        }
+        Ok(())
     }
 
     /// Posts this install's numbers; nothing leaves while the statistics are off, except the opt-out itself.
@@ -198,8 +202,26 @@ mod tests {
         assert_eq!(on["opt_out"], false);
         assert!(Config::load_from(app.config.data_dir.clone()).unwrap().telemetry);
 
+        // a relay that does not take the key: logged, nothing else
         stub.reject.store(true, Ordering::SeqCst);
         let refused = telemetry.send(false).await.unwrap_err();
         assert!(refused.contains("401"), "{refused}");
+        telemetry.set_enabled(false).await.unwrap();
+        assert!(!telemetry.enabled());
+        assert!(!Config::load_from(app.config.data_dir.clone()).unwrap().telemetry);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unreachable_relay_is_only_logged() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("data")).unwrap();
+        std::fs::write(dir.path().join("data/config.toml"), "telemetry_url = \"http://127.0.0.1:9/telemetry\"\n")
+            .unwrap();
+        let app = crate::mcp::tools::tests::app(dir.path());
+        let telemetry = Telemetry::new(app.clone(), || false);
+        assert!(telemetry.send(false).await.is_err());
+        telemetry.set_enabled(false).await.unwrap();
+        telemetry.set_enabled(true).await.unwrap();
+        assert!(Config::load_from(app.config.data_dir.clone()).unwrap().telemetry);
     }
 }
