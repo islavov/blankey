@@ -54,6 +54,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: cargo-bins/cargo-binstall@main
       - run: cargo binstall -y tauri-cli@^2 cargo-about
+        # signed-in lookups: anonymous ones hit the API rate limit and fall back to slow source builds
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: scripts/build_mac.sh
       - uses: actions/upload-artifact@v4
         with:
@@ -77,6 +80,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: cargo-bins/cargo-binstall@main
       - run: cargo binstall -y tauri-cli@^2 cargo-about
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - shell: pwsh
         run: ./scripts/build_windows.ps1
       - uses: actions/upload-artifact@v4
@@ -109,6 +114,8 @@ jobs:
           key: ${{ matrix.image }}
       - uses: cargo-bins/cargo-binstall@main
       - run: cargo binstall -y tauri-cli@^2 cargo-about
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: scripts/build_deb.sh --install-deps
       - id: name
         run: echo "artifact=blankey-deb-$(echo '${{ matrix.image }}' | tr ':' '-')" >> "$GITHUB_OUTPUT"
@@ -140,6 +147,8 @@ jobs:
           key: ${{ matrix.image }}
       - uses: cargo-bins/cargo-binstall@main
       - run: cargo binstall -y tauri-cli@^2 cargo-about
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: scripts/build_rpm.sh --install-deps
       - id: name
         run: . /etc/os-release && echo "artifact=blankey-rpm-$ID${VERSION_ID%%.*}" >> "$GITHUB_OUTPUT"
