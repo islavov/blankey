@@ -255,6 +255,26 @@ computer's language.
 that grant immediately, on every device of the account. The app removes the grant from its allowlist first, so it is
 refused even if this call fails.
 
+## Anonymous metrics
+
+Separate from the account's relay: every install posts to the official relay, signed in or not, a minute after launch
+and then every hour, unless the user turns it off on the Connections page.
+
+`POST https://relay.blankey.io/telemetry` with `X-Blankey-Telemetry: <key>` and a JSON body:
+
+```json
+{"v": 1, "id": "i-3f9c…", "app": "0.2.2", "platform": "macos", "online": false, "profiles": 3, "templates": 7,
+ "months": {"2026-10": {"doc_generated": 5, "template_saved": 1, "fill_set_saved": 2, "profile_created": 0}, "…": {}},
+ "opt_out": false}
+```
+
+`id` is a random id the install made for itself (`config.toml`), unrelated to any account or relay device id. `online`
+says whether the install is signed in to Blankey Online. `months` has the shape and meaning of the `report` frame.
+The key is the same for every build of a release (`BLANKEY_TELEMETRY_KEY` at build time); it keeps casual posts out,
+nothing more. Turning the statistics off sends one last post with `"opt_out": true` and then nothing until they are
+turned on again. Replies: `204`; `401` wrong key; `400` invalid body; `404` when the relay has metrics off. Nothing
+about documents, profiles or templates themselves is ever sent.
+
 ## Running your own relay
 
 Any stack works (Workers, Node, Go…) as long as it speaks the above over TLS. Checklist:
@@ -268,6 +288,9 @@ Any stack works (Workers, Node, Go…) as long as it speaks the above over TLS. 
 - optionally, collection links: `device_links`, `device_inbox`, the `inbox` frame and a form page that seals in the
   browser
 - optionally, `report` frames: store the device's monthly numbers and answer `ok`
+
+Anonymous metrics go to the official relay regardless of the relay the app is signed in to; a custom relay never
+sees them and does not need `/telemetry`.
 
 To test: run it locally, set the app's relay to `http://localhost:<port>`, sign in from the app, then connect
 [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to `mcp_url`: it registers, you accept it in

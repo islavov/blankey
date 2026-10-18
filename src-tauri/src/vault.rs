@@ -291,6 +291,20 @@ pub fn now() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
 }
 
+/// The months the relay keeps numbers for: the current one and the three before it, UTC, newest first.
+pub fn kept_months() -> Vec<String> {
+    use chrono::Datelike;
+    let now = chrono::Utc::now();
+    let (mut year, mut month) = (now.year(), now.month());
+    (0..4)
+        .map(|_| {
+            let name = format!("{year:04}-{month:02}");
+            (year, month) = if month == 1 { (year - 1, 12) } else { (year, month - 1) };
+            name
+        })
+        .collect()
+}
+
 fn field_aad(profile_id: i64, key: &str) -> Vec<u8> {
     format!("field:{profile_id}|{key}").into_bytes()
 }

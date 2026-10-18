@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { before, test } from "node:test";
-import { $, $$, action, byText, click, goTo, settle, startApp, submit, text, type } from "./setup.js";
+import { $, $$, action, byText, check, click, goTo, settle, startApp, submit, text, type } from "./setup.js";
 
 let backend;
 before(async () => {
@@ -18,6 +18,14 @@ test("shows the relay, its status and the accepted agents", () => {
   assert.ok($(".relay .pill"));
   assert.equal(rows().length, 1);
   assert.deepEqual(rows()[0], ["Claude", "claude.ai", "2026-10-11 09:30", "", "Revoke"]);
+});
+
+test("anonymous statistics are on until the user turns them off", async () => {
+  assert.equal($("#telemetry").checked, true);
+  await check($("#telemetry"), false);
+  assert.deepEqual(backend.called("telemetry_set"), [{ enabled: false }]);
+  await settle();
+  assert.equal($("#telemetry").checked, false);
 });
 
 test("the account link opens the relay's account page", async () => {

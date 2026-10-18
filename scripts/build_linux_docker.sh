@@ -11,7 +11,7 @@ TAG="$(echo "$IMAGE" | tr ':/' '--')"
 docker run --rm --platform "${PLATFORM:-linux/amd64}" \
     -v "$ROOT":/src -w /src \
     -v "blankey-cargo-$TAG":/root/.cargo -v "blankey-rustup-$TAG":/root/.rustup \
-    -e CARGO_TARGET_DIR="/src/target-$TAG" \
+    -e CARGO_TARGET_DIR="/src/target-$TAG" -e BLANKEY_TELEMETRY_KEY="${BLANKEY_TELEMETRY_KEY:-}" \
     "$IMAGE" sh -euc '
         if command -v apt-get >/dev/null; then
             apt-get update && apt-get install -y --no-install-recommends curl ca-certificates build-essential

@@ -27,7 +27,8 @@ export async function relaySignIn() {
 /** Web agents (claude.ai) reaching Blankey through a relay. */
 export function Connections() {
   const info = useLoad(() => call("relay_status"), []);
-  if (!info) return null;
+  const telemetry = useLoad(() => call("telemetry_status"), []);
+  if (!info || telemetry === null) return null;
 
   const state = info.signed_in || info.state === "signing_in" ? info.state : "signed_out";
   const signOut = async () => {
@@ -94,6 +95,14 @@ export function Connections() {
           ${info.message && html`<span class="muted small">${info.message}</span>`}
           <span class="spacer"></span>
           ${info.account_url && html`<button class="link" onClick=${() => call("relay_open_account")}>${t("Account and billing")}</button>`}
+        </div>
+        <div class="relay-row">
+          <span class="muted">${t("Statistics")}</span>
+          <label class="check small">
+            <input type="checkbox" id="telemetry" checked=${telemetry} onChange=${(e) => call("telemetry_set", { enabled: e.target.checked }).then(reload, reload)} />
+            ${t("Share anonymous usage statistics")}
+          </label>
+          <span class="muted small">${t("How many documents, templates, fill sets and profiles Blankey makes each month, its version and platform, under a random id. Never names or contents.")}</span>
         </div>
       </div>
       ${rows.length

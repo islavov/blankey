@@ -9,6 +9,7 @@ pub mod links;
 pub mod mcp;
 pub mod relay;
 pub mod render;
+pub mod telemetry;
 pub mod templates;
 pub mod vault;
 

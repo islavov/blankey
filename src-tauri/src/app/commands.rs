@@ -981,6 +981,17 @@ fn fill_close(handle: AppHandle, state: State<AppState>, args: fill::CloseArgs) 
 // -- relay -------------------------------------------------------------------
 
 type RelayState<'a> = State<'a, std::sync::Arc<crate::relay::Relay>>;
+type TelemetryState<'a> = State<'a, std::sync::Arc<crate::telemetry::Telemetry>>;
+
+#[tauri::command]
+fn telemetry_status(telemetry: TelemetryState) -> bool {
+    telemetry.enabled()
+}
+
+#[tauri::command]
+async fn telemetry_set(telemetry: TelemetryState<'_>, enabled: bool) -> CmdResult<()> {
+    telemetry.set_enabled(enabled).await
+}
 
 #[tauri::command]
 async fn relay_status(relay: RelayState<'_>) -> CmdResult<crate::relay::Info> {
@@ -1101,5 +1112,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         relay_revoke,
         relay_set_url,
         relay_open_account,
+        telemetry_status,
+        telemetry_set,
     ]
 }

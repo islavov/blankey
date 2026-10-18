@@ -248,6 +248,10 @@ pub fn run() {
             });
             start_mcp(&handle, relay.callback_router());
             relay.start();
+            let online = { let relay = relay.clone(); move || relay.signed_in() };
+            let telemetry = Arc::new(crate::telemetry::Telemetry::new(app.clone(), online));
+            telemetry.start(&tauri::async_runtime::handle().inner().clone());
+            handle.manage(telemetry);
             start_auto_lock(&handle);
             if let Some(old) = moved_from {
                 let message = i18n::tf(

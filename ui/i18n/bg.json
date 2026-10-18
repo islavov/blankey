@@ -1,6 +1,9 @@
 {
   "Activity": "Активност",
   "Connections": "Връзки",
+  "Statistics": "Статистика",
+  "Share anonymous usage statistics": "Споделяй анонимна статистика за употребата",
+  "How many documents, templates, fill sets and profiles Blankey makes each month, its version and platform, under a random id. Never names or contents.": "Колко документи, шаблони, набори за попълване и профили прави Blankey всеки месец, версията и платформата му, под случаен идентификатор. Никога имена или съдържание.",
   "Fill sets": "Набори за попълване",
   "Documents": "Документи",
   "Templates": "Шаблони",
