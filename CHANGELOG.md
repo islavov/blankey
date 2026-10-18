@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2
 
 - Collection links can be deleted: the link stops working and goes away with whatever it received that was not saved;
   saved values and kept files stay. The links table shows one line per link; the fields, the full link and Copy are
