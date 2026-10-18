@@ -76,7 +76,7 @@ pub fn clear_opened_documents() {
 
 /// The Dock icon of a debug build: `cargo run` starts a bare binary, which macOS shows as "exec". A bundled release
 /// build already has the icon from its bundle.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", debug_assertions))]
 pub fn set_dock_icon() {
     use objc2::AllocAnyThread;
     use objc2::MainThreadMarker;
