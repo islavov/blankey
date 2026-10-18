@@ -16,6 +16,7 @@ const REQUEST_PRIVATE_KEY: &str = "request_private_key";
 const RELAY_DEVICE_ID: &str = "relay_device_id";
 const RELAY_CLIENT: &str = "relay_client";
 const RELAY_ACCOUNT: &str = "relay_account";
+const RELAY_LANGUAGE: &str = "relay_language";
 const BACKUPS: usize = 3;
 
 /// Schema steps; the step at index i brings a vault to user_version i + 1, the numbering the Python app uses.
@@ -945,6 +946,15 @@ impl Vault {
 
     pub fn set_relay_account(&self, account: Option<&str>) -> Result<()> {
         self.set_text_meta(RELAY_ACCOUNT, account)
+    }
+
+    /// The UI language of the relay account, as its device profile last named it.
+    pub fn relay_language(&self) -> Result<Option<String>> {
+        self.text_meta(RELAY_LANGUAGE)
+    }
+
+    pub fn set_relay_language(&self, language: Option<&str>) -> Result<()> {
+        self.set_text_meta(RELAY_LANGUAGE, language)
     }
 
     /// The app's own OAuth client registration on the relay (JSON).

@@ -10,8 +10,9 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::DialogExt;
 
 use super::{fill, platform, tray, AppState};
-use crate::core::{ProfileSave, Target, FILE, FILL, PROFILE_INPUT};
+use crate::core::{Problem, ProfileSave, Target, FILE, FILL, PROFILE_INPUT};
 use crate::fieldtypes;
+use crate::i18n::{t, tf, tn};
 use crate::keychain;
 use crate::links::{link_state, LinkDraft, Submission, COLLECTION_LINK, LINK_SUBMISSION};
 use crate::templates::preview::{self, Preview};
@@ -28,7 +29,8 @@ const MIN_PASSWORD: usize = 8;
 
 fn check_password(password: &str) -> CmdResult<()> {
     if password.chars().count() < MIN_PASSWORD {
-        return Err(format!("The password must be at least {MIN_PASSWORD} characters."));
+        // the window translates these messages
+        return Err(crate::i18n::mark("The password must be at least 8 characters.").into());
     }
     Ok(())
 }
@@ -46,6 +48,9 @@ pub struct Status {
     mcp_url: String,
     mcp_running: bool,
     field_types: &'static [&'static str],
+    /// the UI language, and every language the window can show as {code: name}
+    language: String,
+    languages: serde_json::Map<String, Value>,
 }
 
 #[tauri::command]
@@ -62,6 +67,8 @@ fn status(state: State<AppState>) -> CmdResult<Status> {
         mcp_url: app.config.mcp_url(),
         mcp_running: state.mcp_running.load(Ordering::SeqCst),
         field_types: fieldtypes::TYPES,
+        language: app.language(),
+        languages: crate::i18n::languages(),
     })
 }
 
@@ -81,7 +88,7 @@ async fn setup(
 
 #[tauri::command]
 async fn unlock(handle: AppHandle, state: State<'_, AppState>, password: String) -> CmdResult<()> {
-    state.app.vault().unlock(&password).map_err(|_| "Wrong password.".to_string())?;
+    state.app.vault().unlock(&password).map_err(|_| crate::i18n::mark("Wrong password.").to_string())?;
     state.app.audit("user", "unlock", "");
     state.touch();
     tray::refresh(&handle);
@@ -101,7 +108,7 @@ async fn unlock_recovery(
         .app
         .vault()
         .unlock_with_recovery(&recovery_key, &new_password)
-        .map_err(|_| "Invalid recovery key.".to_string())?;
+        .map_err(|_| crate::i18n::mark("Invalid recovery key.").to_string())?;
     state.app.audit("user", "unlock_recovery", "");
     state.touch();
     tray::refresh(&handle);
@@ -112,7 +119,8 @@ async fn unlock_recovery(
 /// Touch ID / keychain; false when it is not set up or was cancelled.
 #[tauri::command]
 async fn unlock_quick(handle: AppHandle, reason: Option<String>) -> bool {
-    let reason = reason.unwrap_or_else(|| "unlock the Blankey vault".into());
+    let reason =
+        reason.unwrap_or_else(|| crate::i18n::t(&super::state(&handle).app.language(), "unlock the Blankey vault"));
     tauri::async_runtime::spawn_blocking(move || super::quick_unlock(&handle, &reason)).await.unwrap_or(false)
 }
 
@@ -177,14 +185,14 @@ struct FieldEdit {
     value: String,
 }
 
-/// Validates every row first; returns the problems (key: message) without saving when there are any.
+/// Validates every row first; returns the problems (labelled by key) without saving when there are any.
 #[tauri::command]
 fn save_fields(
     state: State<AppState>,
     id: i64,
     fields: Vec<FieldEdit>,
     removed: Vec<String>,
-) -> CmdResult<Vec<String>> {
+) -> CmdResult<Vec<Problem>> {
     let mut errors = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut inputs = Vec::new();
@@ -194,15 +202,15 @@ fn save_fields(
             continue;
         }
         if key.starts_with('.') || key.ends_with('.') || key.contains(char::is_whitespace) {
-            errors.push(format!("{key}: use dotted words without spaces"));
+            errors.push(Problem::new(key, crate::i18n::mark("use dotted words without spaces")));
         }
         if !seen.insert(key.to_string()) {
-            errors.push(format!("{key}: duplicate key"));
+            errors.push(Problem::new(key, crate::i18n::mark("duplicate key")));
         }
         let field_type = if fieldtypes::is_type(&f.field_type) { f.field_type.as_str() } else { "text" };
         let value = f.value.trim();
         if let Some(message) = fieldtypes::validate(field_type, value) {
-            errors.push(format!("{key}: {message}"));
+            errors.push(Problem::new(key, message));
         }
         inputs.push(FieldInput::new(key, value, f.label.trim(), field_type));
     }
@@ -468,71 +476,71 @@ fn delete_fill_set(state: State<AppState>, id: i64) -> CmdResult<()> {
 
 // -- requests from AI assistants --------------------------------------------------------
 
-fn request_label(kind: &str) -> &str {
-    match kind {
+fn request_label(lang: &str, kind: &str) -> String {
+    let label = match kind {
         PROFILE_INPUT => "Profile data",
         "generate" => "Generate document",
         FILL => "Fill documents",
         FILE => "File",
         LINK_SUBMISSION => "Submission",
         COLLECTION_LINK => "Collection link",
-        other => other,
-    }
-}
-
-fn plural(count: usize, word: &str) -> String {
-    format!("{count} {word}{}", if count == 1 { "" } else { "s" })
+        other => return other.to_string(),
+    };
+    t(lang, label)
 }
 
 /// One-line outcome of a request, from its metadata-only result.
-fn request_outcome(request: &Request) -> String {
+fn request_outcome(lang: &str, request: &Request) -> String {
     let result = request.result.clone().unwrap_or_else(|| json!({}));
     let outcome = result.get("outcome").and_then(Value::as_str).unwrap_or("");
     if request.status == "pending" {
-        return "Waiting for you".into();
+        return t(lang, "Waiting for you");
     }
     match (request.kind.as_str(), outcome) {
-        (LINK_SUBMISSION, "revoked") => return "Dropped: the link was revoked".into(),
-        (LINK_SUBMISSION, "damaged") => return "Dropped: could not be opened".into(),
-        (LINK_SUBMISSION, "discarded") => return "Discarded".into(),
+        (LINK_SUBMISSION, "revoked") => return t(lang, "Dropped: the link was revoked"),
+        (LINK_SUBMISSION, "damaged") => return t(lang, "Dropped: could not be opened"),
+        (LINK_SUBMISSION, "discarded") => return t(lang, "Discarded"),
         _ => {}
     }
     if request.status == "cancelled" || outcome == "cancelled" {
-        return "Cancelled".into();
+        return t(lang, "Cancelled");
     }
+    let count = |name: &str| result.get(name).and_then(Value::as_array).map_or(0, Vec::len);
+    let saved_fields = || {
+        let fields = result.get("fields").and_then(Value::as_array).into_iter().flatten();
+        fields.filter(|f| f.get("status").and_then(Value::as_str) == Some("saved")).count()
+    };
     match request.kind.as_str() {
         PROFILE_INPUT => {
-            let fields = result.get("fields").and_then(Value::as_array).cloned().unwrap_or_default();
-            let saved = fields.iter().filter(|f| f.get("status").and_then(Value::as_str) == Some("saved")).count();
-            let skipped = fields.len() - saved;
-            let mut text = format!("Saved {}", plural(saved, "field"));
-            if skipped > 0 {
-                text.push_str(&format!(", {skipped} skipped"));
+            let saved = saved_fields();
+            let fields = tn(lang, saved, "{n} field", "{n} fields");
+            match count("fields") - saved {
+                0 => tf(lang, "Saved {fields}", &[("fields", &fields)]),
+                skipped => tf(lang, "Saved {fields}, {skipped} skipped", &[("fields", &fields), ("skipped", &skipped)]),
             }
-            text
         }
-        "generate" => "Document generated".into(),
+        "generate" => t(lang, "Document generated"),
         FILL => {
-            let documents = result.get("document_ids").and_then(Value::as_array).map_or(0, Vec::len);
-            let mut text = if documents > 0 {
-                format!("{} generated", plural(documents, "document"))
-            } else {
-                "Fill set saved".into()
+            let documents = count("document_ids");
+            let text = match documents {
+                0 => t(lang, "Fill set saved"),
+                n => tn(lang, n, "{n} document generated", "{n} documents generated"),
             };
-            let empty = result.get("empty").and_then(Value::as_array).map_or(0, Vec::len);
-            if empty > 0 {
-                text.push_str(&format!(", {empty} empty"));
+            match count("empty") {
+                0 => text,
+                empty => tf(lang, "{text}, {empty} empty", &[("text", &text), ("empty", &empty)]),
             }
-            text
         }
-        FILE => format!("Shared {}", result.get("name").and_then(Value::as_str).unwrap_or("a file")),
+        FILE => match result.get("name").and_then(Value::as_str) {
+            Some(name) => tf(lang, "Shared {name}", &[("name", &name)]),
+            None => t(lang, "Shared a file"),
+        },
         LINK_SUBMISSION => {
-            let saved = result.get("fields").and_then(Value::as_array).into_iter().flatten();
-            let saved = saved.filter(|f| f.get("status").and_then(Value::as_str) == Some("saved")).count();
-            let files = result.get("files").and_then(Value::as_array).map_or(0, Vec::len);
-            format!("Saved {}, {}", plural(saved, "field"), plural(files, "file"))
+            let fields = tn(lang, saved_fields(), "{n} field", "{n} fields");
+            let files = tn(lang, count("files"), "{n} file", "{n} files");
+            tf(lang, "Saved {fields}, {files}", &[("fields", &fields), ("files", &files)])
         }
-        COLLECTION_LINK => "Link created".into(),
+        COLLECTION_LINK => t(lang, "Link created"),
         _ => {
             if outcome.is_empty() {
                 request.status.clone()
@@ -543,13 +551,27 @@ fn request_outcome(request: &Request) -> String {
     }
 }
 
-fn request_details(request: &Request, names: &IndexMap<String, String>) -> String {
+fn request_details(
+    lang: &str,
+    request: &Request,
+    names: &IndexMap<String, String>,
+    links: &IndexMap<String, String>,
+) -> String {
     let payload = &request.payload;
+    if request.kind == LINK_SUBMISSION {
+        let title = payload.get("link_id").and_then(Value::as_str).and_then(|id| links.get(id));
+        return match title {
+            Some(title) => tf(lang, "Submission for {title}", &[("title", title)]),
+            None => String::new(),
+        };
+    }
     if let Some(reason) = payload.get("reason").and_then(Value::as_str).filter(|r| !r.is_empty()) {
         return reason.to_string();
     }
     match request.kind.as_str() {
-        PROFILE_INPUT => plural(payload.get("fields").and_then(Value::as_array).map_or(0, Vec::len), "field"),
+        PROFILE_INPUT => {
+            tn(lang, payload.get("fields").and_then(Value::as_array).map_or(0, Vec::len), "{n} field", "{n} fields")
+        }
         FILL => {
             let templates: Vec<String> = payload
                 .get("templates")
@@ -582,7 +604,10 @@ struct ActivityRow {
 #[tauri::command]
 fn list_activity(state: State<AppState>) -> CmdResult<Vec<ActivityRow>> {
     let names: IndexMap<String, String> = state.app.templates.all().into_iter().map(|t| (t.id, t.name)).collect();
+    let lang = state.app.language();
     let vault = state.app.vault();
+    let links: IndexMap<String, String> =
+        vault.list_links().map_err(err)?.into_iter().map(|l| (l.link_id, l.title)).collect();
     let fill_sets: Vec<i64> = vault.list_fill_sets().map_err(err)?.iter().map(|f| f.id).collect();
     let documents: Vec<i64> = vault.list_documents().map_err(err)?.iter().map(|d| d.id).collect();
     let mut requests = vault.list_requests(None).map_err(err)?;
@@ -604,9 +629,9 @@ fn list_activity(state: State<AppState>) -> CmdResult<Vec<ActivityRow>> {
             ActivityRow {
                 id: r.id,
                 kind: r.kind.clone(),
-                label: request_label(&r.kind).to_string(),
-                details: request_details(r, &names),
-                outcome: request_outcome(r),
+                label: request_label(&lang, &r.kind),
+                details: request_details(&lang, r, &names, &links),
+                outcome: request_outcome(&lang, r),
                 time: r.resolved_at.clone().unwrap_or_else(|| r.created_at.clone()),
                 status: r.status.clone(),
                 fill_set_id,
@@ -670,7 +695,7 @@ fn resolve_profile_input(
     id: i64,
     profile_name: Option<String>,
     values: IndexMap<String, String>,
-) -> CmdResult<Vec<String>> {
+) -> CmdResult<Vec<Problem>> {
     let app = &state.app;
     let request = app.vault().get_request(id).map_err(err)?;
     let specs = request.payload.get("fields").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -838,7 +863,7 @@ async fn resolve_submission(
     profile_name: Option<String>,
     values: IndexMap<String, String>,
     keep: Vec<usize>,
-) -> CmdResult<Vec<String>> {
+) -> CmdResult<Vec<Problem>> {
     let app = state.app.clone();
     let problems = tauri::async_runtime::spawn_blocking(move || {
         let name = profile_name.unwrap_or_default();
@@ -954,6 +979,24 @@ async fn relay_status(relay: RelayState<'_>) -> CmdResult<crate::relay::Info> {
     Ok(relay.info().await)
 }
 
+/// A script error in the window, for the app's log.
+#[tauri::command]
+fn log_error(message: String) {
+    eprintln!("window: {message}");
+}
+
+#[tauri::command]
+fn catalog(language: String) -> serde_json::Map<String, Value> {
+    crate::i18n::catalog(&language)
+}
+
+/// The window gained focus: the account's language may have changed on the relay meanwhile.
+#[tauri::command]
+fn focused(relay: RelayState) {
+    let relay = relay.inner().clone();
+    tauri::async_runtime::spawn(async move { relay.refresh_profile().await });
+}
+
 #[tauri::command]
 fn relay_summary(relay: RelayState) -> crate::relay::Summary {
     relay.summary()
@@ -1041,6 +1084,9 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         fill_close,
         relay_status,
         relay_summary,
+        focused,
+        catalog,
+        log_error,
         relay_login,
         relay_logout,
         relay_revoke,

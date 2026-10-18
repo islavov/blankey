@@ -24,6 +24,9 @@ pub struct Discovery {
     pub device_links: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_inbox: Option<String>,
+    /// The account's profile for the app (its UI language); optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_profile: Option<String>,
 }
 
 impl Discovery {
@@ -38,7 +41,9 @@ impl Discovery {
             check_url(url, "https", "http")?;
         }
         check_url(&self.device_connect, "wss", "ws")?;
-        for url in [&self.device_resource, &self.device_links, &self.device_inbox].into_iter().flatten() {
+        for url in
+            [&self.device_resource, &self.device_links, &self.device_inbox, &self.device_profile].into_iter().flatten()
+        {
             check_url(url, "https", "http")?;
         }
         Ok(self)
@@ -91,6 +96,7 @@ pub(crate) mod tests {
             device_resource: Some(format!("{base}/device")),
             device_links: Some(format!("{base}/device/links")),
             device_inbox: Some(format!("{base}/device/inbox")),
+            device_profile: Some(format!("{base}/device/profile")),
         }
     }
 

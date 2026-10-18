@@ -1,6 +1,7 @@
 import { useState } from "../vendor/preact-htm.js";
 import { call } from "./api.js";
-import { html, megabytes, PLACEHOLDERS, plural, useLoad, when } from "./lib.js";
+import { problemText, t, tn } from "./i18n.js";
+import { html, megabytes, placeholder, useLoad, when } from "./lib.js";
 import { confirmDialog, toast } from "./ui/feedback.js";
 import { openSheet, SheetHead } from "./ui/sheet.js";
 import { Select } from "./ui/select.js";
@@ -30,8 +31,8 @@ function SubmissionSheet({ submission, close }) {
   if (!profiles) return null;
 
   const discard = async () => {
-    const text = "What was sent is deleted from this computer and can no longer be opened. Values and files you saved stay.";
-    if (!(await confirmDialog("Discard this submission?", text, "Discard"))) return;
+    const text = t("What was sent is deleted from this computer and can no longer be opened. Values and files you saved stay.");
+    if (!(await confirmDialog(t("Discard this submission?"), text, t("Discard")))) return;
     await call("discard_submission", { sid });
     close();
   };
@@ -47,14 +48,14 @@ function SubmissionSheet({ submission, close }) {
     });
     setProblems(result);
     if (!result.length) {
-      toast("Saved");
+      toast(t("Saved"));
       close();
     }
   };
 
   const exportFile = async (index) => {
     const path = await call("export_submission_file", { sid, index });
-    if (path) toast(`Saved to ${path}`, 4000);
+    if (path) toast(t("Saved to {path}", { path }), 4000);
   };
 
   const set = (key, value) => setValues({ ...values, [key]: value });
@@ -70,27 +71,27 @@ function SubmissionSheet({ submission, close }) {
     }
     return html`
       <label title=${spec.key}>${label}</label>
-      <input type="text" name=${spec.key} value=${values[spec.key] || ""} placeholder=${PLACEHOLDERS[spec.type] || ""} spellcheck="false"
+      <input type="text" name=${spec.key} value=${values[spec.key] || ""} placeholder=${placeholder(spec.type)} spellcheck="false"
         onInput=${(e) => set(spec.key, e.target.value)} />`;
   };
 
   const toggle = (index, on) => setKeep(on ? [...keep, index] : keep.filter((i) => i !== index));
-  const options = [...profiles.map((p) => [String(p.id), p.name]), ["new", "New profile…"]];
+  const options = [...profiles.map((p) => [String(p.id), p.name]), ["new", t("New profile…")]];
   const summary = [
-    `Received ${when(submission.received_at)}`,
-    saved && `saved ${when(submission.handled_at)}`,
-    `${plural(fields.length, "field")}, ${plural(files.length, "file")}`,
+    t("Received {date}", { date: when(submission.received_at) }),
+    saved && t("saved {date}", { date: when(submission.handled_at) }),
+    `${tn(fields.length, "{n} field", "{n} fields")}, ${tn(files.length, "{n} file", "{n} files")}`,
   ].filter(Boolean);
   return html`
     <div class="sheet-head">
-      <${SheetHead} icon="links" title=${`Submission for ${link.title}`} reason=${summary.join(" · ")} />
+      <${SheetHead} icon="links" title=${t("Submission for {title}", { title: link.title })} reason=${summary.join(" · ")} />
     </div>
     <div class="sheet-body">
       <form class="input-form" autocomplete="off" onSubmit=${(e) => (e.preventDefault(), save())}>
-        <label>Save into</label>
+        <label>${t("Save into")}</label>
         <${Select} name="profile" value=${profileId} options=${options} onChange=${(v) => setProfileId(v === "new" ? "new" : Number(v))} />
         ${profileId === "new" && html`
-          <label>Profile name</label>
+          <label>${t("Profile name")}</label>
           <input type="text" name="__profile" value=${newName} onInput=${(e) => setNewName(e.target.value)} />`}
         ${fields.map(field)}
       </form>
@@ -102,20 +103,20 @@ function SubmissionSheet({ submission, close }) {
                 ${f.thumbnail ? html`<img class="thumb" src=${f.thumbnail} alt="" />` : html`<span class="thumb"></span>`}
                 <span class="name" title=${f.name}>${f.name}</span>
                 <span class="muted small">${megabytes(f.size)}</span>
-                <button class="link" onClick=${() => call("open_submission_file", { sid, index: f.index })}>Open</button>
-                <button class="link" onClick=${() => exportFile(f.index)}>Export</button>
-                <label class="check-row small" title="Keep an encrypted copy under Documents">
-                  <input type="checkbox" class="keep" checked=${keep.includes(f.index)} onChange=${(e) => toggle(f.index, e.target.checked)} /> Keep
+                <button class="link" onClick=${() => call("open_submission_file", { sid, index: f.index })}>${t("Open")}</button>
+                <button class="link" onClick=${() => exportFile(f.index)}>${t("Export")}</button>
+                <label class="check-row small" title=${t("Keep an encrypted copy under Documents")}>
+                  <input type="checkbox" class="keep" checked=${keep.includes(f.index)} onChange=${(e) => toggle(f.index, e.target.checked)} /> ${t("Keep")}
                 </label>
               </div>`
           )}
         </div>`}
-      <div class="problems" style="max-width:640px;margin:0 auto;padding:0 24px">${problems.join("\n")}</div>
+      <div class="problems" style="max-width:640px;margin:0 auto;padding:0 24px">${problems.map(problemText).join("\n")}</div>
     </div>
     <div class="sheet-foot">
-      <span class="note">Kept files are encrypted in the vault and listed under Documents. This submission stays here until you discard it.</span>
-      <button onClick=${discard} class="danger">Discard</button>
-      <button onClick=${close}>${saved ? "Close" : "Later"}</button>
-      <button class="primary" onClick=${save}>${saved ? "Save again" : "Save"}</button>
+      <span class="note">${t("Kept files are encrypted in the vault and listed under Documents. This submission stays here until you discard it.")}</span>
+      <button onClick=${discard} class="danger">${t("Discard")}</button>
+      <button onClick=${close}>${saved ? t("Close") : t("Later")}</button>
+      <button class="primary" onClick=${save}>${saved ? t("Save again") : t("Save")}</button>
     </div>`;
 }

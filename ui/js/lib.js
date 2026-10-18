@@ -1,20 +1,25 @@
 import { html, useEffect, useState } from "../vendor/preact-htm.js";
+import { number, t } from "./i18n.js";
 
 export { html };
 
 export const when = (ts) => (ts ? String(ts).replace("T", " ").slice(0, 16) : "");
-export const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-export const megabytes = (bytes) => `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+export const megabytes = (bytes) =>
+  t("{size} MB", { size: number(bytes / (1024 * 1024), bytes < 10 * 1024 * 1024 ? 1 : 0) });
 
 export const KIND_NAMES = { docx: "Word", pdf_form: "PDF", typst: "Typst" };
 
-export const PLACEHOLDERS = {
-  date: "DD.MM.YYYY",
-  egn: "10 digits",
-  iban: "BG00 XXXX 0000 0000 0000 00",
-  number: "1 500,00",
-  email: "name@example.com",
-};
+/** The example shown in an empty input of a field type. */
+export function placeholder(type) {
+  const examples = {
+    date: t("DD.MM.YYYY"),
+    egn: t("10 digits"),
+    iban: "BG00 XXXX 0000 0000 0000 00",
+    number: "1 500,00",
+    email: "name@example.com",
+  };
+  return examples[type] || "";
+}
 
 const ICONS = {
   activity: '<path d="M8 2.2a5.8 5.8 0 1 1-5.6 4.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M1.6 3.4l.9 3.2 3.1-1" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 4.8V8l2.2 1.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',

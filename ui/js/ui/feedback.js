@@ -1,4 +1,5 @@
 import { html, render, useEffect, useRef } from "../../vendor/preact-htm.js";
+import { t } from "../i18n.js";
 
 export function toast(message, ms = 2600) {
   const el = document.getElementById("toast");
@@ -19,7 +20,7 @@ export function closeDialog() {
 }
 
 /** fields: [{name, label, value, type}] -> resolves to {name: value}, or null when cancelled */
-export function dialog({ title, text = "", fields = [], ok = "OK", danger = false, cancel = "Cancel" }) {
+export function dialog({ title, text = "", fields = [], ok = t("OK"), danger = false, cancel = t("Cancel") }) {
   return new Promise((resolve) => {
     const close = (value) => {
       closeDialog();
@@ -30,8 +31,8 @@ export function dialog({ title, text = "", fields = [], ok = "OK", danger = fals
   });
 }
 
-export const confirmDialog = (title, text, ok = "Delete") => dialog({ title, text, ok, danger: true }).then(Boolean);
-export const alertDialog = (title, text) => dialog({ title, text, ok: "OK", cancel: "" });
+export const confirmDialog = (title, text, ok = t("Delete")) => dialog({ title, text, ok, danger: true }).then(Boolean);
+export const alertDialog = (title, text) => dialog({ title, text, ok: t("OK"), cancel: "" });
 
 function Dialog({ title, text, fields, ok, danger, cancel, onClose }) {
   const form = useRef();

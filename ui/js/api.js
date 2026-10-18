@@ -1,3 +1,4 @@
+import { language, setLanguage } from "./i18n.js";
 import { toast } from "./ui/feedback.js";
 import { update } from "./lib.js";
 
@@ -6,8 +7,16 @@ export const { listen } = window.__TAURI__.event;
 
 export const isLocked = (e) => String(e).includes("locked");
 
+/** Loads the language's catalog when it changed, then re-renders. */
+export async function applyLanguage(code) {
+  if (!code || code === language()) return;
+  await setLanguage(code, (lang) => invoke("catalog", { language: lang }));
+  update({});
+}
+
 export async function refreshStatus() {
   const status = await invoke("status");
+  await applyLanguage(status.language);
   update({ status });
   return status;
 }

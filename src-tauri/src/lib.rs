@@ -3,6 +3,7 @@ pub mod config;
 pub mod core;
 pub mod crypto;
 pub mod fieldtypes;
+pub mod i18n;
 pub mod keychain;
 pub mod links;
 pub mod mcp;

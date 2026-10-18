@@ -17,6 +17,7 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::config::{free_port, server_running, Config};
 use crate::core::Blankey;
+use crate::i18n;
 use crate::keychain::{self, OsKeyring};
 
 const AUTO_LOCK_CHECK: Duration = Duration::from_secs(30);
@@ -101,19 +102,26 @@ pub fn quick_unlock(handle: &AppHandle, reason: &str) -> bool {
 
 fn on_request(handle: &AppHandle, id: i64) {
     let app = state(handle).app.clone();
+    let lang = app.language();
     let request = app.vault().get_request(id).ok();
     let submission = request.as_ref().is_some_and(|r| r.kind == crate::links::LINK_SUBMISSION);
-    let (title, fallback) = if submission {
-        ("New submission", "Someone sent you data through a collection link. Open Blankey to review it.")
+    let (title, body) = if submission {
+        // the link's title is plaintext; the payload is sealed until the vault is unlocked
+        let link = request.as_ref().and_then(|r| r.payload.get("link_id")?.as_str().map(str::to_string));
+        let link_title = link.and_then(|id| app.vault().get_link(&id).ok()).map(|l| l.title);
+        let body = match link_title {
+            Some(link_title) => i18n::tf(&lang, "Submission for {title}", &[("title", &link_title)]),
+            None => i18n::t(&lang, "Someone sent you data through a collection link. Open Blankey to review it."),
+        };
+        (i18n::t(&lang, "New submission"), body)
     } else {
-        ("Request from your AI assistant", "Your AI assistant sent a request. Open Blankey to review it.")
+        let reason = request
+            .and_then(|r| r.payload.get("reason").and_then(|v| v.as_str()).map(str::to_string))
+            .filter(|r| !r.is_empty())
+            .unwrap_or_else(|| i18n::t(&lang, "Your AI assistant sent a request. Open Blankey to review it."));
+        (i18n::t(&lang, "Request from your AI assistant"), reason)
     };
-    // the reason is sealed until the vault is unlocked
-    let reason = request
-        .and_then(|r| r.payload.get("reason").and_then(|v| v.as_str()).map(str::to_string))
-        .filter(|r| !r.is_empty())
-        .unwrap_or_else(|| fallback.into());
-    notify(handle, title, &reason);
+    notify(handle, &title, &body);
     tray::refresh(handle);
     show_main(handle);
     let _ = handle.emit("request-created", id);
@@ -129,7 +137,13 @@ fn start_mcp(handle: &AppHandle, extra: axum::Router) {
         let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
             Ok(listener) => listener,
             Err(e) => {
-                notify(&handle, "Blankey", &format!("The MCP server could not start on port {port}: {e}"));
+                let lang = crate::app::state(&handle).app.language();
+                let text = i18n::tf(
+                    &lang,
+                    "The MCP server could not start on port {port}: {error}",
+                    &[("port", &port), ("error", &e)],
+                );
+                notify(&handle, "Blankey", &text);
                 return;
             }
         };
@@ -137,7 +151,8 @@ fn start_mcp(handle: &AppHandle, extra: axum::Router) {
         let result = crate::mcp::serve_with(app, listener, extra, std::future::pending()).await;
         state_flag(&handle, false);
         if let Err(e) = result {
-            notify(&handle, "Blankey", &format!("The MCP server stopped: {e}"));
+            let lang = crate::app::state(&handle).app.language();
+            notify(&handle, "Blankey", &i18n::tf(&lang, "The MCP server stopped: {error}", &[("error", &e)]));
         }
     });
 }
@@ -184,6 +199,7 @@ pub fn run() {
     }
     let secrets = OsKeyring::for_data_dir(&config.data_dir, &Config::default_data_dir());
     let app = Arc::new(Blankey::new(config, Box::new(secrets)).expect("cannot open the vault"));
+    app.set_language(&i18n::resolve(app.vault().relay_language().ok().flatten().as_deref()));
     {
         let mut vault = app.vault();
         // with Touch ID the vault stays locked until first use
@@ -212,7 +228,7 @@ pub fn run() {
                 let quit_handle = handle.clone();
                 handle
                     .dialog()
-                    .message("Blankey is already running. Look for its icon in the menu bar.")
+                    .message(i18n::t(&app.language(), "Blankey is already running. Look for its icon in the menu bar."))
                     .kind(MessageDialogKind::Info)
                     .title("Blankey")
                     .show(move |_| quit_handle.exit(0));
@@ -231,9 +247,10 @@ pub fn run() {
             relay.start();
             start_auto_lock(&handle);
             if let Some(old) = moved_from {
-                let message = format!(
-                    "Port {old} is in use, so Blankey moved to {}. If your AI assistant stops reaching Blankey, connect it again from the menu bar.",
-                    app.config.mcp_url()
+                let message = i18n::tf(
+                    &app.language(),
+                    "Port {old} is in use, so Blankey moved to {url}. If your AI assistant stops reaching Blankey, connect it again from the menu bar.",
+                    &[("old", &old), ("url", &app.config.mcp_url())],
                 );
                 notify(&handle, "Blankey", &message);
             }

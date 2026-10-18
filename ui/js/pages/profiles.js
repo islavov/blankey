@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "../../vendor/preact-htm.js";
 import { call } from "../api.js";
-import { html, matches, PLACEHOLDERS, plural, reload, state, useLoad, useRemembered } from "../lib.js";
+import { problemText, t, tn } from "../i18n.js";
+import { html, matches, placeholder, reload, state, useLoad, useRemembered } from "../lib.js";
 import { confirmDialog, dialog, toast } from "../ui/feedback.js";
 import { Page } from "../ui/page.js";
 import { Select } from "../ui/select.js";
@@ -19,7 +20,7 @@ export function Profiles() {
 
   const choose = async (id) => {
     if (dirty && id !== current) {
-      if (!(await confirmDialog("Discard unsaved changes?", "The fields of this profile were edited.", "Discard"))) return;
+      if (!(await confirmDialog(t("Discard unsaved changes?"), t("The fields of this profile were edited."), t("Discard")))) return;
     }
     setDirty(false);
     setSelected(id);
@@ -27,12 +28,12 @@ export function Profiles() {
 
   const create = async () => {
     const values = await dialog({
-      title: "New profile",
+      title: t("New profile"),
       fields: [
-        { name: "name", label: "Name" },
-        { name: "kind", label: "Kind (person, company, loan…)", value: "person" },
+        { name: "name", label: t("Name") },
+        { name: "kind", label: t("Kind (person, company, loan…)"), value: "person" },
       ],
-      ok: "Create",
+      ok: t("Create"),
     });
     if (!values?.name?.trim()) return;
     setSelected(await call("create_profile", values));
@@ -40,14 +41,14 @@ export function Profiles() {
   };
 
   const rename = async () => {
-    if (!profile) return toast("Select a profile");
+    if (!profile) return toast(t("Select a profile"));
     const values = await dialog({
-      title: "Rename profile",
+      title: t("Rename profile"),
       fields: [
-        { name: "name", label: "Name", value: profile.name },
-        { name: "kind", label: "Kind", value: profile.kind },
+        { name: "name", label: t("Name"), value: profile.name },
+        { name: "kind", label: t("Kind"), value: profile.kind },
       ],
-      ok: "Save",
+      ok: t("Save"),
     });
     if (!values) return;
     await call("update_profile", { id: profile.id, name: values.name.trim() || profile.name, kind: values.kind });
@@ -55,8 +56,8 @@ export function Profiles() {
   };
 
   const remove = async () => {
-    if (!profile) return toast("Select a profile");
-    if (!(await confirmDialog(`Delete the profile "${profile.name}"?`, "All its fields are removed from the vault."))) return;
+    if (!profile) return toast(t("Select a profile"));
+    if (!(await confirmDialog(t("Delete the profile \"{name}\"?", { name: profile.name }), t("All its fields are removed from the vault.")))) return;
     await call("delete_profile", { id: profile.id });
     setSelected(null);
     reload();
@@ -68,10 +69,10 @@ export function Profiles() {
   };
 
   return html`
-    <${Page} title="Profiles" subtitle=${`${plural(profiles.length, "profile")}, values encrypted per field`} actions=${[
-      ["New profile", create],
-      ["Rename", rename],
-      ["Delete profile", remove, "danger"],
+    <${Page} title=${t("Profiles")} subtitle=${t("{profiles}, values encrypted per field", { profiles: tn(profiles.length, "{n} profile", "{n} profiles") })} actions=${[
+      [t("New profile"), create],
+      [t("Rename"), rename],
+      [t("Delete profile"), remove, "danger"],
     ]}>
       <div class="split">
         <div class="list">
@@ -80,15 +81,15 @@ export function Profiles() {
                 (p) => html`
                   <div key=${p.id} class=${`list-item ${p.id === current ? "active" : ""}`} onClick=${() => choose(p.id)}>
                     <div class="title">${p.name}</div>
-                    <div class="muted small">${p.kind || "profile"} · #${p.id}</div>
+                    <div class="muted small">${p.kind || t("profile")} · #${p.id}</div>
                   </div>`
               )
-            : html`<div class="empty">No profiles</div>`}
+            : html`<div class="empty">${t("No profiles")}</div>`}
         </div>
         <div class="detail">
           ${profile
             ? html`<${ProfileDetail} key=${`${profile.id}:${version}`} profile=${profile} onDirty=${() => setDirty(true)} onSaved=${saved} />`
-            : html`<div class="empty">Create a profile to store personal data.</div>`}
+            : html`<div class="empty">${t("Create a profile to store personal data.")}</div>`}
         </div>
       </div>
     </${Page}>`;
@@ -113,7 +114,7 @@ function ProfileDetail({ profile, onDirty, onSaved }) {
 
   const edited = (next) => {
     setRows(next);
-    setStatus("Unsaved changes");
+    setStatus(t("Unsaved changes"));
     onDirty();
   };
   const change = (uid, patch) => edited(rows.map((r) => (r.uid === uid ? { ...r, ...patch } : r)));
@@ -136,17 +137,17 @@ function ProfileDetail({ profile, onDirty, onSaved }) {
       removed: [...removed, ...renamed],
     });
     setProblems(result);
-    if (result.length) return setStatus("Fix the problems below");
-    toast("Saved");
+    if (result.length) return setStatus(t("Fix the problems below"));
+    toast(t("Saved"));
     onSaved();
   };
 
   if (!rows) return null;
   return html`
     <h3>${profile.name}</h3>
-    <div class="muted small">Your AI assistant sees field names, labels, types and how long the values are. Never the values.</div>
+    <div class="muted small">${t("Your AI assistant sees field names, labels, types and how long the values are. Never the values.")}</div>
     <table class="fields">
-      <thead><tr><th>Key</th><th>Label</th><th>Type</th><th>Value</th><th></th></tr></thead>
+      <thead><tr><th>${t("Key")}</th><th>${t("Label")}</th><th>${t("Type")}</th><th>${t("Value")}</th><th></th></tr></thead>
       <tbody>
         ${rows.map(
           (r) => html`<${FieldRow} key=${r.uid} r=${r} reveal=${reveal} focus=${r.uid === focusUid}
@@ -155,15 +156,15 @@ function ProfileDetail({ profile, onDirty, onSaved }) {
       </tbody>
     </table>
     <div class="detail-actions">
-      <button onClick=${add}>Add field</button>
+      <button onClick=${add}>${t("Add field")}</button>
       <label class="check-row small muted">
-        <input type="checkbox" checked=${reveal} onChange=${(e) => setReveal(e.target.checked)} /> Show values
+        <input type="checkbox" checked=${reveal} onChange=${(e) => setReveal(e.target.checked)} /> ${t("Show values")}
       </label>
       <span class="spacer"></span>
       <span class="muted small">${status}</span>
-      <button class="primary" onClick=${save}>Save</button>
+      <button class="primary" onClick=${save}>${t("Save")}</button>
     </div>
-    <div class="problems">${problems.join("\n")}</div>`;
+    <div class="problems">${problems.map(problemText).join("\n")}</div>`;
 }
 
 function FieldRow({ r, reveal, focus, onChange, onRemove }) {
@@ -184,8 +185,8 @@ function FieldRow({ r, reveal, focus, onChange, onRemove }) {
       </td>
       <td>
         <input type="text" class=${`value ${reveal ? "" : "masked"}`} value=${r.value}
-          placeholder=${PLACEHOLDERS[r.type] || ""} spellcheck="false" onInput=${input("value")} />
+          placeholder=${placeholder(r.type)} spellcheck="false" onInput=${input("value")} />
       </td>
-      <td style="width:1%"><button class="remove ghost" title="Remove field" onClick=${onRemove}>✕</button></td>
+      <td style="width:1%"><button class="remove ghost" title=${t("Remove field")} onClick=${onRemove}>✕</button></td>
     </tr>`;
 }

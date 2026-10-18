@@ -49,6 +49,9 @@ struct StubState {
     cut_download: AtomicBool,
     /// the next inbox delete goes through but answers 500, as if the reply was lost
     lose_delete_reply: AtomicBool,
+    /// the account's language in the device profile; no `device_profile` in discovery when false
+    profile: AtomicBool,
+    lang: Mutex<Option<String>>,
 }
 
 struct Stub {
@@ -72,6 +75,8 @@ impl Stub {
             inbox: Mutex::default(),
             cut_download: AtomicBool::new(false),
             lose_delete_reply: AtomicBool::new(false),
+            profile: AtomicBool::new(true),
+            lang: Mutex::default(),
         });
         let routes = Router::new()
             .route("/.well-known/blankey-relay", get(discovery))
@@ -89,6 +94,7 @@ impl Stub {
             .route("/device/inbox", get(list_inbox))
             .route("/device/inbox/{sid}", delete(delete_submission))
             .route("/blob/{sid}", get(blob))
+            .route("/device/profile", get(profile))
             .with_state(state.clone());
         tokio::spawn(async move { axum::serve(http, routes).await });
         Self { state, sockets }
@@ -127,7 +133,18 @@ fn check_device(request: &Request, response: Handshake) -> Result<Handshake, Err
 async fn discovery(Shared(stub): Shared<Arc<StubState>>) -> Json<Value> {
     let mut doc = serde_json::to_value(document(&stub.url, &stub.socket_url)).unwrap();
     doc["protocol"] = json!(stub.protocol);
+    if !stub.profile.load(Ordering::SeqCst) {
+        doc.as_object_mut().unwrap().remove("device_profile");
+    }
     Json(doc)
+}
+
+async fn profile(
+    Shared(stub): Shared<Arc<StubState>>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, StatusCode> {
+    own_device(&query)?;
+    Ok(Json(json!({"account": "you@example.com", "lang": *stub.lang.lock().unwrap()})))
 }
 
 async fn metadata(Shared(stub): Shared<Arc<StubState>>) -> Json<Value> {
@@ -542,4 +559,52 @@ async fn collection_links_reach_the_device() {
     relay.revoke_link(LINK_ID).await.unwrap();
     assert_eq!(*stub.state.revoked_links.lock().unwrap(), [LINK_ID]);
     assert!(app.vault().get_link(LINK_ID).unwrap().revoked_at.is_some());
+}
+
+async fn wait_for_language(relay: &Relay, wanted: Option<&str>) {
+    let mut language = relay.subscribe_language();
+    let reached = tokio::time::timeout(WAIT, language.wait_for(|l| l.as_deref() == wanted)).await;
+    assert!(reached.is_ok(), "expected {wanted:?}, still {:?}", relay.language());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_account_language_comes_from_the_device_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = Stub::start(1).await;
+    *stub.state.lang.lock().unwrap() = Some("bg".into());
+    let (relay, app) = signed_in_app(dir.path(), &stub).await;
+    let mut socket = stub.accept().await;
+    wait_for(&relay, State::Connected).await;
+    wait_for_language(&relay, Some("bg")).await;
+    assert_eq!(app.vault().relay_language().unwrap().as_deref(), Some("bg"));
+
+    // changed on the relay: a profile frame, or the window regaining focus, reads it again
+    *stub.state.lang.lock().unwrap() = Some("en".into());
+    socket.send(Message::text(json!({"v": 1, "type": "profile"}).to_string())).await.unwrap();
+    wait_for_language(&relay, Some("en")).await;
+    *stub.state.lang.lock().unwrap() = None;
+    relay.refresh_profile().await;
+    assert_eq!(relay.language(), None);
+
+    *stub.state.lang.lock().unwrap() = Some("bg".into());
+    relay.refresh_profile().await;
+    assert_eq!(relay.language().as_deref(), Some("bg"));
+    relay.logout();
+    assert_eq!(relay.language(), None);
+    assert_eq!(app.vault().relay_language().unwrap(), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relay_without_profiles_names_no_language() {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = Stub::start(1).await;
+    stub.state.profile.store(false, Ordering::SeqCst);
+    *stub.state.lang.lock().unwrap() = Some("bg".into());
+    let (relay, app) = signed_in_app(dir.path(), &stub).await;
+    let _socket = stub.accept().await;
+    wait_for(&relay, State::Connected).await;
+    app.vault().set_relay_language(Some("bg")).unwrap();
+    relay.refresh_profile().await;
+    assert_eq!(relay.language(), None);
+    assert_eq!(app.vault().relay_language().unwrap(), None);
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The app speaks Bulgarian. It follows the language of your relay account (read from the relay's new optional
+  `device_profile`), else the computer's language, else English. The window, tray, notifications, dialogs and
+  validation messages are translated; MCP output for agents stays English.
+
 ## 0.2.1
 
 - Agents are told where collection link answers go: once the user saves a submission into a profile, they fill

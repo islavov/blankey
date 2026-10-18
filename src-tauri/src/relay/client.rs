@@ -123,8 +123,9 @@ async fn serve(relay: &Arc<Relay>, socket: Socket) {
         inner.outgoing = Some(tx.clone());
         inner.send_primary_claim();
     }
-    // submissions that arrived while the app was offline
+    // submissions that arrived while the app was offline, and the account's current language
     drain(relay);
+    refresh_profile(relay);
     let start = tokio::time::Instant::now() + PING_INTERVAL;
     let mut ping = tokio::time::interval_at(start, PING_INTERVAL);
     let mut awaiting_pong = false;
@@ -147,6 +148,7 @@ async fn serve(relay: &Arc<Relay>, socket: Socket) {
                     Some("approve") => reply(&tx, approve(relay.clone(), frame)),
                     Some("grants") => grants(relay, &frame),
                     Some("inbox") => drain(relay),
+                    Some("profile") => refresh_profile(relay),
                     _ => {}
                 }
             }
@@ -172,6 +174,11 @@ async fn serve(relay: &Arc<Relay>, socket: Socket) {
 fn drain(relay: &Arc<Relay>) {
     let relay = relay.clone();
     tokio::spawn(async move { relay.drain_inbox().await });
+}
+
+fn refresh_profile(relay: &Arc<Relay>) {
+    let relay = relay.clone();
+    tokio::spawn(async move { relay.refresh_profile().await });
 }
 
 /// Answers on its own task: an MCP call or an approval dialog must not hold up other frames.

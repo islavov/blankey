@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "../../vendor/preact-htm.js";
+import { t } from "../i18n.js";
 import { html } from "../lib.js";
-import { describe } from "./source.js";
+import { describe, kindLabel } from "./source.js";
 
 /** One blank: its label and name, and the source with the current value. Click the source to change it. */
 export function FillRow({ v, binding, row, suggested, active, typing, onSelect, onMenu, onTyped }) {
@@ -21,7 +22,7 @@ export function FillRow({ v, binding, row, suggested, active, typing, onSelect, 
         ? html`<div class="source"><${TypeValue} value=${binding?.value ?? ""} onDone=${onTyped} /></div>`
         : html`
             <div class="source" tabindex="0" onClick=${(e) => onMenu(e.currentTarget)}>
-              <span class=${`chip ${d.kind}`}>${d.kind}</span>
+              <span class=${`chip ${d.kind}`}>${kindLabel(d.kind)}</span>
               ${d.path && html`<span class="path">${d.path}</span>`}
               <span class="val">${d.text}</span><span class="caret">⌄</span>
             </div>`}
@@ -46,6 +47,6 @@ function TypeValue({ value, onDone }) {
     if (e.key === "Enter") finish(true);
     if (e.key === "Escape") finish(false);
   };
-  return html`<input type="text" ref=${input} value=${value} placeholder="Type a value" spellcheck="false"
+  return html`<input type="text" ref=${input} value=${value} placeholder=${t("Type a value")} spellcheck="false"
     onKeyDown=${key} onBlur=${() => finish(true)} />`;
 }

@@ -24,10 +24,24 @@ pub const FILE: &str = "file";
 pub const FILE_KINDS: &[&str] = &["pdf", "docx"];
 const UPLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
 
+/// Something wrong with a typed value: the field's own label (empty for the form as a whole) and an English
+/// message the window translates.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Problem {
+    pub label: String,
+    pub message: &'static str,
+}
+
+impl Problem {
+    pub fn new(label: &str, message: &'static str) -> Self {
+        Self { label: label.to_string(), message }
+    }
+}
+
 /// The outcome of saving typed values into a profile.
 pub enum ProfileSave {
     /// nothing was saved
-    Problems(Vec<String>),
+    Problems(Vec<Problem>),
     /// per field: {key, length, status: saved|skipped}
     Saved { profile_id: i64, fields: Vec<Value> },
 }
@@ -47,6 +61,8 @@ pub struct Blankey {
     pub templates: TemplateStore,
     on_request: RwLock<RequestHook>,
     on_unlock_needed: RwLock<UnlockHook>,
+    /// the UI language (i18n); MCP output stays English
+    language: RwLock<String>,
 }
 
 impl Blankey {
@@ -59,11 +75,20 @@ impl Blankey {
             templates,
             on_request: RwLock::new(Box::new(|_| {})),
             on_unlock_needed: RwLock::new(Box::new(|_| {})),
+            language: RwLock::new(crate::i18n::resolve(None)),
         })
     }
 
     pub fn vault(&self) -> MutexGuard<'_, Vault> {
         self.vault.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub fn language(&self) -> String {
+        self.language.read().unwrap().clone()
+    }
+
+    pub fn set_language(&self, language: &str) {
+        *self.language.write().unwrap() = language.to_string();
     }
 
     pub fn set_request_hook(&self, hook: impl Fn(i64) + Send + Sync + 'static) {
@@ -126,14 +151,14 @@ impl Blankey {
                 spec.get("type").and_then(Value::as_str).filter(|t| fieldtypes::is_type(t)).unwrap_or("text");
             let value = values.get(key).map(|v| v.trim().to_string()).unwrap_or_default();
             if spec.get("required").and_then(Value::as_bool).unwrap_or(false) && value.is_empty() {
-                errors.push(format!("{shown}: required"));
+                errors.push(Problem::new(shown, crate::i18n::mark("required")));
             } else if let Some(message) = fieldtypes::validate(field_type, &value) {
-                errors.push(format!("{shown}: {message}"));
+                errors.push(Problem::new(shown, message));
             }
             items.push(FieldInput::new(key, &value, label, field_type));
         }
         if matches!(target, Target::New { name, .. } if name.trim().is_empty()) {
-            errors.push("Enter a profile name".into());
+            errors.push(Problem::new("", crate::i18n::mark("Enter a profile name")));
         }
         if !errors.is_empty() {
             return Ok(ProfileSave::Problems(errors));
