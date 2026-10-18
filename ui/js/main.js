@@ -10,6 +10,11 @@ import { hidePopup } from "./ui/menu.js";
 import { applyTheme } from "./theme.js";
 import { closeSheet } from "./ui/sheet.js";
 
+// script errors go to the app's log, where they can be read when the window comes up blank
+const report = (message) => invoke("log_error", { message: String(message) }).catch(() => {});
+window.addEventListener("error", (e) => report(`${e.message} (${e.filename}:${e.lineno})`));
+window.addEventListener("unhandledrejection", (e) => report(e.reason?.stack || e.reason));
+
 applyTheme();
 
 function Root() {

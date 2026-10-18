@@ -979,6 +979,12 @@ async fn relay_status(relay: RelayState<'_>) -> CmdResult<crate::relay::Info> {
     Ok(relay.info().await)
 }
 
+/// A script error in the window, for the app's log.
+#[tauri::command]
+fn log_error(message: String) {
+    eprintln!("window: {message}");
+}
+
 #[tauri::command]
 fn catalog(language: String) -> serde_json::Map<String, Value> {
     crate::i18n::catalog(&language)
@@ -1080,6 +1086,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         relay_summary,
         focused,
         catalog,
+        log_error,
         relay_login,
         relay_logout,
         relay_revoke,
