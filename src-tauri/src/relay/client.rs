@@ -24,7 +24,7 @@ use crate::vault::{now, RelayGrant};
 
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 /// how often the relay hears what the app did on this computer
-const REPORT_INTERVAL: Duration = Duration::from_secs(15 * 60);
+const REPORT_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const MIN_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// the relay waits at least 60 s for an mcp_result

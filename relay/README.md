@@ -185,7 +185,7 @@ them on the Connections page.
 
 ### Reports
 
-App → relay, after each connect and every 15 minutes while connected: what the app did on this computer, as monthly
+App → relay, after each connect and every hour while connected: what the app did on this computer, as monthly
 numbers from its local audit log.
 
 ```json
