@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+- Agents are told where collection link answers go: once the user saves a submission into a profile, they fill
+  documents from that profile (`describe_profile`, `request_fill`) and never ask the user to paste the values into
+  the chat. `list_collection_links` adds `saved_into` (profile ids) and `next`, the next step in plain words.
+- First release with installers for the 0.2 line: the 0.2.0 macOS build failed in CI (the release workflow now
+  installs its build tools with the workflow token).
+
 ## 0.2.0
 
 - Collection links (Vault → Collection links): a short link to a web form on the relay where someone else types the
