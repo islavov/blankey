@@ -33,7 +33,7 @@ impl std::fmt::Display for HttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Status(code, body) => {
-                write!(f, "the relay answered {code}: {}", body.chars().take(300).collect::<String>())
+                write!(f, "the online server answered {code}: {}", body.chars().take(300).collect::<String>())
             }
             Self::Transport(e) => write!(f, "{e}"),
         }
@@ -74,7 +74,7 @@ pub fn metadata(agent: &ureq::Agent, discovery: &Discovery) -> Result<Metadata, 
     }
     let methods = &metadata.code_challenge_methods_supported;
     if !methods.is_empty() && !methods.iter().any(|m| m == "S256") {
-        return Err("The relay does not support PKCE S256.".into());
+        return Err("The online server does not support PKCE S256.".into());
     }
     Ok(metadata)
 }
@@ -98,7 +98,8 @@ fn redirect_uri(port: u16) -> String {
 }
 
 pub fn register(agent: &ureq::Agent, metadata: &Metadata, relay_url: &str, port: u16) -> Result<Client, String> {
-    let endpoint = metadata.registration_endpoint.as_deref().ok_or("The relay does not allow client registration.")?;
+    let endpoint =
+        metadata.registration_endpoint.as_deref().ok_or("The online server does not allow client registration.")?;
     let body = json!({
         "client_name": "Blankey",
         "redirect_uris": [redirect_uri(port)],
@@ -111,7 +112,7 @@ pub fn register(agent: &ureq::Agent, metadata: &Metadata, relay_url: &str, port:
         read(agent.post(endpoint).set("Content-Type", "application/json").send_string(&body.to_string()))
             .and_then(|text| parse(&text))
             .map_err(|e| format!("Registration failed: {e}"))?;
-    let client_id = reply["client_id"].as_str().ok_or("The relay returned no client_id.")?;
+    let client_id = reply["client_id"].as_str().ok_or("The online server returned no client_id.")?;
     Ok(Client { relay_url: relay_url.into(), port, client_id: client_id.into() })
 }
 
@@ -238,7 +239,7 @@ pub fn register_device(
     let device_id = reply["device_id"]
         .as_str()
         .map(str::to_string)
-        .ok_or_else(|| HttpError::Transport("the relay returned no device_id".into()))?;
+        .ok_or_else(|| HttpError::Transport("the online server returned no device_id".into()))?;
     Ok(Registration { device_id, account: reply["account"].as_str().map(str::to_string) })
 }
 
@@ -289,7 +290,7 @@ impl Callbacks {
             CALLBACK_PATH,
             get(move |Query(query): Query<CallbackQuery>| async move {
                 let text = if callbacks.resolve(query) {
-                    "Blankey is signed in to the relay. You can close this tab."
+                    "Blankey is signed in to Blankey Online. You can close this tab."
                 } else {
                     "This sign-in did not complete. Start it again from Blankey."
                 };

@@ -1033,7 +1033,7 @@ async fn relay_set_url(relay: RelayState<'_>, url: Option<String>) -> CmdResult<
 
 #[tauri::command]
 async fn relay_open_account(relay: RelayState<'_>) -> CmdResult<()> {
-    let url = relay.account_url().await.ok_or("The relay cannot be reached.")?;
+    let url = relay.account_url().await.ok_or("The online server cannot be reached.")?;
     open::that(url).map_err(err)
 }
 

@@ -8,9 +8,7 @@ Website and download: [blankey.io](https://blankey.io)
 
 [![Claude turns a contract into a template and asks Blankey to fill it; the values are approved in the app](docs/demo.gif)](https://blankey.io)
 
-Built with Rust + Tauri. It replaces the earlier Python/Qt app and keeps its data format: `vault.db`, `templates/`,
-`config.toml` and the keychain entry are shared, so an existing vault opens unchanged (see
-`vault::tests::reads_python_vault`).
+Built with Rust and Tauri.
 
 ## Run
 
@@ -24,7 +22,8 @@ cd .. && npm install && npm test # UI tests (Node, happy-dom), no build step
 ```
 
 `BLANKEY_DATA_DIR=/some/dir` picks another data dir. Release builds use the per-user data directory
-(`~/Library/Application Support/Blankey` on macOS); `scripts/copy-python-data.sh` copies it into the preview folder.
+(`~/Library/Application Support/Blankey` on macOS); `scripts/copy-data-to-preview.sh` copies it into the preview
+folder.
 
 ## Release builds
 
@@ -77,29 +76,21 @@ Only loopback connections are accepted and foreign Host/Origin headers are refus
 
 ## Connect a web agent (claude.ai)
 
-Web agents cannot reach `127.0.0.1`, so Blankey can keep an outbound WebSocket to a relay that forwards their MCP
-requests to the app. The app never accepts inbound connections. The official relay is `https://relay.blankey.io`;
-anyone can run their own by implementing [the relay protocol](relay/README.md).
+Web agents cannot reach `127.0.0.1`, so Blankey can keep an outbound WebSocket to an online server (Blankey Online)
+that forwards their MCP requests to the app. The app never accepts inbound connections. The official server is
+`https://relay.blankey.io`; anyone can run their own by implementing [the relay protocol](relay/README.md).
 
-1. Menu bar → Online → "Sign in to relay…" (or the Connections page). The browser opens the relay's sign-in page;
-   the refresh token is kept in the OS keychain.
-2. In claude.ai, add a custom connector with the connector URL shown on the Connections page (the relay's `/mcp`).
+1. Menu bar → Online → "Sign in to Blankey Online…" (or the Connections page). The browser opens the server's
+   sign-in page; the refresh token is kept in the OS keychain.
+2. In claude.ai, add a custom connector with the connector URL shown on the Connections page (the server's `/mcp`).
 3. When the agent connects, Blankey asks: "Claude (claude.ai) wants to connect to Blankey on this computer through
    relay.blankey.io." Allow it (plus Touch ID where available). Accepted agents are listed on the Connections page,
    where each can be revoked.
 
-The app answers only agents on its own allowlist (vault table `relay_grants`), so a relay cannot add an agent
-without the user. The relay sees MCP traffic (field metadata, templates, example data), never vault values.
-Connections → "Use custom relay…" switches relays: the agents of the old relay are revoked and forgotten, then you
-sign in to the new one. `config.toml` keeps `relay_enabled` and `relay_url`.
-
-## Languages
-
-The app speaks English and Bulgarian. Signed in to a relay, it follows the language chosen for the relay account;
-otherwise the computer's language, else English. Agents always get English. The catalogs are `ui/i18n/<code>.json`,
-keyed by the English text and shared by the window and the tray; `npm test` checks they cover every text and hold
-nothing unused. To add a language, add its code to `ui/i18n/languages.json`, write `ui/i18n/<code>.json`, and list
-it in `CATALOGS` in `src-tauri/src/i18n.rs`.
+The app answers only agents on its own allowlist (vault table `relay_grants`), so the server cannot add an agent
+without the user. The server sees MCP traffic (field metadata, templates, example data), never vault values.
+Connections → "Another online server…" switches servers: the agents of the old one are revoked and forgotten, then
+you sign in to the new one. `config.toml` keeps `relay_enabled` and `relay_url`.
 
 ## How the PII boundary works
 
@@ -139,7 +130,7 @@ become `{{ var }}` tags; use the same var names across related documents). `requ
 blank of one or more templates with its surrounding text; per blank you pick a vault field (`manager.egn`), a literal
 the assistant proposed (non-PII only), the template default, or type a value. Documents are always generated from a
 fill set. The choices are saved as a named fill set, encrypted in the vault, and can be reopened, regenerated,
-exported (YAML, or a zip with the templates) and imported from tray → "Fill sets…".
+exported (YAML, or a zip with the templates) and imported on the Fill sets page.
 
 ## Layout
 
@@ -147,7 +138,9 @@ exported (YAML, or a zip with the templates) and imported from tray → "Fill se
   X25519-sealed requests, keychain / Touch ID unlock, rotating backups
 - `src-tauri/src/templates/`: template store, Jinja bindings (minijinja), docx tokenizing and rendering, Typst,
   fill sets, previews
-- `src-tauri/src/relay/`: relay client (discovery, OAuth with PKCE, device WebSocket); its tests run a stub relay
+- `src-tauri/src/relay/`: Blankey Online client (discovery, OAuth with PKCE, device WebSocket); its tests run a stub
+  server
+- `src-tauri/src/links.rs`: collection links: the public form spec, the sealed submissions and saving them
 - `src-tauri/src/render/`: AcroForm filling with an embedded subset of Noto Sans (lopdf), PDFium previews
 - `src-tauri/src/mcp/`: MCP server (axum) and the `blankey mcp` stdio bridge
 - `src-tauri/src/app/`: tray, window, auto-lock, request handling and the commands the UI calls

@@ -38,10 +38,12 @@ test("revoke asks first", async () => {
   assert.ok(text(".empty").startsWith("No web agents yet."));
 });
 
-test("the sidebar shows the relay account next to Lock", async () => {
+test("the sidebar shows the Blankey Online account above the MCP status", async () => {
   assert.equal(text("#relay-account"), "you@example.com");
-  assert.equal(text("#relay-btn"), "you");
-  assert.equal($("#relay-btn").title, "you@example.com: Connected");
+  assert.equal(text("#relay-btn"), "you@example.com");
+  assert.equal($("#relay-btn").title, "Blankey Online: you@example.com, Connected");
+  const foot = [...document.querySelector(".sidebar-foot").children].map((el) => el.id || el.className);
+  assert.deepEqual(foot, ["relay-btn", "mcp-status", "foot-actions"], "the account sits above the MCP status");
   await goTo("Activity");
   await click($("#relay-btn"));
   assert.equal(text(".toolbar h2"), "Connections");
@@ -51,7 +53,7 @@ test("sign out and in again", async () => {
   await action("Sign out");
   assert.equal(text("#relay-state"), "Signed out");
   assert.equal($("#relay-account"), null);
-  assert.equal(text("#relay-btn"), "Sign in");
+  assert.equal(text("#relay-btn"), "Sign in to Blankey Online");
   await click($("#relay-btn"));
   assert.equal(backend.called("relay_login").length, 1);
   assert.equal(text("#relay-state"), "Signing in…");
@@ -59,14 +61,14 @@ test("sign out and in again", async () => {
   assert.ok($("#relay-btn").disabled);
 });
 
-test("a custom relay, then back to the official one", async () => {
-  await click(byText(".relay button", "Use custom relay…"));
+test("another online server, then back to the official one", async () => {
+  await click(byText(".relay button", "Another online server…"));
   await type($(".modal input[name=url]"), " http://relay.example.com ");
   await submit($(".modal form"));
   assert.equal(text("#toast"), "http://relay.example.com must use https://");
   assert.equal(text("#relay-url"), "https://relay.blankey.io");
 
-  await click(byText(".relay button", "Use custom relay…"));
+  await click(byText(".relay button", "Another online server…"));
   await type($(".modal input[name=url]"), "https://relay.example.com");
   await submit($(".modal form"));
   assert.deepEqual(backend.called("relay_set_url").at(-1), { url: "https://relay.example.com" });
@@ -74,7 +76,7 @@ test("a custom relay, then back to the official one", async () => {
   assert.equal($(".relay .pill"), null);
 
   await click(byText(".relay button", "Reset to official"));
-  assert.equal(text(".modal h3"), "Use the official relay?");
+  assert.equal(text(".modal h3"), "Use the official server?");
   await submit($(".modal form"));
   assert.deepEqual(backend.called("relay_set_url").at(-1), { url: null });
   assert.equal(text("#relay-url"), "https://relay.blankey.io");

@@ -38,10 +38,10 @@ export function Connections() {
 
   const useCustom = async () => {
     const values = await dialog({
-      title: t("Use a custom relay"),
-      text: t("Agents accepted through the current relay are removed. You then sign in to the new relay."),
-      fields: [{ name: "url", label: t("Relay URL"), value: info.official ? "" : info.url }],
-      ok: t("Use relay"),
+      title: t("Use another online server"),
+      text: t("Agents accepted through the current online server are removed. You then sign in to the new server."),
+      fields: [{ name: "url", label: t("Online server URL"), value: info.official ? "" : info.url }],
+      ok: t("Use server"),
     });
     if (!values?.url?.trim()) return;
     // errors are shown by call()
@@ -50,8 +50,8 @@ export function Connections() {
   };
 
   const resetOfficial = async () => {
-    const text = t("Agents accepted through this relay are removed. You then sign in to the official relay.");
-    if (!(await confirmDialog(t("Use the official relay?"), text, t("Use official relay")))) return;
+    const text = t("Agents accepted through this online server are removed. You then sign in to the official server.");
+    if (!(await confirmDialog(t("Use the official server?"), text, t("Use official server")))) return;
     await call("relay_set_url", { url: null }).catch(() => {});
     reload();
   };
@@ -65,15 +65,15 @@ export function Connections() {
 
   const rows = info.grants.map((g) => ({ ...g, id: g.grant_id })).filter((g) => matches(g.client_name, g.redirect_host));
   return html`
-    <${Page} title=${t("Connections")} subtitle=${t("Web agents such as claude.ai, through a relay")}
+    <${Page} title=${t("Connections")} subtitle=${t("Web agents such as claude.ai, through Blankey Online")}
       actions=${[info.signed_in ? [t("Sign out"), signOut] : [t("Sign in"), relaySignIn, "primary"]]}>
       <div class="relay">
         <div class="relay-row">
-          <span class="muted">${t("Relay")}</span>
+          <span class="muted">${t("Online server")}</span>
           <span class="mono selectable" id="relay-url">${info.url}</span>
           ${info.official && html`<span class="pill">${t("official")}</span>`}
           <span class="spacer"></span>
-          <button onClick=${useCustom}>${t("Use custom relay…")}</button>
+          <button onClick=${useCustom}>${t("Another online server…")}</button>
           ${!info.official && html`<button onClick=${resetOfficial}>${t("Reset to official")}</button>`}
         </div>
         ${info.mcp_url && html`
@@ -104,7 +104,7 @@ export function Connections() {
               { title: t("Agent"), cell: (g) => g.client_name },
               { title: t("Host"), cell: (g) => html`<span class="mono">${g.redirect_host}</span>` },
               { title: t("Accepted"), cell: (g) => html`<span class="muted">${when(g.accepted_at)}</span>`, cls: "nowrap" },
-              { title: "", cell: (g) => (g.on_relay === false ? html`<span class="muted small">${t("gone from the relay")}</span>` : ""), cls: "nowrap" },
+              { title: "", cell: (g) => (g.on_relay === false ? html`<span class="muted small">${t("gone from Blankey Online")}</span>` : ""), cls: "nowrap" },
               { title: "", cell: (g) => html`<button class="danger" onClick=${() => revoke(g)}>${t("Revoke")}</button>`, cls: "nowrap" },
             ]} />`
         : html`<${Empty}>${t("No web agents yet.")}<br /><span class="small">${t("Add the connector URL as a custom connector in claude.ai, then allow it when Blankey asks.")}</span></${Empty}>`}

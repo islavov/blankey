@@ -406,7 +406,7 @@ impl Relay {
         let tokens = blocking(move || oauth::exchange_code(&agent, &metadata, &client, &code, &pkce.verifier))
             .await
             .map_err(|e| format!("Sign-in failed: {e}"))?;
-        let refresh = tokens.refresh_token.ok_or("The relay issued no refresh token.")?;
+        let refresh = tokens.refresh_token.ok_or("The online server issued no refresh token.")?;
         self.store_token(&refresh)?;
         {
             let mut inner = self.inner();
@@ -468,7 +468,7 @@ impl Relay {
         if let Some(token) = self.inner().access_token.clone() {
             return Ok(token);
         }
-        let sign_in = || Failure::SignedOut("Sign in to the relay.".into());
+        let sign_in = || Failure::SignedOut("Sign in to Blankey Online.".into());
         let refresh_token = self.tokens.get().ok().flatten().ok_or_else(sign_in)?;
         let client = self.client().ok_or_else(sign_in)?;
         let endpoints = self.endpoints().await?;
@@ -485,7 +485,7 @@ impl Relay {
             }
             Err(HttpError::Status(400 | 401, _)) => {
                 self.forget_token();
-                Err(Failure::SignedOut("The relay ended the session. Sign in again.".into()))
+                Err(Failure::SignedOut("The online server ended the session. Sign in again.".into()))
             }
             Err(e) => Err(Failure::Offline(e.to_string())),
         }
@@ -605,7 +605,7 @@ impl Relay {
     // -- collection links ----------------------------------------------------------------------------------
 
     fn device_id(&self) -> Result<String, String> {
-        self.app.vault().relay_device_id().ok().flatten().ok_or_else(|| "Sign in to the relay first.".to_string())
+        self.app.vault().relay_device_id().ok().flatten().ok_or_else(|| "Sign in to Blankey Online first.".to_string())
     }
 
     /// Makes the link's key pair, registers the public key and spec on the relay and keeps the private key in the
@@ -818,10 +818,13 @@ impl Relay {
 
 /// `{base}/{segments}?device_id=…`: a link and its submissions belong to the device that holds the key.
 fn device_url(base: Option<&str>, segments: &[&str], device_id: &str) -> Result<String, HttpError> {
-    let base = base.ok_or_else(|| HttpError::Transport("This relay does not offer collection links.".into()))?;
+    let base =
+        base.ok_or_else(|| HttpError::Transport("This online server does not offer collection links.".into()))?;
     let mut url = url::Url::parse(base).map_err(|e| HttpError::Transport(e.to_string()))?;
     if !segments.is_empty() {
-        url.path_segments_mut().map_err(|_| HttpError::Transport(format!("Bad relay URL {base}")))?.extend(segments);
+        url.path_segments_mut()
+            .map_err(|_| HttpError::Transport(format!("Bad online server URL {base}")))?
+            .extend(segments);
     }
     url.query_pairs_mut().append_pair("device_id", device_id);
     Ok(url.into())
@@ -830,7 +833,7 @@ fn device_url(base: Option<&str>, segments: &[&str], device_id: &str) -> Result<
 fn link_failure(failure: Failure) -> String {
     let message = failure.message();
     if message.contains("account_needs_attention") {
-        "Your relay account needs attention. Open Account and billing on the Connections page.".into()
+        "Your Blankey Online account needs attention. Open Account and billing on the Connections page.".into()
     } else {
         message
     }

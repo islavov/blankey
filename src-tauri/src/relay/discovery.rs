@@ -33,7 +33,7 @@ impl Discovery {
     pub fn validate(self) -> Result<Self, String> {
         if self.protocol != PROTOCOL {
             return Err(format!(
-                "The relay speaks protocol {}; this Blankey needs protocol {PROTOCOL}.",
+                "The online server speaks protocol {}; this Blankey needs protocol {PROTOCOL}.",
                 self.protocol
             ));
         }
@@ -70,7 +70,7 @@ pub fn check_url(raw: &str, secure: &str, plain: &str) -> Result<Url, String> {
 
 pub fn fetch(agent: &ureq::Agent, relay_url: &str) -> Result<Discovery, String> {
     let base = normalize(relay_url)?;
-    let not_relay = |e: &dyn std::fmt::Display| format!("{base} is not a Blankey relay: {e}");
+    let not_relay = |e: &dyn std::fmt::Display| format!("{base} is not a Blankey online server: {e}");
     let text = agent
         .get(&format!("{base}{PATH}"))
         .call()
