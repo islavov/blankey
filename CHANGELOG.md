@@ -1,16 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 - Collection links (Vault → Collection links): a short link to a web form on the relay where someone else types the
   fields of a profile and attaches files, up to 50 MB each. What they send is encrypted in their browser to this
-  computer, arrives even while Blankey is locked or offline, and is reviewed on Activity before it is saved into a
-  profile. Kept files are encrypted in the vault and listed on Documents. Agents can draft links
-  (`create_collection_link`, confirmed in the app) and list them (`list_collection_links`); they never see what
-  was sent.
-- Collection links keep each submission: the Collection links page shows when each link was last filled in, what
-  waits for review (with a "To review" filter and search), and every submission, which opens again with its files
-  (open or export them) until it is discarded.
+  computer and arrives even while Blankey is locked or offline. Review it on Activity or beside the link, save it
+  into a profile, and open or export its files; it stays until you discard it. Kept files are encrypted in the vault
+  and listed on Documents. Filter links by what waits for review, and search them.
+- Agents can draft collection links (`create_collection_link`, confirmed in the app) and list them
+  (`list_collection_links`); they never see what was sent.
+- Signing in to a relay asks for its `device_resource`, for relays that keep the app's tokens apart from agents'.
+- Every `mcp-*` header is forwarded to the MCP server, so MCP 2026-07-28 clients such as ChatGPT can connect
+  through a relay.
+- The vault moves to schema 7. Blankey 0.1.0 cannot open a vault that 0.2.0 has opened.
 
 ## 0.1.0
 
