@@ -21,6 +21,12 @@ pub struct Config {
     pub auto_lock_minutes: u32,
     pub relay_enabled: bool,
     pub relay_url: String,
+    /// Anonymous usage statistics to the official relay (src/telemetry.rs); off by the user on the Connections page.
+    pub telemetry: bool,
+    /// A random id this install reports under, made on first load; unrelated to any account or device.
+    pub telemetry_id: String,
+    /// Where the statistics go instead of the official relay; for development and tests.
+    pub telemetry_url: Option<String>,
 }
 
 impl Default for Config {
@@ -31,6 +37,9 @@ impl Default for Config {
             auto_lock_minutes: 15,
             relay_enabled: false,
             relay_url: OFFICIAL_RELAY.into(),
+            telemetry: true,
+            telemetry_id: String::new(),
+            telemetry_url: None,
         }
     }
 }
@@ -50,18 +59,18 @@ impl Config {
     pub fn load_from(data_dir: PathBuf) -> std::io::Result<Self> {
         std::fs::create_dir_all(&data_dir)?;
         let path = data_dir.join("config.toml");
-        let config = match std::fs::read_to_string(&path) {
+        let mut config = match std::fs::read_to_string(&path) {
             Ok(text) => {
                 let invalid =
                     |e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: {e}", path.display()));
                 Self { data_dir, ..toml::from_str(&text).map_err(invalid)? }
             }
-            Err(_) => {
-                let config = Self { data_dir, ..Self::default() };
-                config.save()?;
-                config
-            }
+            Err(_) => Self { data_dir, ..Self::default() },
         };
+        if config.telemetry_id.is_empty() {
+            config.telemetry_id = format!("i-{}", uuid::Uuid::new_v4().simple());
+            config.save()?;
+        }
         std::fs::create_dir_all(config.templates_dir())?;
         std::fs::create_dir_all(config.previews_dir())?;
         Ok(config)
@@ -157,6 +166,24 @@ mod tests {
         config.save().unwrap();
         let loaded = Config::load_from(dir.path().join("data")).unwrap();
         assert_eq!((loaded.relay_enabled, loaded.relay_url.as_str()), (true, "http://localhost:9000"));
+    }
+
+    #[test]
+    fn telemetry_id_is_made_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::load_from(dir.path().join("data")).unwrap();
+        assert!(config.telemetry && config.telemetry_url.is_none());
+        assert_eq!(config.telemetry_id.len(), 34, "{}", config.telemetry_id);
+        assert!(config.telemetry_id.starts_with("i-"));
+        let again = Config::load_from(dir.path().join("data")).unwrap();
+        assert_eq!(again.telemetry_id, config.telemetry_id);
+
+        let mut config = again;
+        config.telemetry = false;
+        config.telemetry_url = Some("http://127.0.0.1:1/telemetry".into());
+        config.save().unwrap();
+        let loaded = Config::load_from(dir.path().join("data")).unwrap();
+        assert_eq!((loaded.telemetry, loaded.telemetry_url.as_deref()), (false, Some("http://127.0.0.1:1/telemetry")));
     }
 
     #[test]

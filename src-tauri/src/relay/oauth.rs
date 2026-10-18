@@ -185,7 +185,7 @@ pub fn refresh(agent: &ureq::Agent, metadata: &Metadata, client_id: &str, refres
     read(agent.post(&metadata.token_endpoint).send_form(&form)).and_then(|text| parse(&text))
 }
 
-fn platform() -> &'static str {
+pub(crate) fn platform() -> &'static str {
     if cfg!(target_os = "macos") {
         "macos"
     } else if cfg!(target_os = "windows") {

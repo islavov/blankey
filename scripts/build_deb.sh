@@ -20,6 +20,9 @@ fi
 . /etc/os-release
 DISTRO="${VERSION_CODENAME:-$ID}"
 [ -f src-tauri/pdfium/libpdfium.so ] || scripts/fetch-pdfium.sh
+if [ -z "${BLANKEY_TELEMETRY_KEY:-}" ]; then
+    echo "warning: BLANKEY_TELEMETRY_KEY is not set; this build sends anonymous statistics with the development key, which the official relay ignores" >&2
+fi
 scripts/licenses.sh
 scripts/stage-ui.sh
 cd src-tauri

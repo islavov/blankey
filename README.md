@@ -40,7 +40,9 @@ They need `cargo install tauri-cli --version "^2"` and `cargo install cargo-abou
 `scripts/build_linux_docker.sh debian:trixie` (or `ubuntu:26.04`, `fedora:latest`, `almalinux:10`) runs the Linux
 build in a container locally. On RHEL 10 clones the `.rpm` needs EPEL for `libayatana-appindicator-gtk3`.
 PDFium is fetched for the platform and bundled next to the app. `.docx` output is converted to PDF when
-LibreOffice is installed.
+LibreOffice is installed. `BLANKEY_TELEMETRY_KEY` at build time is the key the app sends with its anonymous usage
+statistics (`src-tauri/src/telemetry.rs`, the `BLANKEY_TELEMETRY_KEY` repository secret in the release workflow);
+without it, builds carry the development key that only a local relay accepts.
 
 To release: bump the version in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, update `CHANGELOG.md`,
 then publish a GitHub release tagged `v<version>`. `.github/workflows/release.yml` builds every platform while the

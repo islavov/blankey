@@ -203,7 +203,7 @@ pub struct Relay {
     inner: Mutex<Inner>,
 }
 
-async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+pub(crate) async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
     tokio::task::spawn_blocking(work).await.expect("relay worker panicked")
 }
 
@@ -527,7 +527,7 @@ impl Relay {
     /// (`relay/README.md`, Reports). Sent after each connect and every so often while connected.
     pub fn report(&self) {
         let Some(outgoing) = self.inner().outgoing.clone() else { return };
-        let months = kept_months();
+        let months = crate::vault::kept_months();
         let counts = match self.app.vault().usage_months(&months) {
             Ok(counts) => counts,
             Err(e) => {
@@ -836,20 +836,6 @@ impl Relay {
         self.login();
         Ok(())
     }
-}
-
-/// The months the relay keeps numbers for: the current one and the three before it, UTC, newest first.
-fn kept_months() -> Vec<String> {
-    use chrono::Datelike;
-    let now = chrono::Utc::now();
-    let (mut year, mut month) = (now.year(), now.month());
-    (0..4)
-        .map(|_| {
-            let name = format!("{year:04}-{month:02}");
-            (year, month) = if month == 1 { (year - 1, 12) } else { (year, month - 1) };
-            name
-        })
-        .collect()
 }
 
 /// `{base}/{segments}?device_id=…`: a link and its submissions belong to the device that holds the key.

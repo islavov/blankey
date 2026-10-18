@@ -58,6 +58,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - run: scripts/build_mac.sh
+        env:
+          BLANKEY_TELEMETRY_KEY: ${{ secrets.BLANKEY_TELEMETRY_KEY }}
       - uses: actions/upload-artifact@v4
         with:
           name: blankey-macos-aarch64
@@ -84,6 +86,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
       - shell: pwsh
         run: ./scripts/build_windows.ps1
+        env:
+          BLANKEY_TELEMETRY_KEY: ${{ secrets.BLANKEY_TELEMETRY_KEY }}
       - uses: actions/upload-artifact@v4
         with:
           name: blankey-windows-x86_64
@@ -117,6 +121,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - run: scripts/build_deb.sh --install-deps
+        env:
+          BLANKEY_TELEMETRY_KEY: ${{ secrets.BLANKEY_TELEMETRY_KEY }}
       - id: name
         run: echo "artifact=blankey-deb-$(echo '${{ matrix.image }}' | tr ':' '-')" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
@@ -150,6 +156,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - run: scripts/build_rpm.sh --install-deps
+        env:
+          BLANKEY_TELEMETRY_KEY: ${{ secrets.BLANKEY_TELEMETRY_KEY }}
       - id: name
         run: . /etc/os-release && echo "artifact=blankey-rpm-$ID${VERSION_ID%%.*}" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4

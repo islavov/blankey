@@ -68,6 +68,7 @@ export function seed() {
     collected: [],
     submissions: {},
     previewDelay: 0,
+    telemetry: true,
     relay: {
       url: "https://relay.blankey.io",
       official: true,
@@ -332,6 +333,10 @@ export function createBackend(db = seed()) {
     catalog: ({ language }) => (language === "en" ? {} : JSON.parse(readFileSync(new URL(`../i18n/${language}.json`, import.meta.url), "utf8"))),
     focused: () => null,
     log_error: () => null,
+    telemetry_status: () => db.telemetry,
+    telemetry_set: ({ enabled }) => {
+      db.telemetry = enabled;
+    },
     relay_status: () => db.relay,
     relay_summary: () => ({ signed_in: db.relay.signed_in, state: db.relay.state, account: db.relay.account }),
     relay_login: () => {
