@@ -78,9 +78,17 @@ Remote sessions (through a Blankey relay) cannot read local paths:
 
 Collection links (needs a relay sign-in): a short link to a web form that another person fills in. Their
 answers and files are encrypted in their browser to this computer and land in a profile; you never see them.
-1. create_collection_link with the fields to ask for (and files), and the profile to save into.
+1. create_collection_link with the fields to ask for (and files), and the profile to save into. Use the keys
+   your templates bind to, so the answers fill them directly.
 2. The user confirms it in Blankey; wait_request then returns the url to send. The url is not secret.
-3. list_collection_links shows each link's url, status and how many submissions came in.
+3. list_collection_links shows each link's status, how many submissions wait for the user (pending) and the
+   profiles they were saved into (saved_into), with a next step.
+4. A pending submission waits for the user to review it in Blankey and save it into a profile; ask them to.
+5. Once saved, the values are in that profile: describe_profile to see which fields are filled, then
+   check_bindings and request_fill with that profile to produce the document. Kept files are on the user's
+   Documents page in Blankey.
+Never ask the user to paste or copy submitted values (or any vault values) into the chat: this is what Blankey
+keeps away from you. Work from the profile id instead.
 "#;
 
 pub const TOOL_TIMEOUT_MAX: u64 = 1800;
@@ -123,6 +131,23 @@ fn source_path(app: &Blankey, remote: Option<&Remote>, path: &str) -> Result<Pat
 
 fn read_file(app: &Blankey, remote: Option<&Remote>, path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(source_path(app, remote, path)?).map_err(|e| format!("{path}: {e}"))
+}
+
+/// What an agent does next with a collection link; it never gets the submitted values.
+fn next_step(received: i64, pending: usize, saved_into: &[i64]) -> String {
+    let saved = match saved_into {
+        [] => String::new(),
+        [id] => format!("The values are saved in profile {id}"),
+        ids => format!("The values are saved in profiles {ids:?}"),
+    };
+    let use_them = "use describe_profile and request_fill with it. Do not ask the user to paste the values.";
+    match (pending, saved.is_empty()) {
+        (0, true) if received == 0 => "Nothing received yet.".into(),
+        (0, true) => "Received, but not saved into a profile (discarded or still in Blankey).".into(),
+        (0, false) => format!("{saved}: {use_them}"),
+        (n, true) => format!("{n} waiting: ask the user to review it in Blankey and save it into a profile."),
+        (n, false) => format!("{n} waiting for the user to review in Blankey. {saved}: {use_them}"),
+    }
 }
 
 /// Remote agents only see their own requests; nobody sees submissions to collection links.
@@ -964,7 +989,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Ask the user to create a collection link: a short URL to a web form where someone else types the\nfields (and attaches files) for a profile. fields: [{key, label, type, required, hint}] with type one of\ntext, number, date, bool, egn, iban, email, phone. Give profile_id to fill an existing profile or new_profile_name.\nThe user confirms it in the app; wait_request then returns {link_id, url}. The answers never reach you."
+        description = "Ask the user to create a collection link: a short URL to a web form where someone else types the\nfields (and attaches files) for a profile. fields: [{key, label, type, required, hint}] with type one of\ntext, number, date, bool, egn, iban, email, phone. Give profile_id to fill an existing profile or new_profile_name.\nThe user confirms it in the app; wait_request then returns {link_id, url}. The answers never reach you: the user\nsaves them into the profile, and you fill documents from that profile (request_fill). Never ask for the values in chat."
     )]
     async fn create_collection_link(
         &self,
@@ -1022,6 +1047,12 @@ impl Tools {
                         .flatten()
                         .map(|f| json!({"key": f["key"], "label": f["label"]}))
                         .collect();
+                    let mine: Vec<_> = submissions.iter().filter(|r| r.link_id == link.link_id).collect();
+                    let pending = mine.iter().filter(|r| r.status == "pending").count();
+                    let mut saved_into: Vec<i64> =
+                        mine.iter().filter(|r| r.status == "saved").filter_map(|r| r.profile_id).collect();
+                    saved_into.sort_unstable();
+                    saved_into.dedup();
                     json!({
                         "id": link.link_id,
                         "title": link.title,
@@ -1030,13 +1061,12 @@ impl Tools {
                         "fields": fields,
                         "max_files": link.spec["files"]["max_files"],
                         "received": link.received,
-                        "pending": submissions
-                            .iter()
-                            .filter(|r| r.link_id == link.link_id && r.status == "pending")
-                            .count(),
+                        "pending": pending,
+                        "saved_into": saved_into,
                         "max_submissions": link.max_submissions,
                         "profile_id": link.profile_id,
                         "expires_at": link.expires_at,
+                        "next": next_step(link.received, pending, &saved_into),
                     })
                 })
                 .collect();
@@ -1298,6 +1328,23 @@ pub mod tests {
         assert_eq!(listed[0]["status"], "open");
         assert_eq!(listed[0]["fields"][0], json!({"key": "name", "label": "Full name"}));
         assert!(listed[0]["url"].as_str().unwrap().contains("/s/Ab3dE9z#"));
+        assert_eq!(listed[0]["next"], "Nothing received yet.");
+
+        use crate::links::tests::{plaintext, stored_link, submit};
+        let public = stored_link(&app, "Zz9yX8w");
+        submit(&app, "Zz9yX8w", &public, &plaintext(json!({"name": "Jane"}), &[]), "sub-1");
+        let link = |listed: &Value| listed.as_array().unwrap().iter().find(|l| l["id"] == "Zz9yX8w").cloned().unwrap();
+        let listed: Value = serde_json::from_str(&out(t.list_collection_links().await).0).unwrap();
+        assert_eq!((link(&listed)["pending"].as_u64(), link(&listed)["saved_into"].clone()), (Some(1), json!([])));
+        assert!(link(&listed)["next"].as_str().unwrap().contains("ask the user to review it in Blankey"));
+
+        let values = app.open_submission("sub-1").unwrap().values;
+        app.resolve_submission("sub-1", crate::core::Target::Existing(pid), &values, &[]).unwrap();
+        let listed: Value = serde_json::from_str(&out(t.list_collection_links().await).0).unwrap();
+        assert_eq!(link(&listed)["saved_into"], json!([pid]));
+        let next = link(&listed)["next"].as_str().unwrap().to_string();
+        assert!(next.contains(&format!("profile {pid}")) && next.contains("request_fill"), "{next}");
+        assert!(!listed.to_string().contains("Jane"));
     }
 
     #[tokio::test]
