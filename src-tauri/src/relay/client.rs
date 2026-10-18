@@ -23,6 +23,8 @@ use crate::mcp::Remote;
 use crate::vault::{now, RelayGrant};
 
 const PING_INTERVAL: Duration = Duration::from_secs(30);
+/// how often the relay hears what the app did on this computer
+const REPORT_INTERVAL: Duration = Duration::from_secs(15 * 60);
 const MIN_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// the relay waits at least 60 s for an mcp_result
@@ -123,11 +125,13 @@ async fn serve(relay: &Arc<Relay>, socket: Socket) {
         inner.outgoing = Some(tx.clone());
         inner.send_primary_claim();
     }
-    // submissions that arrived while the app was offline, and the account's current language
+    // submissions that arrived while the app was offline, the account's current language, and this computer's numbers
     drain(relay);
     refresh_profile(relay);
+    relay.report();
     let start = tokio::time::Instant::now() + PING_INTERVAL;
     let mut ping = tokio::time::interval_at(start, PING_INTERVAL);
+    let mut report = tokio::time::interval_at(tokio::time::Instant::now() + REPORT_INTERVAL, REPORT_INTERVAL);
     let mut awaiting_pong = false;
     loop {
         tokio::select! {
@@ -149,6 +153,7 @@ async fn serve(relay: &Arc<Relay>, socket: Socket) {
                     Some("grants") => grants(relay, &frame),
                     Some("inbox") => drain(relay),
                     Some("profile") => refresh_profile(relay),
+                    Some("report") if frame["ok"] == false => eprintln!("relay: the usage report was refused: {frame}"),
                     _ => {}
                 }
             }
@@ -157,6 +162,7 @@ async fn serve(relay: &Arc<Relay>, socket: Socket) {
                     break;
                 }
             }
+            _ = report.tick() => relay.report(),
             _ = ping.tick() => {
                 if awaiting_pong {
                     break;

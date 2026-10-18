@@ -431,16 +431,78 @@ async fn switching_relay_clears_grants() {
     wait_for(&relay, State::SigningIn).await;
 }
 
-/// The next frame from the device that is not a ping (pings are answered).
+/// The next frame from the device that is not a ping or a usage report (both are answered).
 async fn next_frame(socket: &mut WebSocketStream<TcpStream>) -> Value {
     loop {
-        let message = tokio::time::timeout(WAIT, socket.next()).await.unwrap().unwrap().unwrap();
-        let frame: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
-        if frame["type"] != "ping" {
-            return frame;
+        let frame = next_raw_frame(socket).await;
+        match frame["type"].as_str() {
+            Some("ping") => socket.send(Message::text(json!({"v": 1, "type": "pong"}).to_string())).await.unwrap(),
+            Some("report") => {
+                let ok = json!({"v": 1, "type": "report", "id": frame["id"], "ok": true});
+                socket.send(Message::text(ok.to_string())).await.unwrap();
+            }
+            _ => return frame,
         }
-        socket.send(Message::text(json!({"v": 1, "type": "pong"}).to_string())).await.unwrap();
     }
+}
+
+async fn next_raw_frame(socket: &mut WebSocketStream<TcpStream>) -> Value {
+    let message = tokio::time::timeout(WAIT, socket.next()).await.unwrap().unwrap().unwrap();
+    serde_json::from_str(message.to_text().unwrap()).unwrap()
+}
+
+/// The next usage report from the device, pings answered on the way.
+async fn next_report(socket: &mut WebSocketStream<TcpStream>) -> Value {
+    loop {
+        let frame = next_raw_frame(socket).await;
+        match frame["type"].as_str() {
+            Some("ping") => socket.send(Message::text(json!({"v": 1, "type": "pong"}).to_string())).await.unwrap(),
+            Some("report") => return frame,
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reports_local_usage_by_month() {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = Stub::start(1).await;
+    let (relay, app) = signed_in_app(dir.path(), &stub).await;
+    let mut socket = stub.accept().await;
+    wait_for(&relay, State::Connected).await;
+
+    // right after connecting: every kept month, every kind, nothing done yet
+    let first = next_report(&mut socket).await;
+    assert_eq!(first["v"], 1);
+    assert_eq!(first["app"], env!("CARGO_PKG_VERSION"));
+    let months = first["months"].as_object().unwrap();
+    assert_eq!(months.len(), 4);
+    let this_month = now()[..7].to_string();
+    assert_eq!(
+        months[&this_month],
+        json!({"doc_generated": 0, "template_saved": 0, "fill_set_saved": 0, "profile_created": 0}),
+        "{first}"
+    );
+    let refused = json!({"v": 1, "type": "report", "id": first["id"], "ok": false, "error": "invalid"});
+    socket.send(Message::text(refused.to_string())).await.unwrap();
+
+    app.audit("user", "generate", "template=t document=1");
+    app.audit("user", "generate", "template=t document=2");
+    app.audit("user", "create_profile", "7");
+    app.audit("user", "open_document", "1");
+    relay.report();
+    let second = next_report(&mut socket).await;
+    assert_eq!(
+        second["months"][&this_month],
+        json!({"doc_generated": 2, "template_saved": 0, "fill_set_saved": 0, "profile_created": 1}),
+        "{second}"
+    );
+    assert_ne!(first["id"], second["id"]);
+
+    // a refused report does not disturb the connection
+    let initialize = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"});
+    let reply = ask(&mut socket, mcp_frame("r-1", "g-unknown", initialize)).await;
+    assert_eq!(reply["type"], "mcp_result");
 }
 
 #[tokio::test(flavor = "multi_thread")]
