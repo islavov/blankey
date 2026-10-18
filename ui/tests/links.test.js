@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { before, test } from "node:test";
+import { submission } from "./backend.js";
 import { $, $$, action, byText, check, choose, click, goTo, settle, startApp, submit, text, type } from "./setup.js";
 
 let backend;
@@ -11,16 +12,70 @@ before(async () => {
   });
 });
 
-const rows = () => $$(".grid tbody tr").map((tr) => tr.textContent.replace(/\s+/g, " ").trim());
+const rows = () => $$(".page > table.grid > tbody > tr, .links-main > table.grid > tbody > tr").map((tr) => tr.textContent.replace(/\s+/g, " ").trim());
 
 test("collection links: listed with their counts; Copy copies the full link", async () => {
   await goTo("Collection links");
   assert.equal(text(".toolbar h2"), "Collection links");
   const [row] = rows();
-  assert.ok(row.includes("Tenant details") && row.includes("relay.blankey.io/s/XchaBj2") && row.includes("1/3"), row);
+  assert.ok(row.includes("Tenant details") && row.includes("relay.blankey.io/s/XchaBj2") && row.includes("2/3"), row);
+  assert.ok(row.includes("2026-10-17 12:00") && row.includes("1 to review"), row);
   assert.ok(!row.includes("k4Fp9QzR2mWx7aLc"), "the fragment is not shown");
   await click(byText(".grid button", "Copy"));
   assert.deepEqual(backend.called("copy_text").at(-1), { text: "https://relay.blankey.io/s/XchaBj2#k4Fp9QzR2mWx7aLc" });
+});
+
+test("collection links: filters and search narrow the list", async () => {
+  const chip = (label) => $$(".filters .chip").find((b) => b.textContent.trim().startsWith(label));
+  assert.equal(chip("To review").textContent.replace(/\s+/g, " ").trim(), "To review 1");
+  backend.db.links.push({ ...backend.db.links[0], link_id: "Zz9yX8w", url: "https://relay.blankey.io/s/Zz9yX8w#x", title: "Old intake", state: "expired", pending: 0, last_received: null, fields: ["Phone"] });
+  await goTo("Activity");
+  await goTo("Collection links");
+
+  assert.equal(rows().length, 2);
+  await click(chip("To review"));
+  assert.deepEqual(rows().map((r) => r.split(" ")[0]), ["Tenant"]);
+  await click(chip("Closed"));
+  assert.deepEqual(rows().map((r) => r.split(" ")[0]), ["Old"]);
+  await click(chip("All"));
+  await type($("#search"), "phone");
+  assert.deepEqual(rows().map((r) => r.split(" ")[0]), ["Old"]);
+  await type($("#search"), "nothing like this");
+  assert.equal(text(".empty"), "No links match.");
+  await type($("#search"), "");
+  backend.db.links.pop();
+  await goTo("Activity");
+  await goTo("Collection links");
+});
+
+test("collection links: a link's submissions open again, the waiting one to review", async () => {
+  backend.db.submissions["s-1"] = submission(11, "s-1", "saved");
+  backend.db.submissions["s-2"] = submission(12, "s-2");
+  await click($$(".grid tbody tr").find((tr) => tr.textContent.includes("Tenant details")));
+  assert.equal(text(".side h3"), "Tenant details");
+  assert.ok(!$$(".links-main th").some((th) => th.textContent === "Fields"), "the table narrows beside the panel");
+  const subRows = () => $$(".side .sub-item").map((item) => item.textContent.replace(/\s+/g, " ").trim());
+  assert.equal(subRows().length, 2);
+  assert.ok(subRows()[0].includes("To review") && subRows()[0].includes("Review"), subRows()[0]);
+  assert.ok(subRows()[1].includes("Saved") && subRows()[1].includes("into John"), subRows()[1]);
+
+  await click(byText(".submissions button", "Open"));
+  assert.deepEqual(backend.called("open_submission").at(-1), { sid: "s-1" });
+  assert.equal(text(".sheet h2"), "Submission for Tenant details");
+  assert.ok(text(".sheet .reason").startsWith("Received 2026-10-17 12:00 · saved 2026-10-17 12:05"));
+  assert.ok($$(".file-row input.keep").every((input) => !input.checked), "kept files are not ticked again");
+  assert.ok(byText(".sheet-foot button", "Save again"));
+  await click(byText(".sheet-foot button", "Close"));
+  assert.equal($(".sheet"), null);
+
+  await click(byText(".submissions button", "Review"));
+  assert.deepEqual(backend.called("open_submission").at(-1), { sid: "s-2" });
+  assert.ok($$(".file-row input.keep").every((input) => input.checked));
+  await click(byText(".sheet-foot button", "Later"));
+
+  await click($(".side .close"));
+  assert.equal($(".side"), null);
+  assert.ok($$(".links-main th").some((th) => th.textContent === "Fields"));
 });
 
 test("new link: ticked profile fields and custom fields make the draft", async () => {
@@ -120,7 +175,7 @@ test("new link into a new profile needs its name", async () => {
 });
 
 test("revoke asks first", async () => {
-  await click($$(".grid tbody tr").find((tr) => tr.textContent.includes("XchaBj2")));
+  await click($$(".grid tbody tr").find((tr) => tr.textContent.includes("relay.blankey.io/s/XchaBj2")));
   await action("Revoke");
   assert.equal(text(".modal h3"), 'Revoke "Tenant details"?');
   await submit($(".modal form"));

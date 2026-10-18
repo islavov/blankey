@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use crate::core::{Blankey, ProfileSave, Target};
 use crate::crypto;
 use crate::fieldtypes;
-use crate::vault::Link;
+use crate::vault::{Link, SubmissionInfo};
 
 /// Same value as MAX_FILE_BYTES in the relay and its collect page.
 pub const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
@@ -258,7 +258,8 @@ pub struct SubmittedFile {
 /// What the submission sheet shows.
 #[derive(Debug, Serialize)]
 pub struct Submission {
-    pub request_id: i64,
+    #[serde(flatten)]
+    pub info: SubmissionInfo,
     pub link: Link,
     pub fields: Vec<SpecField>,
     pub values: IndexMap<String, String>,
@@ -335,60 +336,76 @@ impl Blankey {
         result
     }
 
-    /// The request the user answers for a downloaded submission; works while the vault is locked.
-    pub fn accept_submission(&self, link_id: &str, sid: &str) -> Result<i64, String> {
-        self.inbox_path(sid)?;
-        let title = {
-            let vault = self.vault();
-            let _ = vault.count_received(link_id);
-            vault.get_link(link_id).map(|l| l.title).unwrap_or_else(|_| "a collection link".into())
+    /// Records a downloaded submission and creates the request the user answers; works while the vault is locked.
+    /// A submission for a revoked or unknown link is dropped: None.
+    pub fn accept_submission(&self, link_id: &str, sid: &str) -> Result<Option<i64>, String> {
+        let path = self.inbox_path(sid)?;
+        let link = self.vault().get_link(link_id).ok();
+        let Some(link) = link.filter(|l| l.revoked_at.is_none()) else {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(self.marker_path(sid)?);
+            self.audit("relay", "submission_revoked", &format!("link={link_id} sid={sid}"));
+            return Ok(None);
         };
-        let payload = json!({"link_id": link_id, "sid": sid, "reason": format!("Submission for {title}")});
+        let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len() as i64;
+        let payload = json!({"link_id": link_id, "sid": sid, "reason": format!("Submission for {}", link.title)});
         let id = self.create_request(LINK_SUBMISSION, payload, None)?;
-        let _ = std::fs::remove_file(self.marker_path(sid)?);
-        Ok(id)
-    }
-
-    fn submission_request(&self, request_id: i64) -> Result<(String, String), String> {
-        let request = self.vault().get_request(request_id).map_err(|e| e.to_string())?;
-        if request.kind != LINK_SUBMISSION || request.status != "pending" {
-            return Err(format!("Request {request_id} is not a waiting submission"));
-        }
-        let text = |name: &str| request.payload.get(name).and_then(Value::as_str).unwrap_or_default().to_string();
-        Ok((text("link_id"), text("sid")))
-    }
-
-    /// Unseals the blob of a submission request. A submission that can no longer be opened (revoked link, damaged
-    /// blob) is dropped and audited.
-    fn unseal_submission(&self, request_id: i64) -> Result<(Link, Vec<u8>), String> {
-        let (link_id, sid) = self.submission_request(request_id)?;
-        let (link, key) = {
+        {
             let vault = self.vault();
-            (vault.get_link(&link_id).ok(), vault.link_key(&link_id).map_err(|e| e.to_string())?)
+            vault.add_submission(sid, link_id, id, size).map_err(|e| e.to_string())?;
+            let _ = vault.count_received(link_id);
+        }
+        let _ = std::fs::remove_file(self.marker_path(sid)?);
+        Ok(Some(id))
+    }
+
+    /// The sid of a submission request.
+    pub fn submission_of(&self, request_id: i64) -> Result<String, String> {
+        let request = self.vault().get_request(request_id).map_err(|e| e.to_string())?;
+        if request.kind != LINK_SUBMISSION {
+            return Err(format!("Request {request_id} is not a submission"));
+        }
+        Ok(request.payload.get("sid").and_then(Value::as_str).unwrap_or_default().to_string())
+    }
+
+    /// Resolves the submission's request when it still waits.
+    fn close_request(&self, info: &SubmissionInfo, status: &str, result: Value) -> Result<(), String> {
+        let Some(id) = info.request_id else { return Ok(()) };
+        let mut vault = self.vault();
+        if vault.get_request(id).is_ok_and(|r| r.status == "pending") {
+            vault.resolve_request(id, status, result).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Unseals a received submission; a blob that does not open is deleted and the submission marked damaged.
+    fn unseal_submission(&self, sid: &str) -> Result<(SubmissionInfo, Link, Vec<u8>), String> {
+        let (info, link, key) = {
+            let vault = self.vault();
+            let info = vault.get_submission(sid).map_err(|e| e.to_string())?;
+            let link = vault.get_link(&info.link_id).map_err(|e| e.to_string())?;
+            let key = vault.link_key(&link.link_id).map_err(|e| e.to_string())?;
+            (info, link, key)
         };
-        let (Some(link), Some(key)) = (link, key) else {
-            self.drop_submission(request_id, "revoked")?;
-            return Err("This submission was for a revoked link, so it was dropped.".into());
-        };
-        let sealed = std::fs::read(self.inbox_path(&sid)?).map_err(|e| e.to_string())?;
-        match crypto::unseal(key.as_ref(), &sealed, format!("link:{link_id}").as_bytes()) {
-            Ok(plain) => Ok((link, plain)),
-            Err(_) => {
-                self.drop_submission(request_id, "damaged")?;
+        if info.status == "discarded" || info.status == "damaged" {
+            return Err(format!("This submission was {}.", info.status));
+        }
+        let key = key.ok_or("The key of this link is gone, so its submissions no longer open.")?;
+        let sealed = std::fs::read(self.inbox_path(sid)?).map_err(|e| e.to_string())?;
+        let plain = crypto::unseal(key.as_ref(), &sealed, format!("link:{}", link.link_id).as_bytes()).ok();
+        match plain.filter(|p| parse_plaintext(p).is_ok()) {
+            Some(plain) => Ok((info, link, plain)),
+            None => {
+                self.forget_submission(&info, "damaged")?;
                 Err("This submission could not be opened, so it was dropped.".into())
             }
         }
     }
 
-    pub fn open_submission(&self, request_id: i64) -> Result<Submission, String> {
-        let (link, plain) = self.unseal_submission(request_id)?;
-        let (header, contents) = match parse_plaintext(&plain) {
-            Ok(parsed) => parsed,
-            Err(e) => {
-                self.drop_submission(request_id, "damaged")?;
-                return Err(format!("{e}, so it was dropped."));
-            }
-        };
+    /// Any number of times: a saved submission stays until it is discarded.
+    pub fn open_submission(&self, sid: &str) -> Result<Submission, String> {
+        let (info, link, plain) = self.unseal_submission(sid)?;
+        let (header, contents) = parse_plaintext(&plain)?;
         let fields: Vec<SpecField> = serde_json::from_value(link.spec["fields"].clone()).unwrap_or_default();
         let values = fields
             .iter()
@@ -414,31 +431,40 @@ impl Blankey {
                 thumbnail: thumbnail(&file.file_type, bytes),
             })
             .collect();
-        self.audit("user", "open_submission", &format!("request={request_id} link={}", link.link_id));
-        Ok(Submission { request_id, link, fields, values, files, submitted_at: header.submitted_at })
+        self.audit("user", "open_submission", &format!("sid={sid} link={}", link.link_id));
+        Ok(Submission { info, link, fields, values, files, submitted_at: header.submitted_at })
+    }
+
+    /// (name, bytes) of one submitted file, to open or export it without keeping it in the vault.
+    pub fn submission_file(&self, sid: &str, index: usize) -> Result<(String, Vec<u8>), String> {
+        let (_, _, plain) = self.unseal_submission(sid)?;
+        let (header, contents) = parse_plaintext(&plain)?;
+        let file = header.files.get(index).ok_or_else(|| format!("No file {index} in this submission"))?;
+        self.audit("user", "open_submission_file", &format!("sid={sid} file={index}"));
+        Ok((file.name.clone(), contents[index].to_vec()))
     }
 
     /// Saves the (edited) values into the target profile and keeps the ticked files, re-encrypted under the vault.
-    /// Returns the problems without saving anything when there are any.
+    /// Returns the problems without saving anything when there are any. Can be done again later.
     pub fn resolve_submission(
         &self,
-        request_id: i64,
+        sid: &str,
         target: Target,
         values: &IndexMap<String, String>,
         keep: &[usize],
     ) -> Result<Vec<String>, String> {
-        let (link_id, _) = self.submission_request(request_id)?;
-        let link = self.vault().get_link(&link_id).map_err(|e| e.to_string())?;
+        let (info, link) = {
+            let vault = self.vault();
+            let info = vault.get_submission(sid).map_err(|e| e.to_string())?;
+            let link = vault.get_link(&info.link_id).map_err(|e| e.to_string())?;
+            (info, link)
+        };
         let specs: Vec<Value> = link.spec["fields"].as_array().cloned().unwrap_or_default();
-        if self.vault().link_key(&link_id).map_err(|e| e.to_string())?.is_none() {
-            self.drop_submission(request_id, "revoked")?;
-            return Err("This submission was for a revoked link, so it was dropped.".into());
-        }
         let (profile_id, fields) = match self.save_profile_values(&specs, values, target)? {
             ProfileSave::Problems(problems) => return Ok(problems),
             ProfileSave::Saved { profile_id, fields } => (profile_id, fields),
         };
-        let (_, plain) = self.unseal_submission(request_id)?;
+        let (_, _, plain) = self.unseal_submission(sid)?;
         let (header, contents) = parse_plaintext(&plain)?;
         let mut kept = Vec::new();
         for (index, (file, bytes)) in header.files.iter().zip(&contents).enumerate() {
@@ -450,26 +476,28 @@ impl Blankey {
                 kept.push(json!({"file_id": id, "size": file.size}));
             }
         }
-        let (_, sid) = self.submission_request(request_id)?;
-        let _ = std::fs::remove_file(self.inbox_path(&sid)?);
+        self.vault().set_submission_status(sid, "saved", Some(profile_id)).map_err(|e| e.to_string())?;
         let result = json!({"outcome": "saved", "profile_id": profile_id, "fields": fields, "files": kept});
-        let mut vault = self.vault();
-        vault.resolve_request(request_id, "done", result).map_err(|e| e.to_string())?;
-        let _ = vault.audit(
+        self.close_request(&info, "done", result)?;
+        self.audit(
             "user",
             "link_submission",
-            &format!("request={request_id} link={} profile={profile_id} files={}", link.link_id, kept.len()),
+            &format!("sid={sid} link={} profile={profile_id} files={}", link.link_id, kept.len()),
         );
         Ok(Vec::new())
     }
 
-    /// Deletes the sealed blob and closes the request; `why` goes into the result and the audit log.
-    pub fn drop_submission(&self, request_id: i64, why: &str) -> Result<(), String> {
-        let (link_id, sid) = self.submission_request(request_id)?;
-        let _ = std::fs::remove_file(self.inbox_path(&sid)?);
-        let mut vault = self.vault();
-        vault.resolve_request(request_id, "cancelled", json!({"outcome": why})).map_err(|e| e.to_string())?;
-        let _ = vault.audit("user", &format!("submission_{why}"), &format!("request={request_id} link={link_id}"));
+    /// Deletes the sealed blob for good; the submission stays listed as discarded.
+    pub fn discard_submission(&self, sid: &str) -> Result<(), String> {
+        let info = self.vault().get_submission(sid).map_err(|e| e.to_string())?;
+        self.forget_submission(&info, "discarded")
+    }
+
+    fn forget_submission(&self, info: &SubmissionInfo, status: &str) -> Result<(), String> {
+        let _ = std::fs::remove_file(self.inbox_path(&info.sid)?);
+        self.vault().set_submission_status(&info.sid, status, None).map_err(|e| e.to_string())?;
+        self.close_request(info, "cancelled", json!({"outcome": status}))?;
+        self.audit("user", &format!("submission_{status}"), &format!("sid={} link={}", info.sid, info.link_id));
         Ok(())
     }
 
@@ -535,12 +563,16 @@ pub(crate) mod tests {
         public
     }
 
-    /// Puts a sealed submission in the inbox as a drain would, and returns its request id.
-    pub fn submit(app: &Blankey, link_id: &str, public: &[u8], plain: &[u8], sid: &str) -> i64 {
+    /// Puts a sealed submission in the inbox as a drain would; its request id, None when it was dropped.
+    pub fn try_submit(app: &Blankey, link_id: &str, public: &[u8], plain: &[u8], sid: &str) -> Option<i64> {
         let sealed = crypto::seal(public, plain, format!("link:{link_id}").as_bytes()).unwrap();
         std::fs::create_dir_all(app.inbox_dir()).unwrap();
         std::fs::write(app.inbox_dir().join(format!("{sid}.bin")), sealed).unwrap();
         app.accept_submission(link_id, sid).unwrap()
+    }
+
+    pub fn submit(app: &Blankey, link_id: &str, public: &[u8], plain: &[u8], sid: &str) -> i64 {
+        try_submit(app, link_id, public, plain, sid).expect("submission accepted")
     }
 
     #[test]
@@ -596,33 +628,42 @@ pub(crate) mod tests {
             &[("scan.bin", "application/octet-stream", &big), ("photo.png", "image/png", &photo)],
         );
         let id = submit(&app, "Ab3dE9z", &public, &plain, "sub-1");
+        let info = app.vault().get_submission("sub-1").unwrap();
+        assert_eq!((info.status.as_str(), info.request_id), ("pending", Some(id)));
         app.vault().lock();
         let request = app.vault().get_request(id).unwrap();
         assert!(request.hidden && request.kind == LINK_SUBMISSION);
-        assert!(app.open_submission(id).is_err());
+        assert!(app.open_submission("sub-1").is_err());
         app.vault().unlock(crate::mcp::tools::tests::PASSWORD).unwrap();
+        assert_eq!(app.submission_of(id).unwrap(), "sub-1");
 
-        let opened = app.open_submission(id).unwrap();
+        let opened = app.open_submission("sub-1").unwrap();
         assert_eq!(opened.values.keys().collect::<Vec<_>>(), ["name", "email"]);
         assert_eq!(opened.files.len(), 2);
         assert!(opened.files[0].thumbnail.is_none());
         assert!(opened.files[1].thumbnail.as_deref().unwrap().starts_with("data:image/png;base64,"));
+        assert_eq!(app.submission_file("sub-1", 1).unwrap(), ("photo.png".to_string(), photo.clone()));
 
         let mut values = opened.values.clone();
         values["email"] = "not an email".into();
-        let problems = app.resolve_submission(id, Target::New { name: "Jane", kind: "person" }, &values, &[0]).unwrap();
+        let jane = || Target::New { name: "Jane", kind: "person" };
+        let problems = app.resolve_submission("sub-1", jane(), &values, &[0]).unwrap();
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(app.vault().list_profiles().unwrap().is_empty());
 
         values["email"] = "jane@example.com".into();
-        let problems =
-            app.resolve_submission(id, Target::New { name: "Jane", kind: "person" }, &values, &[0, 1]).unwrap();
-        assert!(problems.is_empty());
+        assert!(app.resolve_submission("sub-1", jane(), &values, &[0, 1]).unwrap().is_empty());
         let profile = app.vault().list_profiles().unwrap().pop().unwrap();
         assert_eq!(app.vault().get_values(profile.id).unwrap()["name"].1, "Jane Roe");
         assert_eq!(app.vault().get_request(id).unwrap().status, "done");
-        assert_eq!(std::fs::read_dir(app.inbox_dir()).unwrap().count(), 0);
+        let info = app.vault().get_submission("sub-1").unwrap();
+        assert_eq!((info.status.as_str(), info.profile_id), ("saved", Some(profile.id)));
         assert_eq!(app.vault().get_link("Ab3dE9z").unwrap().received, 1);
+
+        // still there, sealed: it opens again and can be saved again
+        assert_eq!(std::fs::read_dir(app.inbox_dir()).unwrap().count(), 1);
+        assert_eq!(app.open_submission("sub-1").unwrap().values["name"], "Jane Roe");
+        assert!(app.resolve_submission("sub-1", Target::Existing(profile.id), &values, &[]).unwrap().is_empty());
 
         let files = app.vault().list_collected_files().unwrap();
         assert_eq!(files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["photo.png", "scan.bin"]);
@@ -639,24 +680,28 @@ pub(crate) mod tests {
 
         app.vault().delete_collected_file(files[1].id).unwrap();
         assert_eq!(std::fs::read_dir(dir.path().join("data/files")).unwrap().count(), 1);
+
+        app.discard_submission("sub-1").unwrap();
+        assert_eq!(std::fs::read_dir(app.inbox_dir()).unwrap().count(), 0);
+        assert_eq!(app.vault().get_submission("sub-1").unwrap().status, "discarded");
+        assert!(app.open_submission("sub-1").unwrap_err().contains("discarded"));
     }
 
     #[test]
-    fn submission_for_a_revoked_link_is_dropped() {
+    fn submissions_after_a_revoke_are_dropped_and_earlier_ones_still_open() {
         let dir = tempfile::tempdir().unwrap();
         let app = app(dir.path());
         let public = stored_link(&app, "XchaBj2");
         let id = submit(&app, "XchaBj2", &public, &plaintext(json!({"name": "Jane"}), &[]), "sub-2");
         app.vault().revoke_link("XchaBj2").unwrap();
-        assert!(app.vault().link_key("XchaBj2").unwrap().is_none());
 
-        assert!(app.open_submission(id).unwrap_err().contains("revoked"));
-        let request = app.vault().get_request(id).unwrap();
-        assert_eq!(
-            (request.status.as_str(), request.result.unwrap()["outcome"].as_str()),
-            ("cancelled", Some("revoked"))
-        );
-        assert_eq!(std::fs::read_dir(app.inbox_dir()).unwrap().count(), 0);
+        assert_eq!(app.open_submission("sub-2").unwrap().values["name"], "Jane");
+        assert_eq!(app.vault().get_request(id).unwrap().status, "pending");
+
+        let late = try_submit(&app, "XchaBj2", &public, &plaintext(json!({"name": "Late"}), &[]), "sub-late");
+        assert_eq!(late, None);
+        assert!(!app.inbox_dir().join("sub-late.bin").exists());
+        assert!(app.vault().get_submission("sub-late").is_err());
         let audited: i64 = app
             .vault()
             .conn()
@@ -672,7 +717,8 @@ pub(crate) mod tests {
         stored_link(&app, "XchaBj2");
         let (_, other) = crypto::new_seal_keypair();
         let id = submit(&app, "XchaBj2", &other, &plaintext(json!({}), &[]), "sub-3");
-        assert!(app.open_submission(id).unwrap_err().contains("could not be opened"));
+        assert!(app.open_submission("sub-3").unwrap_err().contains("could not be opened"));
         assert_eq!(app.vault().get_request(id).unwrap().status, "cancelled");
+        assert_eq!(app.vault().get_submission("sub-3").unwrap().status, "damaged");
     }
 }

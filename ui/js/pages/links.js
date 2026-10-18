@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "../../vendor/preact-htm.js";
 import { call, invoke } from "../api.js";
-import { html, matches, plural, reload, state, useLoad, useRemembered, useStore, when } from "../lib.js";
+import { html, matches, megabytes, plural, reload, state, useLoad, useRemembered, useStore, when } from "../lib.js";
+import { openSubmission } from "../submission.js";
 import { confirmDialog, toast } from "../ui/feedback.js";
 import { openSheet, SheetHead } from "../ui/sheet.js";
 import { Empty, Page } from "../ui/page.js";
@@ -14,11 +15,45 @@ const DAYS = [1, 7, 30];
 const copyLink = (url) => call("copy_text", { text: url }).then(() => toast("Link copied."));
 const shortUrl = (url) => url.replace(/^https?:\/\//, "").replace(/#.*$/, "");
 
+const FILTERS = [
+  ["all", "All", () => true],
+  ["pending", "To review", (l) => l.pending > 0],
+  ["open", "Open", (l) => l.state === "open"],
+  ["closed", "Closed", (l) => l.state !== "open"],
+];
+
+const SUBMISSION_STATES = { pending: "To review", saved: "Saved", discarded: "Discarded", damaged: "Damaged" };
+
+/** With the side panel open, the table drops the wide columns. */
+function columns(narrow) {
+  return [
+    { title: "Title", cell: (l) => l.title },
+    {
+      title: "Link",
+      cell: (l) => html`<span class="mono">${shortUrl(l.url)}</span>
+        <button class="link" style="margin-left:8px" onClick=${() => copyLink(l.url)}>Copy</button>`,
+      cls: "nowrap",
+    },
+    !narrow && { title: "Fields", cell: (l) => html`<span class="muted">${l.fields.join(", ") || "Files only"}</span>` },
+    { title: "Profile", cell: (l) => l.profile_name || "", cls: "nowrap" },
+    { title: "Received", cell: (l) => `${l.submissions}/${l.max_submissions}`, cls: "nowrap" },
+    { title: "Last received", cell: (l) => html`<span class="muted">${when(l.last_received) || "-"}</span>`, cls: "nowrap" },
+    !narrow && { title: "Expires", cell: (l) => html`<span class="muted">${when(l.expires_at)}</span>`, cls: "nowrap" },
+    {
+      title: "Status",
+      cell: (l) => html`<span class=${`status ${l.state}`}>${STATES[l.state] || l.state}</span>
+        ${l.pending > 0 && html` <span class="status pending">${l.pending} to review</span>`}`,
+      cls: "nowrap",
+    },
+  ].filter(Boolean);
+}
+
 /** Links that ask someone else for data: they fill a form on the relay, sealed to this computer. */
 export function Links() {
   const { relay } = useStore();
   const links = useLoad(() => call("list_links"), []);
   const [selected, setSelected] = useRemembered("links", null);
+  const [filter, setFilter] = useRemembered("links.filter", "all");
   if (!links || !relay) return null;
 
   const link = links.find((l) => l.link_id === selected);
@@ -30,7 +65,7 @@ export function Links() {
   };
 
   const revoke = async (l) => {
-    const text = "The form stops taking answers, and anything sent to it that has not arrived yet can no longer be opened.";
+    const text = "The form stops taking answers. What you already received stays here.";
     if (!(await confirmDialog(`Revoke "${l.title}"?`, text, "Revoke"))) return;
     await call("revoke_link", { linkId: l.link_id });
     reload();
@@ -47,35 +82,77 @@ export function Links() {
       </${Page}>`;
   }
 
-  const rows = links.map((l) => ({ ...l, id: l.link_id })).filter((l) => matches(l.title, l.profile_name, ...l.fields));
+  const [, , shown] = FILTERS.find(([id]) => id === filter) || FILTERS[0];
+  const rows = links
+    .map((l) => ({ ...l, id: l.link_id }))
+    .filter(shown)
+    .filter((l) => matches(l.title, l.profile_name, l.link_id, STATES[l.state], ...l.fields));
+  const pending = links.reduce((n, l) => n + l.pending, 0);
   return html`
-    <${Page} title="Collection links" subtitle=${plural(links.length, "link")} actions=${[
+    <${Page} title="Collection links" subtitle=${pending ? `${plural(pending, "submission")} to review` : plural(links.length, "link")} actions=${[
       ["New link", create, "primary"],
       ["Copy link", need((l) => copyLink(l.url))],
       ["Revoke", need(revoke), "danger"],
     ]}>
-      ${rows.length
-        ? html`<${Table}
-            rows=${rows}
-            selected=${[selected]}
-            onSelect=${([id]) => setSelected(id)}
-            onOpen=${(id) => copyLink(links.find((l) => l.link_id === id).url)}
-            columns=${[
-              { title: "Title", cell: (l) => l.title },
-              {
-                title: "Link",
-                cell: (l) => html`<span class="mono">${shortUrl(l.url)}</span>
-                  <button class="link" style="margin-left:8px" onClick=${() => copyLink(l.url)}>Copy</button>`,
-                cls: "nowrap",
-              },
-              { title: "Fields", cell: (l) => html`<span class="muted">${l.fields.join(", ") || "Files only"}</span>` },
-              { title: "Profile", cell: (l) => l.profile_name || "", cls: "nowrap" },
-              { title: "Expires", cell: (l) => html`<span class="muted">${when(l.expires_at)}</span>`, cls: "nowrap" },
-              { title: "Received", cell: (l) => `${l.submissions}/${l.max_submissions}`, cls: "nowrap" },
-              { title: "Status", cell: (l) => html`<span class=${`status ${l.state}`}>${STATES[l.state] || l.state}</span>`, cls: "nowrap" },
-            ]} />`
-        : html`<${Empty}>No collection links yet.<br /><span class="small">Make one to ask someone for the data of a profile, with files.</span></${Empty}>`}
+      <div class=${`links-split ${link ? "with-side" : ""}`}>
+        <div class="links-main">
+          <div class="filters">
+            ${FILTERS.map(([id, label, test]) => html`
+              <button class=${`chip ${filter === id ? "active" : ""}`} onClick=${() => setFilter(id)}>
+                ${label} <span class="count">${links.filter(test).length}</span>
+              </button>`)}
+          </div>
+          ${rows.length
+            ? html`<${Table}
+                rows=${rows}
+                selected=${[selected]}
+                onSelect=${([id]) => setSelected(id)}
+                onOpen=${(id) => copyLink(links.find((l) => l.link_id === id).url)}
+                rowClass=${(l) => (l.pending ? "pending" : "")}
+                columns=${columns(!!link)} />`
+            : html`<${Empty}>${links.length ? "No links match." : html`No collection links yet.<br /><span class="small">Make one to ask someone for the data of a profile, with files.</span>`}</${Empty}>`}
+        </div>
+        ${link && html`<${Submissions} key=${link.link_id} link=${link} close=${() => setSelected(null)} />`}
+      </div>
     </${Page}>`;
+}
+
+/** What came in for one link, beside the table; each opens again until it is discarded. */
+function Submissions({ link, close }) {
+  const submissions = useLoad(() => call("list_submissions", { linkId: link.link_id }), [link.link_id]);
+  const open = async (sid) => {
+    await openSubmission({ sid });
+    reload();
+  };
+  return html`
+    <aside class="side submissions">
+      <div class="side-head">
+        <h3>${link.title}</h3>
+        <button class="ghost close" title="Close" onClick=${close}>✕</button>
+      </div>
+      <div class="muted small">
+        ${link.submissions}/${link.max_submissions} received · ${STATES[link.state] || link.state} · expires ${when(link.expires_at)}
+      </div>
+      <div class="muted small">${link.fields.join(", ") || "Files only"}</div>
+      <h4>Submissions</h4>
+      ${!submissions
+        ? null
+        : submissions.length
+          ? submissions.map(
+              (s) => html`
+                <div key=${s.sid} class=${`sub-item ${s.status}`} onDblClick=${() => (s.status === "pending" || s.status === "saved") && open(s.sid)}>
+                  <div class="sub-main">
+                    <div><span class=${`status ${s.status}`}>${SUBMISSION_STATES[s.status] || s.status}</span> <span class="when">${when(s.received_at)}</span></div>
+                    <div class="muted small">
+                      ${s.status === "saved" ? `Saved ${when(s.handled_at)}${s.profile_name ? ` into ${s.profile_name}` : ""} · ` : ""}${megabytes(s.size)}
+                    </div>
+                  </div>
+                  ${(s.status === "pending" || s.status === "saved") &&
+                  html`<button class=${s.status === "pending" ? "primary" : ""} onClick=${() => open(s.sid)}>${s.status === "pending" ? "Review" : "Open"}</button>`}
+                </div>`
+            )
+          : html`<div class="muted small">Nothing received yet. When someone fills in the form it shows up here, and on Activity.</div>`}
+    </aside>`;
 }
 
 /** The New link sheet; `draft` prefills it (a link an agent asked for, confirmed through `requestId`). */

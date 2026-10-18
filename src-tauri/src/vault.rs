@@ -22,7 +22,7 @@ const BACKUPS: usize = 3;
 /// Every step must be idempotent (IF NOT EXISTS, add_column), so re-running one after a partial upgrade is safe.
 /// Append only: a shipped step never changes. New vaults run every step, so they match upgraded ones.
 const MIGRATIONS: &[fn(&Connection) -> rusqlite::Result<()>] =
-    &[initial_schema, fill_sets, sealed_requests, relay_grants, request_grants, collection_links];
+    &[initial_schema, fill_sets, sealed_requests, relay_grants, request_grants, collection_links, link_submissions];
 
 /// The Python app's DDL (peewee): NOT NULL without SQL defaults, so every insert names all its columns.
 fn initial_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -74,6 +74,17 @@ fn collection_links(conn: &Connection) -> rusqlite::Result<()> {
         r#"
 CREATE TABLE IF NOT EXISTS "links" ("link_id" TEXT NOT NULL PRIMARY KEY, "relay_url" TEXT NOT NULL, "url" TEXT NOT NULL, "title" TEXT NOT NULL, "spec" TEXT NOT NULL, "profile_id" INTEGER, "new_profile" TEXT, "created_at" TEXT NOT NULL, "expires_at" TEXT NOT NULL, "max_submissions" INTEGER NOT NULL, "revoked_at" TEXT, "received" INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS "collected_files" ("id" INTEGER NOT NULL PRIMARY KEY, "profile_id" INTEGER, "link_id" TEXT NOT NULL, "size" INTEGER NOT NULL, "created_at" TEXT NOT NULL, "nonce" BLOB NOT NULL, "ciphertext" BLOB NOT NULL, FOREIGN KEY ("profile_id") REFERENCES "profiles" ("id") ON DELETE SET NULL);
+"#,
+    )
+}
+
+/// Each submission pulled from the relay, kept so it can be opened again; plaintext metadata, the blob stays
+/// sealed to its link's key in `inbox/<sid>.bin`.
+fn link_submissions(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS "link_submissions" ("sid" TEXT NOT NULL PRIMARY KEY, "link_id" TEXT NOT NULL, "request_id" INTEGER, "size" INTEGER NOT NULL, "received_at" TEXT NOT NULL, "status" TEXT NOT NULL, "handled_at" TEXT, "profile_id" INTEGER);
+CREATE INDEX IF NOT EXISTS "link_submissions_link_id" ON "link_submissions" ("link_id");
 "#,
     )
 }
@@ -240,6 +251,20 @@ pub struct Link {
     pub revoked_at: Option<String>,
     /// submissions this computer has pulled from the relay
     pub received: i64,
+}
+
+/// A submission to a collection link. status: pending, saved or discarded.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct SubmissionInfo {
+    pub sid: String,
+    pub link_id: String,
+    pub request_id: Option<i64>,
+    pub size: i64,
+    pub received_at: String,
+    pub status: String,
+    pub handled_at: Option<String>,
+    /// the profile it was last saved into
+    pub profile_id: Option<i64>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -1015,13 +1040,65 @@ impl Vault {
         self.get_secret(&link_secret(link_id))?.map(|bytes| Ok(crypto::key_from(&bytes)?)).transpose()
     }
 
-    /// Drops the private key with the link, so a submission still on its way can no longer be opened.
+    /// The key stays, so submissions already received still open; anything pulled for the link later is dropped.
     pub fn revoke_link(&self, link_id: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE links SET revoked_at = ?1 WHERE link_id = ?2 AND revoked_at IS NULL",
             params![now(), link_id],
         )?;
-        self.conn.execute("DELETE FROM meta WHERE key = ?1", [format!("secret:{}", link_secret(link_id))])?;
+        Ok(())
+    }
+
+    pub fn add_submission(&self, sid: &str, link_id: &str, request_id: i64, size: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO link_submissions (sid, link_id, request_id, size, received_at, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'pending')",
+            params![sid, link_id, request_id, size, now()],
+        )?;
+        Ok(())
+    }
+
+    /// Newest first; all links when `link_id` is None.
+    pub fn list_submissions(&self, link_id: Option<&str>) -> Result<Vec<SubmissionInfo>> {
+        match link_id {
+            Some(id) => self.query_submissions("WHERE link_id = ?1 ORDER BY received_at DESC, rowid DESC", params![id]),
+            None => self.query_submissions("ORDER BY received_at DESC, rowid DESC", params![]),
+        }
+    }
+
+    pub fn get_submission(&self, sid: &str) -> Result<SubmissionInfo> {
+        self.query_submissions("WHERE sid = ?1", params![sid])?
+            .pop()
+            .ok_or_else(|| VaultError::NotFound(format!("Unknown submission {sid}")))
+    }
+
+    fn query_submissions(&self, clause: &str, args: &[&dyn rusqlite::ToSql]) -> Result<Vec<SubmissionInfo>> {
+        let sql = format!(
+            "SELECT sid, link_id, request_id, size, received_at, status, handled_at, profile_id
+             FROM link_submissions {clause}"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(args, |r| {
+            Ok(SubmissionInfo {
+                sid: r.get(0)?,
+                link_id: r.get(1)?,
+                request_id: r.get(2)?,
+                size: r.get(3)?,
+                received_at: r.get(4)?,
+                status: r.get(5)?,
+                handled_at: r.get(6)?,
+                profile_id: r.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_submission_status(&self, sid: &str, status: &str, profile_id: Option<i64>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE link_submissions SET status = ?1, handled_at = ?2, profile_id = coalesce(?3, profile_id)
+             WHERE sid = ?4",
+            params![status, now(), profile_id, sid],
+        )?;
         Ok(())
     }
 

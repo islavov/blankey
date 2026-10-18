@@ -514,7 +514,7 @@ async fn collection_links_reach_the_device() {
     assert_eq!(requests.len(), 1);
     assert!(stub.state.inbox.lock().unwrap().is_empty(), "deleted on the relay once on disk");
     assert!(app.inbox_dir().join("sub-1.bin").exists());
-    let opened = app.open_submission(requests[0].id).unwrap();
+    let opened = app.open_submission("sub-1").unwrap();
     assert_eq!(opened.values["name"], "Jane Roe");
     assert_eq!(opened.files[0].name, "id.pdf");
 
@@ -541,6 +541,5 @@ async fn collection_links_reach_the_device() {
 
     relay.revoke_link(LINK_ID).await.unwrap();
     assert_eq!(*stub.state.revoked_links.lock().unwrap(), [LINK_ID]);
-    assert!(app.vault().link_key(LINK_ID).unwrap().is_none());
     assert!(app.vault().get_link(LINK_ID).unwrap().revoked_at.is_some());
 }

@@ -73,7 +73,7 @@ test("file request: Cancel cancels it", async () => {
 });
 
 test("submission: values are prefilled and editable; unticked files are not kept", async () => {
-  backend.db.submissions[12] = submission(12);
+  backend.db.submissions["s-2"] = submission(12, "s-2");
   backend.db.requests.push(submissionRequest(12));
   backend.emit("request-created", 12);
   await settle(300);
@@ -85,6 +85,10 @@ test("submission: values are prefilled and editable; unticked files are not kept
   assert.equal($$(".file-row").length, 2);
   assert.ok($(".file-row img.thumb"), "images get a thumbnail");
   assert.ok($$(".file-row")[1].textContent.includes("3.0 MB"));
+  await click(byText(".file-row:nth-child(2) button", "Open"));
+  assert.deepEqual(backend.called("open_submission_file").at(-1), { sid: "s-2", index: 1 });
+  await click(byText(".file-row:nth-child(1) button", "Export"));
+  assert.deepEqual(backend.called("export_submission_file").at(-1), { sid: "s-2", index: 0 });
 
   await type($(".sheet input[name=name]"), "");
   await click(byText(".sheet-foot button", "Save"));
@@ -95,7 +99,7 @@ test("submission: values are prefilled and editable; unticked files are not kept
   await choose($(".sheet select[name=profile]"), "1");
   await click(byText(".sheet-foot button", "Save"));
   assert.deepEqual(backend.called("resolve_submission").at(-1), {
-    id: 12,
+    sid: "s-2",
     profileId: 1,
     profileName: null,
     values: { name: "Jane A. Roe", pets: "yes" },
@@ -106,7 +110,7 @@ test("submission: values are prefilled and editable; unticked files are not kept
 });
 
 test("submission: Later keeps it waiting, Discard asks and drops it", async () => {
-  backend.db.submissions[13] = submission(13);
+  backend.db.submissions["s-3"] = submission(13, "s-3");
   backend.db.requests.push(submissionRequest(13));
   backend.emit("request-created", 13);
   await settle(300);
@@ -119,7 +123,7 @@ test("submission: Later keeps it waiting, Discard asks and drops it", async () =
   await click(byText(".sheet-foot button", "Discard"));
   assert.equal(text(".modal h3"), "Discard this submission?");
   await submit($(".modal form"));
-  assert.deepEqual(backend.called("cancel_request").at(-1), { id: 13 });
+  assert.deepEqual(backend.called("discard_submission").at(-1), { sid: "s-3" });
   assert.equal(backend.db.requests.length, 0);
 });
 
@@ -128,7 +132,7 @@ test("a submission that cannot be opened is skipped", async () => {
   backend.emit("request-created", 15);
   await settle(300);
   assert.equal($(".sheet"), null);
-  assert.equal(text("#toast"), "This submission was for a revoked link, so it was dropped.");
+  assert.equal(text("#toast"), "This submission could not be opened, so it was dropped.");
   backend.db.requests = [];
 });
 

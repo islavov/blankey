@@ -52,10 +52,16 @@ export function seed() {
         expires_at: "2026-10-24T09:00:00Z",
         max_submissions: 3,
         state: "open",
-        submissions: 1,
+        submissions: 2,
+        pending: 1,
+        last_received: "2026-10-17T12:00:00+00:00",
         fields: ["Full name", "Email"],
         profile_name: "John",
       },
+    ],
+    linkSubmissions: [
+      { sid: "s-2", link_id: "XchaBj2", request_id: 12, size: 4096, received_at: "2026-10-17T12:00:00+00:00", status: "pending", handled_at: null, profile_id: null, profile_name: null },
+      { sid: "s-1", link_id: "XchaBj2", request_id: 11, size: 2048, received_at: "2026-10-16T10:00:00+00:00", status: "saved", handled_at: "2026-10-16T10:05:00+00:00", profile_id: 1, profile_name: "John" },
     ],
     collected: [],
     submissions: {},
@@ -97,8 +103,13 @@ export const profileInputRequest = (id = 8) => ({
 
 export const submissionRequest = (id = 12) => ({ id, kind: "link_submission", payload: { link_id: "XchaBj2", sid: "s-1", reason: "Submission for Tenant details" } });
 
-export const submission = (id = 12) => ({
+export const submission = (id = 12, sid = "s-2", status = "pending") => ({
+  sid,
   request_id: id,
+  status,
+  received_at: "2026-10-17T12:00:00+00:00",
+  handled_at: status === "saved" ? "2026-10-17T12:05:00+00:00" : null,
+  profile_id: status === "saved" ? 1 : null,
   link: { link_id: "XchaBj2", title: "Tenant details", profile_id: null, new_profile: "New tenant" },
   fields: [
     { key: "name", label: "Full name", type: "text", hint: "", required: true },
@@ -234,15 +245,22 @@ export function createBackend(db = seed()) {
     revoke_link: ({ linkId }) => {
       db.links.find((l) => l.link_id === linkId).state = "revoked";
     },
-    open_submission: ({ id }) => {
-      if (!db.submissions[id]) throw "This submission was for a revoked link, so it was dropped.";
-      return db.submissions[id];
+    list_submissions: ({ linkId }) => db.linkSubmissions.filter((s) => s.link_id === linkId),
+    open_submission: ({ id, sid }) => {
+      const found = sid ? db.submissions[sid] : Object.values(db.submissions).find((s) => s.request_id === id);
+      if (!found) throw "This submission could not be opened, so it was dropped.";
+      return found;
     },
-    resolve_submission: ({ id, values }) => {
+    resolve_submission: ({ sid, values }) => {
       if (!values.name) return ["Full name: required"];
-      removeRequest(id);
+      removeRequest(db.submissions[sid].request_id);
       return [];
     },
+    discard_submission: ({ sid }) => {
+      removeRequest(db.submissions[sid].request_id);
+    },
+    open_submission_file: () => null,
+    export_submission_file: () => "/tmp/id-card.png",
     open_documents: () => null,
     export_document: () => "/tmp/doc.pdf",
     delete_documents: ({ ids }) => {

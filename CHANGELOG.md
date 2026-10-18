@@ -8,6 +8,9 @@
   profile. Kept files are encrypted in the vault and listed on Documents. Agents can draft links
   (`create_collection_link`, confirmed in the app) and list them (`list_collection_links`); they never see what
   was sent.
+- Collection links keep each submission: the Collection links page shows when each link was last filled in, what
+  waits for review (with a "To review" filter and search), and every submission, which opens again with its files
+  (open or export them) until it is discarded.
 
 ## 0.1.0
 

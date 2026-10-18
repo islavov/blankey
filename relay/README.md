@@ -194,8 +194,8 @@ Device endpoints (device token; every call names the device with `?device_id=<id
   `#<fingerprint>`, with `fingerprint = base64url(SHA-256(public_key)[..12])` (16 characters).
 - `GET device_links` → `{links: [{id, url, state, submissions, max_submissions, created_at, expires_at,
   revoked_at}]}`, `state` being `open`, `expired`, `revoked` or `full`.
-- `DELETE device_links/<id>` → `204`: revokes the link and deletes whatever is waiting for it. The app deletes the
-  private key first, so nothing still on its way can be opened.
+- `DELETE device_links/<id>` → `204`: revokes the link and deletes whatever is waiting for it. The app marks the link
+  revoked first and drops anything it pulls for it afterwards; submissions it already received still open.
 - `GET device_inbox` → `{inbox: [{sid, link_id, size, url}]}`: complete submissions; `url` is a presigned GET (no
   bearer token) valid for 10 minutes.
 - `DELETE device_inbox/<sid>` → `204`. The app calls it once the blob is on disk, and only then creates the request.
