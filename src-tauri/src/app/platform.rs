@@ -74,6 +74,21 @@ pub fn clear_opened_documents() {
     }
 }
 
+/// The Dock icon of a debug build: `cargo run` starts a bare binary, which macOS shows as "exec". A bundled release
+/// build already has the icon from its bundle.
+#[cfg(target_os = "macos")]
+pub fn set_dock_icon() {
+    use objc2::AllocAnyThread;
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+
+    let Some(main_thread) = MainThreadMarker::new() else { return };
+    let data = NSData::with_bytes(include_bytes!("../../icons/icon.png"));
+    let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else { return };
+    unsafe { NSApplication::sharedApplication(main_thread).setApplicationIconImage(Some(&image)) };
+}
+
 pub fn reveal(path: &std::path::Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let result = std::process::Command::new("open").arg("-R").arg(path).spawn().map(|_| ());
