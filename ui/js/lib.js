@@ -5,7 +5,9 @@ export { html };
 
 export const when = (ts) => (ts ? String(ts).replace("T", " ").slice(0, 16) : "");
 export const megabytes = (bytes) =>
-  t("{size} MB", { size: number(bytes / (1024 * 1024), bytes < 10 * 1024 * 1024 ? 1 : 0) });
+  bytes < 1024 * 1024
+    ? t("{size} KB", { size: number(Math.max(1, Math.round(bytes / 1024))) })
+    : t("{size} MB", { size: number(bytes / (1024 * 1024), bytes < 10 * 1024 * 1024 ? 1 : 0) });
 
 export const KIND_NAMES = { docx: "Word", pdf_form: "PDF", typst: "Typst" };
 

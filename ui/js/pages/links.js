@@ -26,27 +26,25 @@ const FILTERS = [
 const submissionState = (status) =>
   ({ pending: t("To review"), saved: t("Saved"), discarded: t("Discarded"), damaged: t("Damaged") })[status] || status;
 
-/** With the side panel open, the table drops the wide columns. */
+/** One line per link; the link's fields and full URL are in the panel beside the table, which leaves only the
+ * title, the counts and the status when it is open. */
 function columns(narrow) {
   return [
-    { title: t("Title"), cell: (l) => l.title },
     {
-      title: t("Link"),
-      cell: (l) => html`<span class="mono">${shortUrl(l.url)}</span>
-        <button class="link" style="margin-left:8px" onClick=${() => copyLink(l.url)}>${t("Copy")}</button>`,
-      cls: "nowrap",
+      title: t("Title"),
+      cell: (l) => html`<div class="link-title">${l.title}</div><div class="mono muted small">${shortUrl(l.url)}</div>`,
+      cls: "wide",
     },
-    !narrow && { title: t("Fields"), cell: (l) => html`<span class="muted">${l.fields.join(", ") || t("Files only")}</span>` },
-    { title: t("Profile"), cell: (l) => l.profile_name || "", cls: "nowrap" },
-    { title: t("Received"), cell: (l) => `${l.submissions}/${l.max_submissions}`, cls: "nowrap" },
-    { title: t("Last received"), cell: (l) => html`<span class="muted">${when(l.last_received) || "-"}</span>`, cls: "nowrap" },
-    !narrow && { title: t("Expires"), cell: (l) => html`<span class="muted">${when(l.expires_at)}</span>`, cls: "nowrap" },
+    !narrow && { title: t("Profile"), cell: (l) => l.profile_name || "", cls: "nowrap" },
     {
-      title: t("Status"),
-      cell: (l) => html`<span class=${`status ${l.state}`}>${linkState(l.state)}</span>
+      title: t("Received"),
+      cell: (l) => html`${l.submissions}/${l.max_submissions}
         ${l.pending > 0 && html` <span class="status pending">${t("{n} to review", { n: l.pending })}</span>`}`,
       cls: "nowrap",
     },
+    !narrow && { title: t("Last received"), cell: (l) => html`<span class="muted">${when(l.last_received) || "-"}</span>`, cls: "nowrap" },
+    !narrow && { title: t("Expires"), cell: (l) => html`<span class="muted">${when(l.expires_at)}</span>`, cls: "nowrap" },
+    { title: t("Status"), cell: (l) => html`<span class=${`status ${l.state}`}>${linkState(l.state)}</span>`, cls: "nowrap" },
   ].filter(Boolean);
 }
 
@@ -63,6 +61,14 @@ export function Links() {
 
   const create = async () => {
     await openLinkSheet();
+    reload();
+  };
+
+  const remove = async (l) => {
+    const text = t("The link stops working and is removed, with what it received that you have not saved. Values and files you saved stay.");
+    if (!(await confirmDialog(t("Delete \"{name}\"?", { name: l.title }), text))) return;
+    await call("delete_link", { linkId: l.link_id });
+    setSelected(null);
     reload();
   };
 
@@ -94,7 +100,8 @@ export function Links() {
     <${Page} title=${t("Collection links")} subtitle=${pending ? tn(pending, "{n} submission to review", "{n} submissions to review") : tn(links.length, "{n} link", "{n} links")} actions=${[
       [t("New link"), create, "primary"],
       [t("Copy link"), need((l) => copyLink(l.url))],
-      [t("Revoke"), need(revoke), "danger"],
+      [t("Revoke"), need(revoke)],
+      [t("Delete"), need(remove), "danger"],
     ]}>
       <div class=${`links-split ${link ? "with-side" : ""}`}>
         <div class="links-main">
@@ -132,10 +139,16 @@ function Submissions({ link, close }) {
         <h3>${link.title}</h3>
         <button class="ghost close" title=${t("Close")} onClick=${close}>✕</button>
       </div>
+      <div class="side-link">
+        <span class="mono selectable">${shortUrl(link.url)}</span>
+        <button class="link" onClick=${() => copyLink(link.url)}>${t("Copy")}</button>
+      </div>
       <div class="muted small">
         ${t("{count} received · {state} · expires {date}", { count: `${link.submissions}/${link.max_submissions}`, state: linkState(link.state), date: when(link.expires_at) })}
       </div>
-      <div class="muted small">${link.fields.join(", ") || t("Files only")}</div>
+      ${link.profile_name && html`<div class="muted small">${t("Saves into {profile}", { profile: link.profile_name })}</div>`}
+      <h4>${t("Fields")}</h4>
+      <div class="small">${link.fields.join(", ") || t("Files only")}</div>
       <h4>${t("Submissions")}</h4>
       ${!submissions
         ? null
@@ -148,7 +161,7 @@ function Submissions({ link, close }) {
                     <div class="muted small">
                       ${s.status === "saved"
                         ? `${s.profile_name ? t("Saved {date} into {profile}", { date: when(s.handled_at), profile: s.profile_name }) : t("Saved {date}", { date: when(s.handled_at) })} · `
-                        : ""}${megabytes(s.size)}
+                        : ""}<span class="size">${megabytes(s.size)}</span>
                     </div>
                   </div>
                   ${(s.status === "pending" || s.status === "saved") &&

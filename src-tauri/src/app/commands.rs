@@ -815,6 +815,14 @@ async fn revoke_link(relay: RelayState<'_>, link_id: String) -> CmdResult<()> {
     relay.revoke_link(&link_id).await
 }
 
+#[tauri::command]
+async fn delete_link(handle: AppHandle, relay: RelayState<'_>, link_id: String) -> CmdResult<()> {
+    relay.delete_link(&link_id).await?;
+    tray::refresh(&handle);
+    let _ = handle.emit("requests-changed", ());
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct SubmissionRow {
     #[serde(flatten)]
@@ -1071,6 +1079,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         list_links,
         create_link,
         revoke_link,
+        delete_link,
         list_submissions,
         open_submission,
         resolve_submission,

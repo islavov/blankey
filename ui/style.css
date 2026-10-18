@@ -270,6 +270,13 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .side-head { display: flex; align-items: flex-start; gap: 8px; }
 .side-head h3 { flex: 1; margin: 0; font-size: 15px; }
 .side-head .close { padding: 2px 8px; color: var(--muted); }
+.side-link { display: flex; align-items: center; gap: 8px; margin: 2px 0 4px; }
+.side-link .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.side-link .link { margin-left: 4px; flex: none; }
+.grid td.wide { width: 100%; min-width: 160px; }
+.link-title { font-weight: 500; }
+.link-title + .mono { font-weight: 400; }
+.sub-item .size { white-space: nowrap; }
 .side h4 { margin: 14px 0 6px; font-size: 12px; color: var(--muted); font-weight: 600; }
 .sub-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 6px; }
 .sub-item.pending { background: var(--pending); }

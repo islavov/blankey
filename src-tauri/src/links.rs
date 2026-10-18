@@ -487,6 +487,19 @@ impl Blankey {
         Ok(Vec::new())
     }
 
+    /// Removes the link and everything it received that was not kept: the submissions' blobs and rows, and their
+    /// waiting requests. Values and files already saved stay. The relay is told separately.
+    pub fn delete_link(&self, link_id: &str) -> Result<(), String> {
+        let submissions = self.vault().list_submissions(Some(link_id)).map_err(|e| e.to_string())?;
+        for info in &submissions {
+            let _ = std::fs::remove_file(self.inbox_path(&info.sid)?);
+            self.close_request(info, "cancelled", json!({"outcome": "discarded"}))?;
+        }
+        self.vault().delete_link(link_id).map_err(|e| e.to_string())?;
+        self.audit("user", "delete_link", &format!("link={link_id} submissions={}", submissions.len()));
+        Ok(())
+    }
+
     /// Deletes the sealed blob for good; the submission stays listed as discarded.
     pub fn discard_submission(&self, sid: &str) -> Result<(), String> {
         let info = self.vault().get_submission(sid).map_err(|e| e.to_string())?;
@@ -708,6 +721,34 @@ pub(crate) mod tests {
             .query_row("SELECT count(*) FROM audit WHERE action = 'submission_revoked'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(audited, 1);
+    }
+
+    #[test]
+    fn deleting_a_link_removes_what_it_received_but_not_what_was_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let public = stored_link(&app, "Ab3dE9z");
+        let plain = plaintext(json!({"name": "Jane Roe"}), &[("id.pdf", "application/pdf", b"%PDF-1.7")]);
+        submit(&app, "Ab3dE9z", &public, &plain, "sub-saved");
+        let waiting = submit(&app, "Ab3dE9z", &public, &plain, "sub-waiting");
+        let values = app.open_submission("sub-saved").unwrap().values;
+        let jane = Target::New { name: "Jane", kind: "person" };
+        assert!(app.resolve_submission("sub-saved", jane, &values, &[0]).unwrap().is_empty());
+        let other = stored_link(&app, "XchaBj2");
+        submit(&app, "XchaBj2", &other, &plain, "sub-other");
+
+        app.delete_link("Ab3dE9z").unwrap();
+        assert!(app.vault().get_link("Ab3dE9z").is_err());
+        assert!(app.vault().link_key("Ab3dE9z").unwrap().is_none());
+        assert!(app.vault().list_submissions(Some("Ab3dE9z")).unwrap().is_empty());
+        assert_eq!(app.vault().get_request(waiting).unwrap().status, "cancelled");
+        let left: Vec<_> = std::fs::read_dir(app.inbox_dir()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(left, ["sub-other.bin"], "only the other link's submission is left");
+        // the values and the kept file stay
+        let profile = app.vault().list_profiles().unwrap().pop().unwrap();
+        assert_eq!(app.vault().get_values(profile.id).unwrap()["name"].1, "Jane Roe");
+        assert_eq!(app.vault().list_collected_files().unwrap().len(), 1);
+        assert_eq!(app.open_submission("sub-other").unwrap().values["name"], "Jane Roe");
     }
 
     #[test]

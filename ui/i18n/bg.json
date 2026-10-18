@@ -188,7 +188,6 @@
   "Saved": "Запазено",
   "Discarded": "Отхвърлено",
   "Damaged": "Повредено",
-  "Link": "Линк",
   "Fields": "Полета",
   "Files only": "Само файлове",
   "Profile": "Профил",
@@ -396,5 +395,8 @@
   "Invalid EGN": "Невалидно ЕГН",
   "Invalid IBAN": "Невалиден IBAN",
   "Invalid email": "Невалиден имейл",
-  "Your AI assistant needs the vault. Unlock Blankey to continue.": "AI асистентът ви се нуждае от трезора. Отключете Blankey, за да продължите."
+  "Your AI assistant needs the vault. Unlock Blankey to continue.": "AI асистентът ви се нуждае от трезора. Отключете Blankey, за да продължите.",
+  "The link stops working and is removed, with what it received that you have not saved. Values and files you saved stay.": "Линкът спира да работи и се премахва заедно с полученото, което не сте запазили. Запазените стойности и файлове остават.",
+  "Saves into {profile}": "Записва в {profile}",
+  "{size} KB": "{size} КБ"
 }

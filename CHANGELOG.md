@@ -5,6 +5,9 @@
 - The app speaks Bulgarian. It follows the language of your relay account (read from the relay's new optional
   `device_profile`), else the computer's language, else English. The window, tray, notifications, dialogs and
   validation messages are translated; MCP output for agents stays English.
+- Collection links can be deleted: the link stops working and goes away with whatever it received that was not saved;
+  saved values and kept files stay. The links table shows one line per link; the fields, the full link and Copy are
+  in the panel beside it. Small files show in KB.
 
 ## 0.2.1
 
