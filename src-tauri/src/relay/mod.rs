@@ -27,6 +27,7 @@ use tokio::task::JoinHandle;
 use crate::config::{Config, OFFICIAL_RELAY};
 use crate::core::Blankey;
 use crate::crypto;
+use crate::i18n::mark;
 use crate::keychain::SecretStore;
 use crate::links::{InboxEntry, LinkDraft};
 use crate::vault::{now, Link, RelayGrant};
@@ -54,12 +55,12 @@ pub enum State {
 impl State {
     pub fn label(self) -> &'static str {
         match self {
-            Self::SignedOut => "Signed out",
-            Self::SigningIn => "Signing in…",
-            Self::Connecting => "Connecting",
-            Self::Connected => "Connected",
-            Self::Offline => "Offline",
-            Self::AccountNeedsAttention => "Account needs attention",
+            Self::SignedOut => mark("Signed out"),
+            Self::SigningIn => mark("Signing in…"),
+            Self::Connecting => mark("Connecting"),
+            Self::Connected => mark("Connected"),
+            Self::Offline => mark("Offline"),
+            Self::AccountNeedsAttention => mark("Account needs attention"),
         }
     }
 }
@@ -197,6 +198,8 @@ pub struct Relay {
     mcp: Router,
     callbacks: oauth::Callbacks,
     status: watch::Sender<Status>,
+    /// the account's UI language from its device profile; None when signed out or the relay names none
+    language: watch::Sender<Option<String>>,
     inner: Mutex<Inner>,
 }
 
@@ -226,6 +229,7 @@ impl Relay {
         };
         let mcp = crate::mcp::router(app.clone(), config.port);
         let status = Status { state: State::SignedOut, message: String::new() };
+        let language = app.vault().relay_language().ok().flatten();
         Self {
             app,
             tokens,
@@ -243,6 +247,7 @@ impl Relay {
             mcp,
             callbacks: oauth::Callbacks::default(),
             status: watch::channel(status).0,
+            language: watch::channel(language).0,
             inner: Mutex::new(inner),
         }
     }
@@ -263,6 +268,43 @@ impl Relay {
 
     pub fn status(&self) -> Status {
         self.status.borrow().clone()
+    }
+
+    /// Changes of the account's UI language.
+    pub fn subscribe_language(&self) -> watch::Receiver<Option<String>> {
+        self.language.subscribe()
+    }
+
+    pub fn language(&self) -> Option<String> {
+        self.language.borrow().clone()
+    }
+
+    fn set_language(&self, language: Option<String>) {
+        let _ = self.app.vault().set_relay_language(language.as_deref());
+        self.language.send_if_modified(|current| std::mem::replace(current, language.clone()) != language);
+    }
+
+    /// Reads the account's UI language from the relay's device profile; a relay without one names none.
+    pub async fn refresh_profile(&self) {
+        if !self.signed_in() {
+            return;
+        }
+        let Ok(device) = self.device_id() else { return };
+        #[derive(Deserialize)]
+        struct Profile {
+            #[serde(default)]
+            lang: Option<String>,
+        }
+        let profile = self
+            .authorized(move |agent, discovery, token| match discovery.device_profile.as_deref() {
+                None => Ok(Profile { lang: None }),
+                Some(base) => oauth::get_json::<Profile>(agent, &device_url(Some(base), &[], &device)?, token),
+            })
+            .await;
+        match profile {
+            Ok(profile) => self.set_language(profile.lang.filter(|lang| !lang.is_empty())),
+            Err(e) => eprintln!("relay: cannot read the device profile: {}", e.message()),
+        }
     }
 
     fn set_status(&self, state: State, message: impl Into<String>) {
@@ -380,6 +422,7 @@ impl Relay {
         self.stop();
         self.forget_token();
         let _ = self.app.vault().set_relay_account(None);
+        self.set_language(None);
         {
             let mut inner = self.inner();
             inner.access_token = None;
@@ -746,6 +789,7 @@ impl Relay {
             vault.set_relay_client(None).map_err(|e| e.to_string())?;
             vault.set_relay_account(None).map_err(|e| e.to_string())?;
         }
+        self.set_language(None);
         self.forget_token();
         {
             let mut inner = self.inner();

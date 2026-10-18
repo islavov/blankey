@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "../vendor/preact-htm.js";
 import { call, invoke, isLocked, refreshStatus } from "./api.js";
 import { openFill } from "./fill/form.js";
-import { html, PLACEHOLDERS, plural, reload, update } from "./lib.js";
+import { problemText, t, tn } from "./i18n.js";
+import { html, placeholder, reload, update } from "./lib.js";
 import { openLinkSheet } from "./pages/links.js";
 import { openSubmission } from "./submission.js";
 import { toast } from "./ui/feedback.js";
@@ -20,7 +21,7 @@ export async function processRequests() {
         detail = await invoke("next_request");
       } catch (e) {
         if (isLocked(e)) {
-          update({ gateReason: "Your AI assistant sent a request. Unlock Blankey to continue." });
+          update({ gateReason: t("Your AI assistant sent a request. Unlock Blankey to continue.") });
           await refreshStatus();
         } else toast(String(e), 5000);
         return;
@@ -94,7 +95,7 @@ function ProfileInput({ request, profile_name, existing, close }) {
     const result = await call("resolve_profile_input", { id: request.id, profileName: name, values });
     setProblems(result);
     if (!result.length) {
-      toast("Saved");
+      toast(t("Saved"));
       close();
     }
   };
@@ -112,25 +113,25 @@ function ProfileInput({ request, profile_name, existing, close }) {
     }
     return html`
       <label title=${spec.key}>${label}</label>
-      <input type="text" name=${`f${i}`} value=${current} placeholder=${spec.hint || PLACEHOLDERS[spec.type] || ""} spellcheck="false" />`;
+      <input type="text" name=${`f${i}`} value=${current} placeholder=${spec.hint || placeholder(spec.type)} spellcheck="false" />`;
   };
 
   return html`
     <div class="sheet-head">
-      <${SheetHead} icon="person" title=${`${plural(specs.length, "field")} for ${profile_name || "a new profile"}`} reason=${payload.reason} />
+      <${SheetHead} icon="person" title=${profile_name ? tn(specs.length, "{n} field for {profile}", "{n} fields for {profile}", { profile: profile_name }) : tn(specs.length, "{n} field for a new profile", "{n} fields for a new profile")} reason=${payload.reason} />
     </div>
     <div class="sheet-body">
       <form class="input-form" autocomplete="off" ref=${form} onSubmit=${save}>
         ${payload.profile_id == null &&
-        html`<label>New profile</label><input type="text" name="__profile" value=${payload.new_profile?.name || ""} />`}
+        html`<label>${t("New profile")}</label><input type="text" name="__profile" value=${payload.new_profile?.name || ""} />`}
         ${specs.map(field)}
       </form>
-      <div class="problems" style="max-width:640px;margin:0 auto;padding:0 24px">${problems.join("\n")}</div>
+      <div class="problems" style="max-width:640px;margin:0 auto;padding:0 24px">${problems.map(problemText).join("\n")}</div>
     </div>
     <div class="sheet-foot">
-      <span class="note">Your data stays in Blankey. The AI assistant only sees the field names and how long the values are.</span>
-      <button onClick=${cancel}>Cancel</button>
-      <button class="primary" onClick=${() => save()}>Save</button>
+      <span class="note">${t("Your data stays in Blankey. The AI assistant only sees the field names and how long the values are.")}</span>
+      <button onClick=${cancel}>${t("Cancel")}</button>
+      <button class="primary" onClick=${() => save()}>${t("Save")}</button>
     </div>`;
 }
 
@@ -146,18 +147,18 @@ function FileRequest({ request, close }) {
   const choose = async () => {
     const file = await call("resolve_file_request", { id: request.id }).catch(() => null);
     if (!file) return;
-    toast(`Shared ${file.name}`);
+    toast(t("Shared {name}", { name: file.name }));
     close();
   };
 
   return html`
     <div class="sheet-head">
-      <${SheetHead} icon="doc" title=${`Your AI assistant asks for a ${kind.toUpperCase()} file`} reason=${reason} />
+      <${SheetHead} icon="doc" title=${t("Your AI assistant asks for a {kind} file", { kind: kind.toUpperCase() })} reason=${reason} />
     </div>
     <div class="sheet-body"></div>
     <div class="sheet-foot">
-      <span class="note">Blankey keeps a copy of the file you choose. The assistant can read that file, nothing else on this computer.</span>
-      <button onClick=${cancel}>Cancel</button>
-      <button class="primary" onClick=${choose}>Choose file…</button>
+      <span class="note">${t("Blankey keeps a copy of the file you choose. The assistant can read that file, nothing else on this computer.")}</span>
+      <button onClick=${cancel}>${t("Cancel")}</button>
+      <button class="primary" onClick=${choose}>${t("Choose file…")}</button>
     </div>`;
 }

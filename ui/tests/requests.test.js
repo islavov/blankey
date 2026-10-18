@@ -16,7 +16,7 @@ test("profile input: required fields are checked, values go to the vault", async
 
   await type(email, "");
   await click(byText(".sheet-foot button", "Save"));
-  assert.equal(text(".problems"), "Email is required");
+  assert.equal(text(".problems"), "Email: required");
   assert.ok($(".sheet"));
 
   await type(email, "john@example.com");

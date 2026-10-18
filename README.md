@@ -93,6 +93,14 @@ without the user. The relay sees MCP traffic (field metadata, templates, example
 Connections → "Use custom relay…" switches relays: the agents of the old relay are revoked and forgotten, then you
 sign in to the new one. `config.toml` keeps `relay_enabled` and `relay_url`.
 
+## Languages
+
+The app speaks English and Bulgarian. Signed in to a relay, it follows the language chosen for the relay account;
+otherwise the computer's language, else English. Agents always get English. The catalogs are `ui/i18n/<code>.json`,
+keyed by the English text and shared by the window and the tray; `npm test` checks they cover every text and hold
+nothing unused. To add a language, add its code to `ui/i18n/languages.json`, write `ui/i18n/<code>.json`, and list
+it in `CATALOGS` in `src-tauri/src/i18n.rs`.
+
 ## How the PII boundary works
 
 - Profile values are AES-256-GCM encrypted per field. A random data key is wrapped by the master password

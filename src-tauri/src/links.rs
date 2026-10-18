@@ -10,7 +10,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::core::{Blankey, ProfileSave, Target};
+use crate::core::{Blankey, Problem, ProfileSave, Target};
 use crate::crypto;
 use crate::fieldtypes;
 use crate::vault::{Link, SubmissionInfo};
@@ -452,7 +452,7 @@ impl Blankey {
         target: Target,
         values: &IndexMap<String, String>,
         keep: &[usize],
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<Problem>, String> {
         let (info, link) = {
             let vault = self.vault();
             let info = vault.get_submission(sid).map_err(|e| e.to_string())?;

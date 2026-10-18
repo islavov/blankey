@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "../../vendor/preact-htm.js";
 import { call, invoke } from "../api.js";
-import { html, plural } from "../lib.js";
+import { t, tn } from "../i18n.js";
+import { html } from "../lib.js";
 import { Preview } from "../preview.js";
 import { refreshAfterRequests } from "../requests.js";
 import { alertDialog, isDialogOpen, toast } from "../ui/feedback.js";
@@ -35,7 +36,7 @@ export async function openFill(args) {
 }
 
 function FillForm({ session: s, close }) {
-  const templateIds = s.templates.map((t) => t.id);
+  const templateIds = s.templates.map((tpl) => tpl.id);
   const [name, setName] = useState(s.name);
   const [profiles, setProfiles] = useState({ ...s.profiles });
   const [bindings, setBindings] = useState({ ...s.bindings });
@@ -70,7 +71,7 @@ function FillForm({ session: s, close }) {
           setPreviews(result);
           setPreviewError("");
         })
-        .catch((e) => live && setPreviewError(`No preview: ${e}`));
+        .catch((e) => live && setPreviewError(t("No preview: {error}", { error: e })));
     }, PREVIEW_DELAY);
     return () => {
       live = false;
@@ -116,9 +117,9 @@ function FillForm({ session: s, close }) {
       setFillSetId(result.fill_set_id);
       setSaved(true);
       if (generate) {
-        toast(`${plural(result.document_ids.length, "document")} generated`);
+        toast(tn(result.document_ids.length, "{n} document generated", "{n} documents generated"));
         finish();
-      } else toast("Fill set saved");
+      } else toast(t("Fill set saved"));
     } catch (e) {
       await alertDialog("Blankey", String(e));
     } finally {
@@ -174,23 +175,26 @@ function FillForm({ session: s, close }) {
   const missing = Object.keys(s.roles).filter((role) => !profiles[role]);
   const total = s.vars.length;
   const empty = evaluation.empty.length;
-  let summary = empty ? `${plural(total, "field")} · ${empty} empty` : `${plural(total, "field")} · all filled`;
-  if (missing.length) summary += ` · choose profiles for: ${missing.join(", ")}`;
+  const fields = tn(total, "{n} field", "{n} fields");
+  let summary = empty ? t("{fields} · {n} empty", { fields, n: empty }) : t("{fields} · all filled", { fields });
+  if (missing.length) summary += ` · ${t("choose profiles for: {roles}", { roles: missing.join(", ") })}`;
 
-  const title = s.request_id ? `Your AI assistant wants to fill in ${plural(s.templates.length, "document")}` : "Fill documents";
-  const explanation = `${s.templates.map((t) => t.name).join(" · ")}. Check each blank and pick where its value comes from.`;
+  const title = s.request_id
+    ? tn(s.templates.length, "Your AI assistant wants to fill in {n} document", "Your AI assistant wants to fill in {n} documents")
+    : t("Fill documents");
+  const explanation = `${s.templates.map((tpl) => tpl.name).join(" · ")}. ${t("Check each blank and pick where its value comes from.")}`;
 
   return html`
     <div class="sheet-head">
       <${SheetHead} icon="doc" title=${title} reason=${s.reason ? `${s.reason}. ${explanation}` : explanation} />
       <div class="sheet-form">
-        <label>Fill set</label>
+        <label>${t("Fill set")}</label>
         <input type="text" value=${name} spellcheck="false" onInput=${(e) => setName(e.target.value)} />
         ${Object.entries(s.roles).map(
           ([role, description]) => html`
             <label title=${description}>${role}</label>
             <${Select} value=${profiles[role] ?? ""} onChange=${(value) => chooseProfile(role, value)} options=${[
-              ["", "Choose a profile…"],
+              ["", t("Choose a profile…")],
               ...s.all_profiles.map((p) => [p.id, `${p.name}${p.kind ? `  (${p.kind})` : ""}`]),
             ]} />`
         )}
@@ -223,21 +227,21 @@ function FillForm({ session: s, close }) {
         <div class="fill-preview">
           <div class=${`tabs ${s.templates.length > 1 ? "" : "hidden"}`}>
             ${s.templates.map(
-              (t) => html`<div class=${`tab ${t.id === tab ? "active" : ""}`} onClick=${() => setTab(t.id)}>${t.name}</div>`
+              (tpl) => html`<div class=${`tab ${tpl.id === tab ? "active" : ""}`} onClick=${() => setTab(tpl.id)}>${tpl.name}</div>`
             )}
           </div>
           ${previewError
             ? html`<div class="preview-area"><div class="preview-error">${previewError}</div></div>`
-            : html`<${Preview} preview=${previews?.[tab]} placeholder="Loading preview…" active=${active}
+            : html`<${Preview} preview=${previews?.[tab]} placeholder=${t("Loading preview…")} active=${active}
                 revealSeq=${revealSeq} onPick=${select} />`}
         </div>
       </div>
     </div>
     <div class="sheet-foot">
-      <span class="note">Your data stays in Blankey. The AI assistant only learns where each value comes from, never the value.</span>
-      <button disabled=${busy} onClick=${cancel}>Cancel</button>
-      <button disabled=${busy} onClick=${() => save(false)}>Save</button>
-      <button class="primary" disabled=${busy} onClick=${() => save(true)}>Save and Generate</button>
+      <span class="note">${t("Your data stays in Blankey. The AI assistant only learns where each value comes from, never the value.")}</span>
+      <button disabled=${busy} onClick=${cancel}>${t("Cancel")}</button>
+      <button disabled=${busy} onClick=${() => save(false)}>${t("Save")}</button>
+      <button class="primary" disabled=${busy} onClick=${() => save(true)}>${t("Save and Generate")}</button>
     </div>`;
 }
 

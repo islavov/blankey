@@ -488,7 +488,8 @@ impl Tools {
 
 /// How long a tool call waits for the user to unlock the vault.
 const UNLOCK_WAIT: Duration = Duration::from_secs(50);
-const UNLOCK_REASON: &str = "Your AI assistant needs the vault. Unlock Blankey to continue.";
+/// Shown on the unlock screen, which translates it.
+const UNLOCK_REASON: &str = crate::i18n::mark("Your AI assistant needs the vault. Unlock Blankey to continue.");
 const LOCKED: &str =
     "The vault is locked and the user has not unlocked Blankey yet. Ask them to unlock it, then call again.";
 
@@ -1289,6 +1290,8 @@ pub mod tests {
     async fn collection_links_are_confirmed_by_the_user() {
         let dir = tempfile::tempdir().unwrap();
         let app = app(dir.path());
+        // agents always get English, whatever the user's language
+        app.set_language("bg");
         let t = Tools::new(app.clone());
         let (pid, _) = setup(&app, dir.path());
         let bad = [

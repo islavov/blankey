@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from "../vendor/preact-htm.js";
+import { t } from "./i18n.js";
 import { html } from "./lib.js";
 
 const ZOOM_MIN = 0.5;
@@ -35,7 +36,7 @@ const $$var = (root) => [...root.querySelectorAll("[data-var]")];
 
 function content(preview, placeholder, interactive) {
   if (!preview) return placeholder && html`<div class="preview-error">${placeholder}</div>`;
-  if (preview.type === "error") return html`<div class="preview-error">No preview: ${preview.message}</div>`;
+  if (preview.type === "error") return html`<div class="preview-error">${t("No preview: {error}", { error: preview.message })}</div>`;
   // the docx HTML comes from Blankey's own renderer, which escapes the document text
   if (preview.type === "html") return html`<div class="zoom"><div class="paper" dangerouslySetInnerHTML=${{ __html: preview.html }}></div></div>`;
   return html`<div class="zoom">${preview.pages.map((page) => html`<${PdfPage} page=${page} interactive=${interactive} />`)}</div>`;

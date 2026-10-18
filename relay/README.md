@@ -42,13 +42,14 @@ agent --POST /mcp (Bearer)--> relay --WebSocket frame--> Blankey app --> local M
   "account_url": "https://relay.example.com/account",
   "device_resource": "https://relay.example.com/device",
   "device_links": "https://relay.example.com/device/links",
-  "device_inbox": "https://relay.example.com/device/inbox"
+  "device_inbox": "https://relay.example.com/device/inbox",
+  "device_profile": "https://relay.example.com/device/profile"
 }
 ```
 
 `device_resource` is optional: the OAuth resource the app's tokens are for (see below). Relays with a single resource
 for everything leave it out. `device_links` and `device_inbox` are optional too: relays without collection links
-leave them out, and older apps ignore them.
+leave them out, and older apps ignore them. `device_profile` is optional as well (see Profile below).
 
 The app refuses a relay whose `protocol` it does not support, and any URL that is not `https`/`wss` unless the host is
 `localhost` or `127.0.0.1` (for development). `account_url` is shown to the user (sign up, billing, devices).
@@ -220,6 +221,15 @@ The form page is one static HTML file for every link, with its scripts under SRI
 the served public key against the fragment and refuses to seal on a mismatch or a missing fragment. The relay could
 still serve a page that skips that check; monitoring the served page from the app and serving it from a separate
 static origin are the documented next steps.
+
+## Profile
+
+`GET device_profile?device_id=<id>` with the device token → `200 {"lang": "bg" | null, ...}`: the UI language the
+user chose for the account (the codes in the app's `ui/i18n/languages.json`, such as `en` and `bg`). The app shows
+its window, tray and notifications in that language, or in the computer's language when it is null or unknown; MCP
+output stays English. The app reads the profile after each connect, when its window gains focus, and on
+`{"v": 1, "type": "profile"}` from the relay (no reply). Relays without `device_profile` leave the app to the
+computer's language.
 
 ## Revoking
 

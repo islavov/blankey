@@ -2,6 +2,8 @@ use chrono::NaiveDate;
 
 use serde_json::Value;
 
+use crate::i18n::mark;
+
 pub const TYPES: &[&str] = &["text", "number", "date", "bool", "egn", "iban", "email", "phone"];
 pub const TRUE_VALUES: &[&str] = &["1", "true", "да", "yes", "x"];
 const EGN_WEIGHTS: [u32; 9] = [2, 4, 8, 5, 10, 9, 7, 3, 6];
@@ -50,11 +52,11 @@ pub fn validate(field_type: &str, value: &str) -> Option<&'static str> {
         return None;
     }
     match field_type {
-        "number" => value.replace(' ', "").replace(',', ".").parse::<f64>().is_err().then_some("Invalid number"),
-        "date" => parse_date(value).is_none().then_some("Date must be DD.MM.YYYY"),
-        "egn" => (!valid_egn(value)).then_some("Invalid EGN"),
-        "iban" => (!valid_iban(value)).then_some("Invalid IBAN"),
-        "email" => (!valid_email(value)).then_some("Invalid email"),
+        "number" => value.replace(' ', "").replace(',', ".").parse::<f64>().is_err().then_some(mark("Invalid number")),
+        "date" => parse_date(value).is_none().then_some(mark("Date must be DD.MM.YYYY")),
+        "egn" => (!valid_egn(value)).then_some(mark("Invalid EGN")),
+        "iban" => (!valid_iban(value)).then_some(mark("Invalid IBAN")),
+        "email" => (!valid_email(value)).then_some(mark("Invalid email")),
         _ => None,
     }
 }

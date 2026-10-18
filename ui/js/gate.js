@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "../vendor/preact-htm.js";
 import { invoke, refreshStatus } from "./api.js";
-import { html, plural, reload, state, update, useStore } from "./lib.js";
+import { t, tn } from "./i18n.js";
+import { html, reload, state, update, useStore } from "./lib.js";
 import { processRequests } from "./requests.js";
 import { toast } from "./ui/feedback.js";
 
@@ -29,7 +30,7 @@ function tryQuickOnce() {
 }
 
 async function quickUnlock() {
-  if (await invoke("unlock_quick", { reason: state.gateReason ? "open your AI assistant's request" : null })) await enterApp();
+  if (await invoke("unlock_quick", { reason: state.gateReason ? t("open your AI assistant's request") : null })) await enterApp();
 }
 
 export function Gate() {
@@ -56,7 +57,8 @@ function GateForm({ title, text, onSubmit, children }) {
     try {
       await onSubmit(Object.fromEntries(new FormData(form.current)));
     } catch (err) {
-      setError(String(err));
+      // the backend's messages are English; the catalog has them
+      setError(t(String(err)));
       form.current.querySelector("input[type=password]")?.select();
     } finally {
       button.disabled = false;
@@ -75,22 +77,22 @@ function GateForm({ title, text, onSubmit, children }) {
     </div>`;
 }
 
-const keyringLabel = (status) => (status.biometric ? "Unlock with Touch ID" : "Unlock automatically with the keychain");
+const keyringLabel = (status) => (status.biometric ? t("Unlock with Touch ID") : t("Unlock automatically with the keychain"));
 
 function Setup() {
   const { status } = useStore();
   const create = async ({ password, confirm, keyring }) => {
-    if (password !== confirm) throw "The passwords do not match.";
+    if (password !== confirm) throw t("The passwords do not match.");
     const recovery = await invoke("setup", { password, useKeyring: keyring === "on" });
     update({ recoveryKey: recovery });
   };
   return html`
-    <${GateForm} title="Create your vault" onSubmit=${create}
-      text="Personal data is encrypted with this password. Without it or the recovery key the data cannot be read.">
-      <input type="password" name="password" placeholder="Master password (8+ characters)" />
-      <input type="password" name="confirm" placeholder="Repeat password" />
+    <${GateForm} title=${t("Create your vault")} onSubmit=${create}
+      text=${t("Personal data is encrypted with this password. Without it or the recovery key the data cannot be read.")}>
+      <input type="password" name="password" placeholder=${t("Master password (8+ characters)")} />
+      <input type="password" name="confirm" placeholder=${t("Repeat password")} />
       <label class="check small"><input type="checkbox" name="keyring" /> ${keyringLabel(status)}</label>
-      <button class="primary">Create vault</button>
+      <button class="primary">${t("Create vault")}</button>
     </${GateForm}>`;
 }
 
@@ -102,19 +104,19 @@ function Unlock({ onForgot }) {
     return () => window.removeEventListener("focus", tryQuickOnce);
   }, []);
 
-  const waiting = `${plural(status.pending, "request")} from your AI assistant ${status.pending === 1 ? "is" : "are"} waiting.`;
-  const text = gateReason || (status.pending ? waiting : "Enter your master password.");
+  const waiting = tn(status.pending, "{n} request from your AI assistant is waiting.", "{n} requests from your AI assistant are waiting.");
+  const text = gateReason || (status.pending ? waiting : t("Enter your master password."));
   const unlock = async ({ password }) => {
     await invoke("unlock", { password });
     await enterApp();
   };
   return html`
-    <${GateForm} title="Blankey is locked" text=${text} onSubmit=${unlock}>
-      <input type="password" name="password" placeholder="Master password" />
-      <button class="primary">Unlock</button>
+    <${GateForm} title=${t("Blankey is locked")} text=${text} onSubmit=${unlock}>
+      <input type="password" name="password" placeholder=${t("Master password")} />
+      <button class="primary">${t("Unlock")}</button>
       ${status.keyring_enabled &&
-      html`<button type="button" onClick=${quickUnlock}>${status.biometric ? "Use Touch ID" : "Use keychain"}</button>`}
-      <button type="button" class="link" onClick=${onForgot}>Forgot password?</button>
+      html`<button type="button" onClick=${quickUnlock}>${status.biometric ? t("Use Touch ID") : t("Use keychain")}</button>`}
+      <button type="button" class="link" onClick=${onForgot}>${t("Forgot password?")}</button>
     </${GateForm}>`;
 }
 
@@ -124,11 +126,11 @@ function Recovery({ onBack }) {
     await enterApp();
   };
   return html`
-    <${GateForm} title="Reset password" text="Enter the recovery key you saved when the vault was created." onSubmit=${reset}>
+    <${GateForm} title=${t("Reset password")} text=${t("Enter the recovery key you saved when the vault was created.")} onSubmit=${reset}>
       <input type="text" name="key" placeholder="XXXX-XXXX-…" class="mono" spellcheck="false" />
-      <input type="password" name="password" placeholder="New master password" />
-      <button class="primary">Unlock and set password</button>
-      <button type="button" class="link" onClick=${onBack}>Back</button>
+      <input type="password" name="password" placeholder=${t("New master password")} />
+      <button class="primary">${t("Unlock and set password")}</button>
+      <button type="button" class="link" onClick=${onBack}>${t("Back")}</button>
     </${GateForm}>`;
 }
 
@@ -136,16 +138,16 @@ function RecoveryKey({ recovery }) {
   const [saved, setSaved] = useState(false);
   const copy = async () => {
     await invoke("copy_text", { text: recovery });
-    toast("Recovery key copied");
+    toast(t("Recovery key copied"));
   };
   return html`
-    <${GateForm} title="Save your recovery key" onSubmit=${enterApp}
-      text="Store it somewhere safe. It is shown only once and lets you set a new password if you forget the current one.">
+    <${GateForm} title=${t("Save your recovery key")} onSubmit=${enterApp}
+      text=${t("Store it somewhere safe. It is shown only once and lets you set a new password if you forget the current one.")}>
       <div class="recovery">${recovery}</div>
-      <button type="button" onClick=${copy}>Copy</button>
+      <button type="button" onClick=${copy}>${t("Copy")}</button>
       <label class="check small">
-        <input type="checkbox" checked=${saved} onChange=${(e) => setSaved(e.target.checked)} /> I saved it somewhere safe
+        <input type="checkbox" checked=${saved} onChange=${(e) => setSaved(e.target.checked)} /> ${t("I saved it somewhere safe")}
       </label>
-      <button class="primary" disabled=${!saved}>Continue</button>
+      <button class="primary" disabled=${!saved}>${t("Continue")}</button>
     </${GateForm}>`;
 }

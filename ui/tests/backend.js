@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 // A fake Tauri backend: the commands the UI invokes, over an in-memory vault. Tests read `calls` and change `db`.
 
 const PAGE_IMAGE = "data:image/png;base64,iVBORw0KGgo=";
@@ -194,6 +196,8 @@ export function createBackend(db = seed()) {
       mcp_url: "http://127.0.0.1:8765/mcp",
       mcp_running: true,
       field_types: ["text", "date", "egn", "email", "bool"],
+      language: db.language || "en",
+      languages: { en: "English", bg: "Български" },
     }),
     setup: ({ password }) => {
       db.initialized = true;
@@ -252,7 +256,7 @@ export function createBackend(db = seed()) {
       return found;
     },
     resolve_submission: ({ sid, values }) => {
-      if (!values.name) return ["Full name: required"];
+      if (!values.name) return [{ label: "Full name", message: "required" }];
       removeRequest(db.submissions[sid].request_id);
       return [];
     },
@@ -283,7 +287,7 @@ export function createBackend(db = seed()) {
     list_profiles: () => db.profiles,
     profile_fields: ({ id }) => db.fields[id],
     save_fields: ({ id, fields }) => {
-      const problems = fields.filter((f) => f.key.includes(" ")).map((f) => `${f.key}: keys cannot contain spaces`);
+      const problems = fields.filter((f) => f.key.includes(" ")).map((f) => ({ label: f.key, message: "use dotted words without spaces" }));
       if (!problems.length) db.fields[id] = fields;
       return problems;
     },
@@ -304,7 +308,7 @@ export function createBackend(db = seed()) {
     },
     cancel_request: ({ id }) => removeRequest(id),
     resolve_profile_input: ({ id, values }) => {
-      if (!values.email) return ["Email is required"];
+      if (!values.email) return [{ label: "Email", message: "required" }];
       removeRequest(id);
       return [];
     },
@@ -322,6 +326,8 @@ export function createBackend(db = seed()) {
       return { fill_set_id: 9, document_ids: args.generate ? [3, 4] : [] };
     },
     fill_close: ({ args }) => removeRequest(args.request_id),
+    catalog: ({ language }) => (language === "en" ? {} : JSON.parse(readFileSync(new URL(`../i18n/${language}.json`, import.meta.url), "utf8"))),
+    focused: () => null,
     relay_status: () => db.relay,
     relay_summary: () => ({ signed_in: db.relay.signed_in, state: db.relay.state, account: db.relay.account }),
     relay_login: () => {
