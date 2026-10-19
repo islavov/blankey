@@ -2,10 +2,11 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
+use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Extensions, Implementation, ServerCapabilities, ServerConfig};
 use rmcp::{tool, tool_handler, tool_router, ServerHandler};
@@ -23,88 +24,23 @@ use crate::templates::engine::{self, dump};
 use crate::templates::{docx, fill, SaveTemplate, StrMap, TemplateKind, ID_RE};
 use crate::vault::{FieldInfo, Profile, Profiles, Request};
 
-pub const INSTRUCTIONS: &str = r#"Blankey keeps personal data (PII) encrypted in a local vault and renders document templates.
-You never see real values. You see profiles, their field keys, labels, types and value lengths.
-While the vault is locked only vault_status and the request tools answer at once (request_profile_input,
-request_fill, create_collection_link, wait_request, get_request, list_requests): a request opens Blankey and asks the user to
-unlock. Any other tool opens the unlock screen and waits up to 50 s for the user; if it still reports the
-vault as locked, ask the user to unlock Blankey and call again.
+pub const INSTRUCTIONS: &str = r#"Blankey fills document templates from personal data in an encrypted local vault. You never see values,
+only profiles' field keys, labels, types and value lengths: work from profile ids, never ask for values in chat.
+A locked vault: tools wait up to 50 s for the user to unlock it; if still locked, ask them to and retry.
 
-Search with criteria instead of paging through everything: the find tools return a capped page (limit,
-next_offset) of matches with counts, and describe_profile, get_template and get_fill_set give one item's detail.
+Filling, in one request_fill if you can: find_templates, find_profiles with the keys the template needs, then
+request_fill with a source for every var; wait_request returns the documents. copy_fill_set_id repeats a fill for
+another party. request_profile_input only to keep data in a profile for later.
 
-Workflow:
-1. find_templates first: reuse a template when one fits. Otherwise inspect_pdf_form on a blank PDF form (or
-   write a Typst template) to learn its fields.
-2. find_profiles with keys to see which profiles already hold the data a template needs (e.g.
-   keys: ["egn", "address"]); describe_profile for one profile's fields.
-3. save_template with Jinja bindings per field, e.g. "{{ applicant.address.city }}",
-   "{{ 'X' if applicant.citizenship == 'българско' }}", "{{ loan.amount | money }}". Always inside {{ }}:
-   a bare applicant.address.city is plain text and is rejected.
-   Checkboxes: any truthy value checks them. Radio groups: return the state name, e.g. "/Choice2".
-   Name templates, roles and variables for the kind of document and party, not for the case at hand:
-   a template is reused across many fills. Roles are the parties the document is about; do not add a role
-   only to reach data in another profile (request_fill can read any profile).
-4. save_example + render_example to fill the template with invented example data and look at the result.
-5. check_bindings against real profiles: reports missing/empty keys, plain-text bindings (literal),
-   overflow (fit_ratio > 1) and missing glyphs, without revealing values.
-6. request_fill to have the user fill the template into a named fill set and generate the real document,
-   in one call. Pick the profile for every role yourself and pass it in profiles; do not ask the user to
-   choose. Then decide the source of every var yourself (get_template fields against the profile keys):
-   - values: non-personal data you know (listing details, amounts, deadlines, city).
-   - paths: data already in a profile, as "role.key" for a role's profile, or "profile:ID.key" for any
-     other profile, e.g. {"buyer_name": "buyer.full_name", "offered_price": "profile:9.offered_price"}.
-     Not needed when the default is already exactly "{{ role.key }}".
-   - ask: everything else, {var: short hint}. The user types it in the form; it stays in this fill set
-     only. Never put personal data in values: ask for it instead.
-   Speed matters more than a perfect guess: the user fixes any source in the form. Documents are always
-   generated from a fill set. To reuse an earlier fill (same terms, other party) pass copy_fill_set_id
-   with the new profiles and a new name; fill_set_id reopens a fill set and saves over it.
-7. request_profile_input only when the user wants data kept in a profile for later fills.
-The user exports real documents from the app; you only get their metadata.
+New template, named for the kind of document and party (not this case): inspect_pdf, then save_template (form)
+or save_pdf_overlay_template (flat); inspect_docx, then save_docx_template; or save_template with Typst
+source_text. Bindings are Jinja in {{ }}: "{{ applicant.address.city }}", "{{ loan.amount | money }}".
+Check it with render_example and check_bindings.
+"#;
 
-Filled .docx documents (contracts, decisions...):
-1. inspect_docx to read the paragraphs and their runs.
-2. save_docx_template with replacements [{find, var, occurrence?}] that turn the variable spans
-   (names, ids, addresses, amounts, dates, dot blanks like "......") into {{ var }} tags. Replace only the
-   value, not its label ("ЕГН ......" -> find the dots with occurrence). A span must sit inside one run.
-   Use the same var names across related documents so one fill covers them all.
-   fields gives a default per var: "{{ manager.egn }}", "{{ manager.name | upper }}", "{{ today() }}".
-3. request_fill for one or more templates, with values, paths and ask as in step 6 above: the user sees
-   every blank with its context and can change its source. wait_request returns the fill set id and
-   document ids.
-4. find_fill_sets finds saved fill sets and get_fill_set shows one's sources; request_fill with fill_set_id
-   reopens one, with copy_fill_set_id starts a new one from it.
-
-Flat PDFs (no form fields, e.g. exports or scans):
-1. inspect_pdf_layout: pages with a coordinate grid (PDF points, origin bottom-left) and the printed text lines
-   with their boxes.
-2. save_pdf_overlay_template with boxes [{name, page, rect: [x0, y0, x1, y1], type: text|check, max_len?, comb?}]
-   placed where values go (right of / below their printed labels), plus fields (name -> Jinja expression) and labels.
-   It returns the pages with the boxes outlined: check them and call again with corrected boxes (source_path can
-   be omitted then; the original flat PDF is kept). A check box gets "X" when its expression is truthy text.
-3. save_example + render_example, then request_fill as for any PDF form.
-
-Remote sessions (through Blankey Online) cannot read local paths:
-1. request_file with kind pdf or docx and a reason: the user picks the file in the app.
-2. wait_request returns {file_id, kind, size} when the user has chosen it. Over Blankey Online wait_request returns
-   after at most 50 s: call it again while the status is pending.
-3. Pass the file id ("file:<uuid>") wherever a tool takes path or source_path.
-
-Collection links (needs a Blankey Online sign-in), only for data that someone else holds: a short link to a web form that another person fills in. Their
-answers and files are encrypted in their browser to this computer and land in a profile; you never see them.
-1. create_collection_link with the fields to ask for (and files), and the profile to save into. Use the keys
-   your templates bind to, so the answers fill them directly.
-2. The user confirms it in Blankey; wait_request then returns the url to send. The url is not secret.
-3. list_collection_links shows each link's status, how many submissions wait for the user (pending) and the
-   profiles they were saved into (saved_into), with a next step.
-4. A pending submission waits for the user to review it in Blankey and save it into a profile; ask them to.
-5. Once saved, the values are in that profile: describe_profile to see which fields are filled, then
-   check_bindings and request_fill with that profile to produce the document, passing paths that map each
-   template var to the key you asked for in the link. Kept files are on the user's
-   Documents page in Blankey.
-Never ask the user to paste or copy submitted values (or any vault values) into the chat: this is what Blankey
-keeps away from you. Work from the profile id instead.
+/// Added to the instructions when the user is signed in to Blankey Online.
+pub const LINK_INSTRUCTIONS: &str = r#"Collection links collect data someone else holds: create_collection_link; once the user confirms it,
+wait_request returns the url to send. list_collection_links shows submissions and the profiles they went into.
 "#;
 
 pub const TOOL_TIMEOUT_MAX: u64 = 1800;
@@ -160,7 +96,7 @@ fn next_step(received: i64, pending: usize, saved_into: &[i64]) -> String {
         [id] => format!("The values are saved in profile {id}"),
         ids => format!("The values are saved in profiles {ids:?}"),
     };
-    let use_them = "use describe_profile, then request_fill with paths mapping each template var to these keys. \
+    let use_them = "use find_profiles with ids and with_fields, then request_fill with paths mapping each template var to these keys. \
                     Do not ask the user to paste the values.";
     match (pending, saved.is_empty()) {
         (0, true) if received == 0 => "Nothing received yet.".into(),
@@ -290,12 +226,6 @@ mod lenient {
 // -- arguments ---------------------------------------------------------------------------------------------
 
 #[derive(Deserialize, JsonSchema)]
-pub struct ProfileArgs {
-    #[serde(deserialize_with = "lenient::int")]
-    profile_id: i64,
-}
-
-#[derive(Deserialize, JsonSchema)]
 pub struct FindProfilesArgs {
     /// Words to match in the name, kind, field keys and labels.
     query: Option<String>,
@@ -396,20 +326,13 @@ pub struct PathArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub struct InspectPdfFormArgs {
+pub struct InspectPdfArgs {
     /// A local path, or a file id from request_file.
     path: String,
-    /// 1-based pages to render with every field outlined and named.
-    annotate_pages: Option<Vec<usize>>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct InspectPdfLayoutArgs {
-    /// A local path, or a file id from request_file.
-    path: String,
-    /// 1-based pages; default all.
+    /// 1-based pages to render: a form's pages with its fields outlined (default none), a flat PDF's pages
+    /// with the grid (default all).
     pages: Option<Vec<usize>>,
-    /// Image resolution, default 80.
+    /// Image resolution, default 80 (110 for outlined form pages).
     #[serde(default, deserialize_with = "lenient::opt_int")]
     dpi: Option<i64>,
 }
@@ -465,17 +388,12 @@ pub struct SaveDocxArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub struct SaveExampleArgs {
-    template_id: String,
-    name: String,
-    data: Option<Map<String, Value>>,
-}
-
-#[derive(Deserialize, JsonSchema)]
 pub struct RenderExampleArgs {
     template_id: String,
     /// A saved example name or an inline dict keyed by role.
     example: Value,
+    /// Keep an inline example under this name for later renders.
+    save_as: Option<String>,
     /// 1-based pages; default all.
     pages: Option<Vec<usize>>,
     /// Image resolution, default 80.
@@ -571,12 +489,6 @@ pub struct CreateCollectionLinkArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub struct RequestArgs {
-    #[serde(deserialize_with = "lenient::int")]
-    request_id: i64,
-}
-
-#[derive(Deserialize, JsonSchema)]
 pub struct WaitRequestArgs {
     #[serde(deserialize_with = "lenient::int")]
     request_id: i64,
@@ -604,9 +516,32 @@ pub struct Tools {
     unlock_wait: Duration,
 }
 
+/// Tools that need a Blankey Online sign-in; hidden from the tool list without one.
+const ONLINE_TOOLS: &[&str] = &["create_collection_link", "list_collection_links"];
+
 impl Tools {
     pub fn new(app: Arc<Blankey>) -> Self {
         Self { app, unlock_wait: UNLOCK_WAIT }
+    }
+
+    fn online(&self) -> bool {
+        self.app.vault().relay_account().ok().flatten().is_some()
+    }
+
+    fn router(&self) -> &'static ToolRouter<Self> {
+        static ALL: OnceLock<ToolRouter<Tools>> = OnceLock::new();
+        static OFFLINE: OnceLock<ToolRouter<Tools>> = OnceLock::new();
+        if self.online() {
+            ALL.get_or_init(Self::tool_router)
+        } else {
+            OFFLINE.get_or_init(|| {
+                let mut router = Self::tool_router();
+                for name in ONLINE_TOOLS {
+                    router.remove_route(name);
+                }
+                router
+            })
+        }
     }
 
     /// Reading or changing data needs the vault unlocked: a locked vault opens Blankey's unlock screen and the
@@ -637,15 +572,6 @@ const LOCKED: &str =
 
 #[tool_router]
 impl Tools {
-    #[tool(description = "Whether the vault exists and is unlocked. Every other tool needs it unlocked.")]
-    async fn vault_status(&self) -> ToolResult {
-        self.run_any(|app| {
-            let vault = app.vault();
-            text(&json!({"initialized": vault.initialized(), "unlocked": vault.unlocked()}))
-        })
-        .await
-    }
-
     #[tool(
         description = "Find profiles (people, companies, deals...) by name, kind or the field keys they hold. keys shows where\ndata already is: keys: [\"offered_price\"] returns the profiles with that key filled, with its value length.\nEach result has field counts; with_fields lists the fields (no values). Paged: total, next_offset."
     )]
@@ -701,20 +627,6 @@ impl Tools {
     }
 
     #[tool(
-        description = "Field keys of a profile with label, type and value length in characters (0 = empty). No values."
-    )]
-    async fn describe_profile(&self, Parameters(a): Parameters<ProfileArgs>) -> ToolResult {
-        self.run(move |app| {
-            app.audit("mcp", "describe_profile", &a.profile_id.to_string());
-            let vault = app.vault();
-            let profile = vault.get_profile(a.profile_id).map_err(string)?;
-            let fields = vault.describe(a.profile_id).map_err(string)?;
-            text(&json!({"id": profile.id, "name": profile.name, "kind": profile.kind, "fields": fields}))
-        })
-        .await
-    }
-
-    #[tool(
         description = "Find saved templates by words in their id, name, description, roles, vars and labels, or by kind, role\nor var. Look for an existing template before making a new one. Show the user each template's id next to its\nname. get_template gives one template's fields. Paged: total, next_offset."
     )]
     async fn find_templates(&self, Parameters(a): Parameters<FindTemplatesArgs>) -> ToolResult {
@@ -758,36 +670,32 @@ impl Tools {
     }
 
     #[tool(
-        description = "List the AcroForm fields of a local PDF (name, type, page, rects in PDF points, comb length,\nbutton states). annotate_pages renders those 1-based pages with every field outlined and named."
+        description = "Read a PDF to make a template from it. A form (has AcroForm fields): its fields (name, type, page,\nrect in PDF points, comb length, button states), plus the given pages with every field outlined; next\nsave_template. A flat or scanned PDF: per page its size and printed text lines with [x0, y0, x1, y1] boxes\n(PDF points, origin bottom-left), and each page as an image with a coordinate grid (lines every 50 pt,\nlabels every 100 pt; default all pages); next save_pdf_overlay_template."
     )]
-    async fn inspect_pdf_form(&self, Parameters(a): Parameters<InspectPdfFormArgs>, ext: Extensions) -> ToolResult {
+    async fn inspect_pdf(&self, Parameters(a): Parameters<InspectPdfArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
         self.run(move |app| {
             let pdf = read_file(app, remote.as_ref(), &a.path)?;
             let fields = pdf_form::inspect_form(&pdf)?;
-            let mut out = vec![ContentBlock::text(dump(&fields))];
-            for page in a.annotate_pages.unwrap_or_default() {
-                out.push(png(preview::annotate_fields(&pdf, &fields, page, 110.0)?));
-            }
-            ok(out)
-        })
-        .await
-    }
-
-    #[tool(
-        description = "Read a local (flat or scanned) PDF to place form boxes: per page its size in points, printed text lines\nwith [x0, y0, x1, y1] boxes (PDF points, origin bottom-left) and existing form fields, plus each page as an\nimage with a coordinate grid (lines every 50 pt, labels every 100 pt). Default pages: all."
-    )]
-    async fn inspect_pdf_layout(&self, Parameters(a): Parameters<InspectPdfLayoutArgs>, ext: Extensions) -> ToolResult {
-        let remote = remote(&ext);
-        self.run(move |app| {
-            let pdf = read_file(app, remote.as_ref(), &a.path)?;
             let sizes = preview::page_sizes(&pdf)?;
-            let mut selected = a.pages.unwrap_or_default();
-            if selected.is_empty() {
-                selected = (1..=sizes.len()).collect();
-            }
+            let mut selected = a.pages.clone().unwrap_or_default();
             if let Some(bad) = selected.iter().find(|p| **p == 0 || **p > sizes.len()) {
                 return Err(format!("page must be 1..{} (got {bad})", sizes.len()));
+            }
+            if !fields.is_empty() {
+                let mut out = vec![ContentBlock::text(dump(&json!({"kind": "form", "form_fields": fields})))];
+                for page in selected {
+                    out.push(png(preview::annotate_fields(
+                        &pdf,
+                        &fields,
+                        page,
+                        a.dpi.map_or(110.0, |d| d.clamp(30, 300) as f32),
+                    )?));
+                }
+                return ok(out);
+            }
+            if selected.is_empty() {
+                selected = (1..=sizes.len()).collect();
             }
             let round = |v: f32| ((v as f64) * 10.0).round() / 10.0;
             let pages: Vec<Value> = selected
@@ -802,8 +710,7 @@ impl Tools {
                     }))
                 })
                 .collect::<Result<_, String>>()?;
-            let info = json!({"pages": pages, "form_fields": pdf_form::inspect_form(&pdf)?});
-            let mut out = vec![ContentBlock::text(dump(&info))];
+            let mut out = vec![ContentBlock::text(dump(&json!({"kind": "flat", "pages": pages})))];
             for page in selected {
                 out.push(png(preview::grid_page(&pdf, page, dpi(a.dpi))?));
             }
@@ -813,7 +720,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Make a PDF form template from a flat PDF: each box {name, page, rect: [x0, y0, x1, y1], type: text|check,\nmax_len?, comb?} (PDF points, origin bottom-left) becomes a form field named `name`. fields maps those names\nto Jinja expressions over roles; labels maps them to human labels for the fill form. Name boxes and roles\ngenerically (applicant, amount, issue_date), not after this document's values. Omit source_path to\nrebuild from the flat PDF saved earlier (replaces all boxes). Returns the template and its pages with the\nboxes outlined, to check placement."
+        description = "Make a PDF form template from a flat PDF: each box {name, page, rect: [x0, y0, x1, y1], type: text|check,\nmax_len?, comb?} (PDF points, origin bottom-left) becomes a form field named `name`. Place boxes where values go,\nright of or below their printed labels; a check box gets \"X\" when its expression is truthy. fields maps the\nnames to Jinja expressions over roles; labels maps them to labels for the fill form. Omit source_path to rebuild\nfrom the flat PDF saved earlier (replaces all boxes). Returns the pages with the boxes outlined: check them and\ncall again to correct."
     )]
     async fn save_pdf_overlay_template(
         &self,
@@ -876,7 +783,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Create or replace a template. kind: pdf_form (source_path = blank PDF form), typst (source_text,\nreads `json(bytes(sys.inputs.data))` for the field values) or docx (source_path, docxtpl Jinja tags).\nfields maps PDF field names / template variables to Jinja expressions over the roles.\nroles maps role names (e.g. applicant, loan) to a short description. Name the template, its roles\nand its variables for the kind of document and party (applicant, counterparty, amount, start_date),\nnot for the particular case in front of you, so the template and its fill sets work for other\ncases too. Omit the source to keep the existing one."
+        description = "Create or replace a template. kind: pdf_form (source_path = blank PDF form), typst (source_text,\nreads `json(bytes(sys.inputs.data))` for the field values) or docx (source_path, docxtpl Jinja tags).\nfields maps PDF field names / template variables to Jinja expressions over the roles.\nroles maps role names (e.g. applicant, loan) to a short description. Name the template, its roles\nand its variables for the kind of document and party (applicant, counterparty, amount, start_date),\nnot for the particular case in front of you, so the template and its fill sets work for other\ncases too. Checkboxes check on any truthy value; radio groups take the state name (\"/Choice2\").\nOmit the source to keep the existing one."
     )]
     async fn save_template(&self, Parameters(a): Parameters<SaveTemplateArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
@@ -911,7 +818,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Create a docx template from a filled .docx: each replacement {find, var, occurrence?} replaces the\ntext with {{ var }} (occurrence is 1-based across the document; omit it to replace all). Replacements\napply in order, so put longer spans first (\".......2026\" before \"......\"). fields maps\nvar -> default Jinja expression over roles; labels maps var -> human label shown in the fill form.\nName vars and roles generically (counterparty_name, amount, signing_date), not after the names or\nvalues in this particular document."
+        description = "Create a docx template from a filled .docx: each replacement {find, var, occurrence?} replaces the\ntext with {{ var }} (occurrence is 1-based across the document; omit it to replace all). Replace the value, not\nits label (\"ЕГН ......\": find the dots, with occurrence); a span must sit inside one run. Replacements apply in\norder, so put longer spans first (\".......2026\" before \"......\"). fields maps var -> default Jinja expression\nover roles; labels maps var -> label shown in the fill form. Use generic var names (counterparty_name, amount,\nsigning_date), the same across related documents so one fill covers them all."
     )]
     async fn save_docx_template(&self, Parameters(a): Parameters<SaveDocxArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
@@ -947,18 +854,6 @@ impl Tools {
     }
 
     #[tool(
-        description = "Store an invented example dataset keyed by role, e.g. {\"applicant\": {\"name\": \"Иван Иванов\"}}."
-    )]
-    async fn save_example(&self, Parameters(a): Parameters<SaveExampleArgs>) -> ToolResult {
-        self.run(move |app| {
-            let data = Value::Object(a.data.unwrap_or_default());
-            app.templates.save_example(&a.template_id, &a.name, &data)?;
-            ok(vec![ContentBlock::text(format!("Saved example '{}'", a.name))])
-        })
-        .await
-    }
-
-    #[tool(
         description = "Render a template with example data (a saved example name or an inline dict keyed by role).\nReturns warnings, the preview PDF path and PNGs of the selected pages (default: all)."
     )]
     async fn render_example(&self, Parameters(a): Parameters<RenderExampleArgs>, ext: Extensions) -> ToolResult {
@@ -970,6 +865,9 @@ impl Tools {
                 data @ Value::Object(_) => data,
                 _ => return Err("example must be a saved example name or a dict keyed by role".into()),
             };
+            if let Some(name) = a.save_as.as_deref().filter(|n| !n.is_empty()) {
+                app.templates.save_example(&a.template_id, name, &data)?;
+            }
             let rendered = engine::render_example(&template, &example_context(&data))?;
             let out_path = app.config.previews_dir().join(format!("{}-example.{}", a.template_id, rendered.extension));
             std::fs::write(&out_path, &rendered.content).map_err(string)?;
@@ -1055,7 +953,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Open the fill form for one or more templates. profiles maps each role the bindings use to a profile\nid: pick them yourself (find_profiles with keys) instead of asking the user. Give every var a source:\nvalues are non-personal literals (e.g. {\"loan_amount\": \"34 000\"}); paths read vault fields, \"role.key\" or\n\"profile:ID.key\" for any profile (e.g. {\"borrower_egn\": \"manager.egn\", \"price\": \"profile:9.price\"});\nask lists vars the user types in the form, {var: hint}, kept in this fill set only (use it for personal data\nnot in any profile). Other vars start from the template default, or from the fill set; a default that gives no\nvault value (plain text or a missing key) is refused unless allow_defaults is true. fill_set_id reopens a fill\nset and saves over it; copy_fill_set_id starts from one and saves a new fill set under name. name names the\nfill set. Returns a request id; call wait_request."
+        description = "Open the fill form; the user checks it and generates the documents. profiles maps each role the bindings\nread to a profile id: pick them yourself instead of asking. Give every var a source:\n- values: non-personal data you know (amounts, dates, listing details).\n- paths: data already in a profile, \"role.key\", or \"profile:ID.key\" for any profile. Not needed when the\n  template default is exactly \"{{ role.key }}\".\n- ask: {var: hint} for the rest; the user types it in the form and it stays in this fill set only. Never put\n  personal data in values.\nSpeed beats a perfect guess: the user can change any source. A var left on a default that gives no vault value is\nrefused unless allow_defaults. fill_set_id reopens a fill set and saves over it; copy_fill_set_id starts from one\nand saves a new fill set under name. Returns a request id; call wait_request."
     )]
     async fn request_fill(&self, Parameters(a): Parameters<RequestFillArgs>, ext: Extensions) -> ToolResult {
         let grant = remote(&ext).map(|r| r.grant);
@@ -1250,7 +1148,7 @@ impl Tools {
 
     /// Polls without holding the vault between checks.
     #[tool(
-        description = "Wait until the user resolves a request (or the timeout passes). Returns status and metadata only."
+        description = "Wait until the user resolves a request, or the timeout passes (timeout_s 0 returns the current status).\nReturns status and metadata only."
     )]
     async fn wait_request(&self, Parameters(a): Parameters<WaitRequestArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
@@ -1263,15 +1161,6 @@ impl Tools {
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-    }
-
-    #[tool(description = "Current status of a request.")]
-    async fn get_request(&self, Parameters(a): Parameters<RequestArgs>, ext: Extensions) -> ToolResult {
-        let remote = remote(&ext);
-        self.run_any(move |app| {
-            text(&request_view(&visible(app.vault().get_request(a.request_id).map_err(string)?, remote.as_ref())?))
-        })
-        .await
     }
 
     #[tool(
@@ -1407,12 +1296,14 @@ impl Tools {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.router())]
 impl ServerHandler for Tools {
     fn get_info(&self) -> ServerConfig {
+        let instructions =
+            if self.online() { format!("{INSTRUCTIONS}\n{LINK_INSTRUCTIONS}") } else { INSTRUCTIONS.into() };
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("blankey", env!("CARGO_PKG_VERSION")))
-            .with_instructions(INSTRUCTIONS)
+            .with_instructions(instructions)
     }
 }
 
@@ -1498,8 +1389,6 @@ pub mod tests {
             counter.fetch_add(1, Ordering::SeqCst);
         });
         let t = Tools { app: app.clone(), unlock_wait: Duration::ZERO };
-        let (status, _) = out(t.vault_status().await);
-        assert!(status.contains("\"unlocked\": false"), "{status}");
         for result in [
             t.find_profiles(args(json!({}))).await,
             t.find_templates(args(json!({}))).await,
@@ -1527,18 +1416,18 @@ pub mod tests {
                           "fields": {"name": "{{ applicant.name }}", "egn": "{{ applicant.egn }}"},
                           "roles": {"applicant": "person"}});
         let mut outputs = vec![
-            out(t.vault_status().await),
             out(t.find_profiles(args(json!({}))).await),
             out(t.find_profiles(args(json!({"with_fields": true, "keys": ["name", "egn"]}))).await),
-            out(t.describe_profile(args(json!({"profile_id": pid}))).await),
-            out(t.inspect_pdf_form(args(json!({"path": source})), local()).await),
+            out(t.find_profiles(args(json!({"ids": [pid], "with_fields": true}))).await),
+            out(t.inspect_pdf(args(json!({"path": source, "pages": [1]})), local()).await),
             out(t.save_template(args(save), local()).await),
             out(t.find_templates(args(json!({"query": "t"}))).await),
             out(t.get_template(args(json!({"template_id": "t"}))).await),
             out(t
-                .save_example(args(
-                    json!({"template_id": "t", "name": "ex", "data": {"applicant": {"name": "Example"}}}),
-                ))
+                .render_example(
+                    args(json!({"template_id": "t", "example": {"applicant": {"name": "Example"}}, "save_as": "ex"})),
+                    local(),
+                )
                 .await),
             out(t.render_example(args(json!({"template_id": "t", "example": "ex"})), local()).await),
             out(t.check_bindings(args(json!({"template_id": "t", "profiles": {"applicant": pid}}))).await),
@@ -1556,7 +1445,7 @@ pub mod tests {
                 .await),
             out(t.request_file(args(json!({"kind": "pdf", "reason": "The blank form"})), local()).await),
             out(t.inspect_docx(args(json!({"path": docx})), local()).await),
-            out(t.inspect_pdf_layout(args(json!({"path": source})), local()).await),
+            out(t.inspect_pdf(args(json!({"path": fixture("flat.pdf").display().to_string()})), local()).await),
             out(t
                 .save_docx_template(
                     args(json!({"template_id": "d", "name": "D", "source_path": docx,
@@ -1585,8 +1474,6 @@ pub mod tests {
         assert!(app.resolve_submission("sub-saved", target, &values, &[0]).unwrap().is_empty());
         let waiting = submit(&app, "Ab3dE9z", &public, &sent, "sub-waiting");
         for id in [saved, waiting] {
-            let hidden = t.get_request(args(json!({"request_id": id})), local()).await.unwrap_err();
-            assert!(hidden.contains("Unknown request"), "{hidden}");
             let hidden = t.wait_request(args(json!({"request_id": id, "timeout_s": 0})), local()).await.unwrap_err();
             assert!(hidden.contains("Unknown request"), "{hidden}");
         }
@@ -1597,7 +1484,6 @@ pub mod tests {
         ]);
         outputs.extend([
             out(t.find_documents(args(json!({}))).await),
-            out(t.get_request(args(json!({"request_id": 1})), local()).await),
             out(t.wait_request(args(json!({"request_id": 1, "timeout_s": 0})), local()).await),
             out(t.list_requests(args(json!({})), local()).await),
             out(t.find_fill_sets(args(json!({}))).await),
@@ -1849,8 +1735,8 @@ pub mod tests {
         let app = app(dir.path());
         let t = Tools::new(app.clone());
         let source = fixture("flat.pdf").display().to_string();
-        let (layout, grids) = out(t.inspect_pdf_layout(args(json!({"path": source})), local()).await);
-        assert!(layout.contains("\"Name:\"") && grids == 1, "{layout}");
+        let (layout, grids) = out(t.inspect_pdf(args(json!({"path": source})), local()).await);
+        assert!(layout.contains("\"kind\": \"flat\"") && layout.contains("\"Name:\"") && grids == 1, "{layout}");
         let save = json!({
             "template_id": "flat", "name": "Flat",
             "boxes": [{"name": "name", "page": 1, "rect": [90, 785, 400, 803]}],
@@ -1883,8 +1769,7 @@ pub mod tests {
         let docx_save = json!({"template_id": "d", "name": "D", "source_path": docx, "replacements": [],
                                "roles": {}, "fields": {}});
         let refused = [
-            t.inspect_pdf_form(args(json!({"path": source})), remote()).await,
-            t.inspect_pdf_layout(args(json!({"path": source})), remote()).await,
+            t.inspect_pdf(args(json!({"path": source})), remote()).await,
             t.save_template(args(save.clone()), remote()).await,
             t.save_pdf_overlay_template(args(overlay), remote()).await,
             t.inspect_docx(args(json!({"path": docx})), remote()).await,
@@ -1895,7 +1780,8 @@ pub mod tests {
             assert!(error.contains("call request_file"), "{error}");
         }
         assert!(app.templates.all().is_empty());
-        out(t.inspect_pdf_form(args(json!({"path": source})), local()).await);
+        let (form, images) = out(t.inspect_pdf(args(json!({"path": source})), local()).await);
+        assert!(form.contains("\"kind\": \"form\"") && images == 0, "{form}");
 
         let error = t.request_file(args(json!({"kind": "xlsx", "reason": "r"})), local()).await.unwrap_err();
         assert!(error.contains("pdf, docx"), "{error}");
@@ -1919,15 +1805,14 @@ pub mod tests {
         let other = || remote_as("g2");
         let wait = json!({"request_id": id, "timeout_s": 0});
         assert!(t.wait_request(args(wait), other()).await.unwrap_err().contains("Unknown request"));
-        assert!(t.get_request(args(json!({"request_id": id})), other()).await.unwrap_err().contains("Unknown request"));
         assert!(out(t.list_requests(args(json!({})), other()).await).0.contains("\"total\":0"));
         assert!(out(t.list_requests(args(json!({})), remote()).await).0.contains(&file_id));
         assert!(out(t.list_requests(args(json!({})), local()).await).0.contains(&file_id));
-        let error = t.inspect_pdf_form(args(json!({"path": file_id})), other()).await.unwrap_err();
+        let error = t.inspect_pdf(args(json!({"path": file_id})), other()).await.unwrap_err();
         assert!(error.contains("Unknown file id"), "{error}");
-        out(t.inspect_pdf_form(args(json!({"path": file_id})), local()).await);
+        out(t.inspect_pdf(args(json!({"path": file_id})), local()).await);
 
-        let (fields, _) = out(t.inspect_pdf_form(args(json!({"path": file_id})), remote()).await);
+        let (fields, _) = out(t.inspect_pdf(args(json!({"path": file_id})), remote()).await);
         assert!(fields.contains("name"), "{fields}");
         let mut save = save;
         save["source_path"] = json!(file_id);
@@ -1936,11 +1821,11 @@ pub mod tests {
         let upper = file_id.to_uppercase().replace("FILE:", "file:");
         let simple = file_id.replace('-', "");
         for bad in ["file:../x", "file:abc", "file:../../data/vault.db", &upper, &simple, &format!("{file_id}/..")] {
-            let error = t.inspect_pdf_form(args(json!({"path": bad})), remote()).await.unwrap_err();
+            let error = t.inspect_pdf(args(json!({"path": bad})), remote()).await.unwrap_err();
             assert!(error.contains("Unknown file id"), "{bad}: {error}");
         }
         let missing = format!("file:{}", uuid::Uuid::new_v4());
-        assert!(t.inspect_pdf_form(args(json!({"path": missing})), local()).await.unwrap_err().contains("Unknown"));
+        assert!(t.inspect_pdf(args(json!({"path": missing})), local()).await.unwrap_err().contains("Unknown"));
     }
 
     #[test]
