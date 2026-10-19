@@ -18,7 +18,18 @@ export async function openFill(args) {
   let session;
   try {
     session = await call("fill_open", {
-      args: { templates: [], profiles: {}, name: "", values: {}, paths: {}, fill_set_id: null, request_id: null, ...args },
+      args: {
+        templates: [],
+        profiles: {},
+        name: "",
+        values: {},
+        paths: {},
+        ask: {},
+        fill_set_id: null,
+        copy_fill_set_id: null,
+        request_id: null,
+        ...args,
+      },
     });
   } catch {
     if (args.request_id) await invoke("cancel_request", { id: args.request_id }).catch(() => {});
@@ -43,9 +54,14 @@ function FillForm({ session: s, close }) {
   const [fillSetId, setFillSetId] = useState(s.fill_set_id);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [active, setActive] = useState(s.vars[0]?.name || null);
-  const [typing, setTyping] = useState(null);
-  const [evaluation, setEvaluation] = useState({ sources: {}, rows: {}, empty: [] });
+  // blanks the assistant asked the user to type, in form order; the first one still empty opens ready to type
+  const asked = s.vars.map((v) => v.name).filter((name) => name in s.ask);
+  const nextAsked = (after, current) =>
+    asked.find((name, i) => i > asked.indexOf(after) && !current[name]?.value) ?? null;
+  const firstAsked = asked.find((name) => !s.bindings[name]?.value) ?? null;
+  const [active, setActive] = useState(firstAsked || s.vars[0]?.name || null);
+  const [typing, setTyping] = useState(firstAsked);
+  const [evaluation, setEvaluation] = useState({ sources: {}, rows: {}, empty: [], used_roles: Object.keys(s.roles) });
   const [previews, setPreviews] = useState(null);
   const [previewError, setPreviewError] = useState("");
   const [tab, setTab] = useState(templateIds[0]);
@@ -92,6 +108,36 @@ function FillForm({ session: s, close }) {
 
   const bind = (field, binding) => setBindings({ ...bindings, [field]: binding });
 
+  const profileName = (id) => s.all_profiles.find((p) => p.id === id)?.name ?? `#${id}`;
+
+  const at = (anchor, items) => {
+    const rect = anchor.getBoundingClientRect();
+    popup(rect.left, rect.bottom + 2, items, rect.width);
+  };
+
+  /** Any profile's fields, not only the ones chosen for the roles: pick the profile, then the field. */
+  const otherProfileMenu = (field, anchor) =>
+    at(
+      anchor,
+      s.all_profiles.map((p) => ({
+        label: `${p.name}${p.kind ? `  (${p.kind})` : ""}`,
+        action: async () => {
+          const entries = await invoke("fill_profile_entries", { profileId: p.id }).catch((e) => {
+            toast(String(e), 5000);
+            return null;
+          });
+          if (!entries) return;
+          const items = entries.length
+            ? entries.map((entry) => ({
+                label: `${entry.path}  —  ${entry.value || t("(empty)")}`,
+                action: () => bind(field, { path: entry.path, profile: p.id }),
+              }))
+            : [{ head: t("This profile has no fields") }];
+          at(anchor, [{ head: p.name }, ...items]);
+        },
+      }))
+    );
+
   const sourceMenu = (field, anchor) => {
     const v = s.vars.find((x) => x.name === field);
     const items = sourceItems({
@@ -102,9 +148,10 @@ function FillForm({ session: s, close }) {
       hasRoles: Object.keys(s.roles).length > 0,
       choose: (binding) => bind(field, binding),
       type: () => setTyping(field),
+      otherProfile: s.all_profiles.length ? () => otherProfileMenu(field, anchor) : null,
+      profileName,
     });
-    const rect = anchor.getBoundingClientRect();
-    popup(rect.left, rect.bottom + 2, items, rect.width);
+    at(anchor, items);
   };
 
   const save = async (generate) => {
@@ -172,7 +219,7 @@ function FillForm({ session: s, close }) {
     setProfiles(next);
   };
 
-  const missing = Object.keys(s.roles).filter((role) => !profiles[role]);
+  const missing = evaluation.used_roles.filter((role) => !profiles[role]);
   const total = s.vars.length;
   const empty = evaluation.empty.length;
   const fields = tn(total, "{n} field", "{n} fields");
@@ -194,7 +241,7 @@ function FillForm({ session: s, close }) {
           ([role, description]) => html`
             <label title=${description}>${role}</label>
             <${Select} value=${profiles[role] ?? ""} onChange=${(value) => chooseProfile(role, value)} options=${[
-              ["", t("Choose a profile…")],
+              ["", evaluation.used_roles.includes(role) ? t("Choose a profile…") : t("Not needed")],
               ...s.all_profiles.map((p) => [p.id, `${p.name}${p.kind ? `  (${p.kind})` : ""}`]),
             ]} />`
         )}
@@ -211,6 +258,8 @@ function FillForm({ session: s, close }) {
               binding=${bindings[v.name]}
               row=${evaluation.rows[v.name]}
               suggested=${s.suggested_values[v.name]}
+              ask=${s.ask[v.name]}
+              profileName=${profileName}
               active=${v.name === active}
               typing=${v.name === typing}
               onSelect=${() => select(v.name)}
@@ -218,9 +267,12 @@ function FillForm({ session: s, close }) {
                 select(v.name);
                 sourceMenu(v.name, anchor);
               }}
-              onTyped=${(value) => {
-                setTyping(null);
-                if (value !== null) bind(v.name, { value });
+              onTyped=${(value, enter) => {
+                const next = value !== null ? { ...bindings, [v.name]: { value } } : bindings;
+                if (value !== null) setBindings(next);
+                const following = enter && v.name in s.ask ? nextAsked(v.name, next) : null;
+                setTyping(following);
+                if (following) select(following);
               }} />`
           )}
         </div>

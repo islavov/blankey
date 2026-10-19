@@ -44,7 +44,9 @@ export async function processRequests() {
             name: p.name || "",
             values: p.values || {},
             paths: p.paths || {},
+            ask: p.ask || {},
             fill_set_id: p.fill_set_id ?? null,
+            copy_fill_set_id: p.copy_fill_set_id ?? null,
             request_id: request.id,
           });
         } else {

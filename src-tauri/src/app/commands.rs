@@ -956,6 +956,11 @@ async fn fill_preview(state: State<'_, AppState>, args: FillState) -> CmdResult<
 }
 
 #[tauri::command]
+fn fill_profile_entries(state: State<AppState>, profile_id: i64) -> CmdResult<Vec<fill::SourceEntry>> {
+    fill::profile_entries(&state.app, profile_id)
+}
+
+#[tauri::command]
 async fn fill_save(handle: AppHandle, state: State<'_, AppState>, args: fill::SaveArgs) -> CmdResult<fill::Saved> {
     let app = state.app.clone();
     let generate = args.generate;
@@ -1101,6 +1106,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         fill_open,
         fill_evaluate,
         fill_preview,
+        fill_profile_entries,
         fill_save,
         fill_close,
         relay_status,

@@ -217,7 +217,7 @@ pub struct FillSetInfo {
 
 /// role -> profile id
 pub type Profiles = indexmap::IndexMap<String, i64>;
-/// var -> {"path": "role.key"} | {"value": "..."} | {"default": true}
+/// var -> {"path": "role.key"} | {"path": "key", "profile": id} | {"value": "..."} | {"default": true}
 pub type Bindings = Map<String, Value>;
 
 #[derive(Serialize, Clone, Debug)]

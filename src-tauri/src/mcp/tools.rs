@@ -32,23 +32,30 @@ vault as locked, ask the user to unlock Blankey and call again.
 
 Workflow:
 1. inspect_pdf_form on a blank PDF form (or write a Typst template) to learn its fields.
-2. list_profiles / describe_profile to see which data keys exist.
+2. list_profiles with fields: true to see which data keys exist in every profile.
 3. save_template with Jinja bindings per field, e.g. "{{ applicant.address.city }}",
    "{{ 'X' if applicant.citizenship == 'българско' }}", "{{ loan.amount | money }}". Always inside {{ }}:
    a bare applicant.address.city is plain text and is rejected.
    Checkboxes: any truthy value checks them. Radio groups: return the state name, e.g. "/Choice2".
    Name templates, roles and variables for the kind of document and party, not for the case at hand:
-   a template is reused across many fills.
+   a template is reused across many fills. Roles are the parties the document is about; do not add a role
+   only to reach data in another profile (request_fill can read any profile).
 4. save_example + render_example to fill the template with invented example data and look at the result.
 5. check_bindings against real profiles: reports missing/empty keys, plain-text bindings (literal),
    overflow (fit_ratio > 1) and missing glyphs, without revealing values.
-6. request_profile_input to ask the user to type missing data into the app, then wait_request.
-7. request_fill to have the user fill the template into a named fill set and generate the real document.
-   Pick the profile for every role yourself from list_profiles and pass it in profiles; do not ask the
-   user to choose. Then map every var yourself: compare the template's fields (get_template) with the
-   profile keys (describe_profile) and pass paths for each var a key answers, e.g.
-   {"buyer_name": "buyer.full_name"}, unless its default is already exactly "{{ role.key }}". The form
-   starts from what you pass. Documents are always generated from a fill set.
+6. request_fill to have the user fill the template into a named fill set and generate the real document,
+   in one call. Pick the profile for every role yourself and pass it in profiles; do not ask the user to
+   choose. Then decide the source of every var yourself (get_template fields against the profile keys):
+   - values: non-personal data you know (listing details, amounts, deadlines, city).
+   - paths: data already in a profile, as "role.key" for a role's profile, or "profile:ID.key" for any
+     other profile, e.g. {"buyer_name": "buyer.full_name", "offered_price": "profile:9.offered_price"}.
+     Not needed when the default is already exactly "{{ role.key }}".
+   - ask: everything else, {var: short hint}. The user types it in the form; it stays in this fill set
+     only. Never put personal data in values: ask for it instead.
+   Speed matters more than a perfect guess: the user fixes any source in the form. Documents are always
+   generated from a fill set. To reuse an earlier fill (same terms, other party) pass copy_fill_set_id
+   with the new profiles and a new name; fill_set_id reopens a fill set and saves over it.
+7. request_profile_input only when the user wants data kept in a profile for later fills.
 The user exports real documents from the app; you only get their metadata.
 
 Filled .docx documents (contracts, decisions...):
@@ -58,14 +65,11 @@ Filled .docx documents (contracts, decisions...):
    value, not its label ("ЕГН ......" -> find the dots with occurrence). A span must sit inside one run.
    Use the same var names across related documents so one fill covers them all.
    fields gives a default per var: "{{ manager.egn }}", "{{ manager.name | upper }}", "{{ today() }}".
-3. request_fill for one or more templates: the user sees every blank with its context and picks the source
-   (vault path, your literal, or the template default). Pass non-personal data you know (amounts, rates,
-   terms, dates, city) in values, and vault paths in paths (map each var to the profile key that answers it).
-   Never put personal data in values: ask for it
-   with request_profile_input instead. Cover as many vars as you can before calling, and for the rest ask
-   the user whether to give the value now or leave it to be set in Blankey. wait_request returns the fill
-   set id and document ids.
-4. list_fill_sets shows saved fill sets (sources only); request_fill with fill_set_id reopens one.
+3. request_fill for one or more templates, with values, paths and ask as in step 6 above: the user sees
+   every blank with its context and can change its source. wait_request returns the fill set id and
+   document ids.
+4. list_fill_sets shows saved fill sets (sources only); request_fill with fill_set_id reopens one, with
+   copy_fill_set_id starts a new one from it.
 
 Flat PDFs (no form fields, e.g. exports or scans):
 1. inspect_pdf_layout: pages with a coordinate grid (PDF points, origin bottom-left) and the printed text lines
@@ -82,7 +86,7 @@ Remote sessions (through Blankey Online) cannot read local paths:
    after at most 50 s: call it again while the status is pending.
 3. Pass the file id ("file:<uuid>") wherever a tool takes path or source_path.
 
-Collection links (needs a Blankey Online sign-in): a short link to a web form that another person fills in. Their
+Collection links (needs a Blankey Online sign-in), only for data that someone else holds: a short link to a web form that another person fills in. Their
 answers and files are encrypted in their browser to this computer and land in a profile; you never see them.
 1. create_collection_link with the fields to ask for (and files), and the profile to save into. Use the keys
    your templates bind to, so the answers fill them directly.
@@ -266,6 +270,13 @@ pub struct ProfileArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct ListProfilesArgs {
+    /// Also list every profile's field keys with label, type and value length (no values).
+    #[serde(default)]
+    fields: bool,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct TemplateArgs {
     template_id: String,
 }
@@ -394,11 +405,18 @@ pub struct RequestFillArgs {
     /// Non-personal literals per var.
     #[serde(default, deserialize_with = "lenient::str_map")]
     values: StrMap,
-    /// Vault fields per var, as role.key.
+    /// Vault fields per var: "role.key" for a role's profile, or "profile:ID.key" for any profile.
     #[serde(default, deserialize_with = "lenient::str_map")]
     paths: StrMap,
+    /// var -> short hint: the user types these in the form; the value stays in this fill set only.
+    #[serde(default, deserialize_with = "lenient::str_map")]
+    ask: StrMap,
+    /// Reopen this fill set and save over it.
     #[serde(default, deserialize_with = "lenient::opt_int")]
     fill_set_id: Option<i64>,
+    /// Start from this fill set (its profiles, sources and typed values) and save a new one under name.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    copy_fill_set_id: Option<i64>,
     reason: Option<String>,
     /// Open the form even though some vars fall back to a template default that gives no vault value.
     #[serde(default)]
@@ -515,11 +533,23 @@ impl Tools {
         .await
     }
 
-    #[tool(description = "List profiles (people, loans, companies...) stored in the vault.")]
-    async fn list_profiles(&self) -> ToolResult {
-        self.run(|app| {
-            app.audit("mcp", "list_profiles", "");
-            text(&app.vault().list_profiles().map_err(string)?)
+    #[tool(
+        description = "List profiles (people, loans, companies...) stored in the vault. With fields: true, also each\nprofile's field keys with label, type and value length (0 = empty), to see in one call where data already is."
+    )]
+    async fn list_profiles(&self, Parameters(a): Parameters<ListProfilesArgs>) -> ToolResult {
+        self.run(move |app| {
+            app.audit("mcp", "list_profiles", if a.fields { "fields" } else { "" });
+            let vault = app.vault();
+            let profiles = vault.list_profiles().map_err(string)?;
+            if !a.fields {
+                return text(&profiles);
+            }
+            let mut out = Vec::new();
+            for profile in profiles {
+                let fields = vault.describe(profile.id).map_err(string)?;
+                out.push(json!({"id": profile.id, "name": profile.name, "kind": profile.kind, "fields": fields}));
+            }
+            text(&out)
         })
         .await
     }
@@ -863,47 +893,91 @@ impl Tools {
     }
 
     #[tool(
-        description = "Open the fill form for one or more templates. profiles maps every role to a profile id: find the\nmatching profiles yourself (list_profiles, describe_profile), pick one per role and pass them here instead of\nasking the user to choose; the user confirms in the form. values are non-personal literals per var\n(e.g. {\"loan_amount\": \"34 000\"}); paths pick vault fields per var (e.g. {\"borrower_egn\": \"manager.egn\"}).\nMap every var a profile key answers in paths yourself (compare get_template fields with describe_profile keys).\nOther vars start from the template default, or from the saved fill set when fill_set_id is given; a default\nthat gives no vault value (plain text or a missing key) is refused unless allow_defaults is true.\nAim to have every var covered before calling: for each var you cannot resolve from the vault or the\nconversation, ask the user whether to give the value now or leave it to be set in Blankey.\nname names the fill set. Returns a request id; call wait_request."
+        description = "Open the fill form for one or more templates. profiles maps each role the bindings use to a profile\nid: pick them yourself (list_profiles with fields: true) instead of asking the user. Give every var a source:\nvalues are non-personal literals (e.g. {\"loan_amount\": \"34 000\"}); paths read vault fields, \"role.key\" or\n\"profile:ID.key\" for any profile (e.g. {\"borrower_egn\": \"manager.egn\", \"price\": \"profile:9.price\"});\nask lists vars the user types in the form, {var: hint}, kept in this fill set only (use it for personal data\nnot in any profile). Other vars start from the template default, or from the fill set; a default that gives no\nvault value (plain text or a missing key) is refused unless allow_defaults is true. fill_set_id reopens a fill\nset and saves over it; copy_fill_set_id starts from one and saves a new fill set under name. name names the\nfill set. Returns a request id; call wait_request."
     )]
     async fn request_fill(&self, Parameters(a): Parameters<RequestFillArgs>, ext: Extensions) -> ToolResult {
         let grant = remote(&ext).map(|r| r.grant);
         self.run_any(move |app| {
             let name = a.name.trim().to_string();
-            let loaded = app.fill_templates(&a.templates)?;
+            if a.fill_set_id.is_some() && a.copy_fill_set_id.is_some() {
+                return Err("Pass fill_set_id or copy_fill_set_id, not both".into());
+            }
+            let base = a.fill_set_id.or(a.copy_fill_set_id);
+            let mut profiles = Profiles::new();
+            let mut bindings = Map::new();
+            let mut templates = a.templates.clone();
+            if let Some(id) = base {
+                let sets = app.vault().list_fill_sets().map_err(string)?;
+                let info = sets.into_iter().find(|f| f.id == id).ok_or_else(|| format!("Unknown fill set {id}"))?;
+                if templates.is_empty() {
+                    templates = info.templates;
+                }
+                profiles = info.profiles;
+                let vault = app.vault();
+                if vault.unlocked() {
+                    bindings = vault.get_fill_set(id).map_err(string)?.1;
+                }
+            }
+            profiles.extend(a.profiles.clone());
+            let loaded = app.fill_templates(&templates)?;
             if loaded.is_empty() || name.is_empty() {
                 return Err("Pass at least one template and a name".into());
             }
-            let mut missing: Vec<String> =
-                fill::roles(&loaded).into_keys().filter(|r| !a.profiles.contains_key(r)).collect();
-            if !missing.is_empty() {
-                missing.sort();
-                return Err(format!("Missing profiles for roles: {}", missing.join(", ")));
-            }
-            let fields = app.profile_fields(&a.profiles)?;
             let known = fill::variables(&loaded)?;
-            for var in a.values.keys().chain(a.paths.keys()) {
+            for var in a.values.keys().chain(a.paths.keys()).chain(a.ask.keys()) {
                 if !known.contains_key(var) {
                     let names: Vec<&str> = known.keys().map(String::as_str).collect();
                     return Err(format!("Unknown variable {var:?}; known: {}", names.join(", ")));
                 }
             }
+            for var in a.ask.keys() {
+                if a.values.contains_key(var) || a.paths.contains_key(var) {
+                    return Err(format!("{var}: pass it in one of values, paths or ask"));
+                }
+            }
+            let role_names: HashSet<String> = fill::roles(&loaded).into_keys().collect();
+            let fields = app.profile_fields(&profiles)?;
             for (var, path) in &a.paths {
-                let (role, key) = path.split_once('.').unwrap_or((path, ""));
-                if !fields.get(role).is_some_and(|infos| fill::has_field(infos, key)) {
+                let binding = fill::path_binding(path).map_err(|e| format!("{var}: {e}"))?;
+                let key = binding.get(fill::PATH).and_then(Value::as_str).unwrap_or_default();
+                let found = match binding.get(fill::PROFILE).and_then(Value::as_i64) {
+                    Some(id) => {
+                        let infos = app.vault().describe(id).map_err(|e| format!("{var}: profile {id}: {e}"))?;
+                        fill::has_field(&infos, key)
+                    }
+                    None => {
+                        let (role, key) = key.split_once('.').unwrap_or((key, ""));
+                        fields.get(role).is_some_and(|infos| fill::has_field(infos, key))
+                    }
+                };
+                if !found {
                     return Err(format!("{var}: no vault field {path:?}"));
                 }
+                bindings.insert(var.clone(), binding);
             }
-            if let Some(id) = a.fill_set_id {
-                if !app.vault().list_fill_sets().map_err(string)?.iter().any(|f| f.id == id) {
-                    return Err(format!("Unknown fill set {id}"));
-                }
+            for var in a.values.keys() {
+                bindings.insert(var.clone(), json!({fill::VALUE: ""}));
             }
-            let saved = a.fill_set_id.is_some() || app.vault().find_fill_set(&name).map_err(string)?.is_some();
+            for var in a.ask.keys() {
+                bindings.entry(var.clone()).or_insert_with(|| json!({fill::VALUE: ""}));
+            }
+            let mut missing: Vec<String> = fill::used_roles(&known, &bindings, &role_names)
+                .into_iter()
+                .filter(|r| !profiles.contains_key(r))
+                .collect();
+            if !missing.is_empty() {
+                missing.sort();
+                return Err(format!(
+                    "Missing profiles for roles: {}. Pass them in profiles, or bind those vars with paths \
+                     (profile:ID.key), values or ask",
+                    missing.join(", ")
+                ));
+            }
+            let saved = base.is_some() || app.vault().find_fill_set(&name).map_err(string)?.is_some();
             if !a.allow_defaults && !saved {
-                let role_names: HashSet<String> = fields.keys().cloned().collect();
                 let uncovered: Vec<String> = known
                     .values()
-                    .filter(|v| !a.paths.contains_key(&v.name) && !a.values.contains_key(&v.name))
+                    .filter(|v| !bindings.contains_key(&v.name))
                     .filter(|v| fill::uncovered(v, &role_names, &fields))
                     .map(|v| {
                         format!("{} (default {:?})", v.name, v.defaults.values().next().cloned().unwrap_or_default())
@@ -918,8 +992,9 @@ impl Tools {
                         .collect();
                     return Err(format!(
                         "These vars fall back to a template default that gives no vault value: {}. \
-                         Map each to a profile key in paths (e.g. {{\"buyer_name\": \"buyer.full_name\"}}), \
-                         or pass allow_defaults: true to let the user set them in Blankey. Profile keys: {}",
+                         Map each to a profile key in paths (\"buyer.full_name\" or \"profile:ID.key\" for any \
+                         profile), put it in ask for the user to type in the form, or pass allow_defaults: true. \
+                         Profile keys: {}",
                         uncovered.join(", "),
                         keys.join("; ")
                     ));
@@ -934,7 +1009,9 @@ impl Tools {
                 "name": name,
                 "values": a.values,
                 "paths": a.paths,
+                "ask": a.ask,
                 "fill_set_id": a.fill_set_id,
+                "copy_fill_set_id": a.copy_fill_set_id,
                 "reason": reason,
             });
             let id = app.create_request(FILL, payload, grant.as_deref())?;
@@ -962,7 +1039,9 @@ impl Tools {
         .await
     }
 
-    #[tool(description = "Saved fill sets with the source kind per var (path:role.key, value or default). No values.")]
+    #[tool(
+        description = "Saved fill sets with the source kind per var (path:role.key, path:profile:ID.key, value or default).\nNo values."
+    )]
     async fn list_fill_sets(&self) -> ToolResult {
         self.run(|app| {
             let vault = app.vault();
@@ -1210,7 +1289,7 @@ pub mod tests {
         let t = Tools { app: app.clone(), unlock_wait: Duration::ZERO };
         let (status, _) = out(t.vault_status().await);
         assert!(status.contains("\"unlocked\": false"), "{status}");
-        for result in [t.list_profiles().await, t.list_templates().await, t.list_fill_sets().await] {
+        for result in [t.list_profiles(args(json!({}))).await, t.list_templates().await, t.list_fill_sets().await] {
             let err = result.err().unwrap();
             assert!(err.contains("locked"), "{err}");
         }
@@ -1234,7 +1313,8 @@ pub mod tests {
                           "roles": {"applicant": "person"}});
         let mut outputs = vec![
             out(t.vault_status().await),
-            out(t.list_profiles().await),
+            out(t.list_profiles(args(json!({}))).await),
+            out(t.list_profiles(args(json!({"fields": true}))).await),
             out(t.describe_profile(args(json!({"profile_id": pid}))).await),
             out(t.inspect_pdf_form(args(json!({"path": source})), local()).await),
             out(t.save_template(args(save), local()).await),
@@ -1425,6 +1505,48 @@ pub mod tests {
         assert!(error.contains("applicant: egn, name"), "{error}");
         out(t.request_fill(fill(json!({"paths": {"who": "applicant.name"}})), local()).await);
         out(t.request_fill(fill(json!({"allow_defaults": true})), local()).await);
+
+        // any profile, by id, and vars the user types
+        let other = {
+            let mut vault = app.vault();
+            let id = vault.create_profile("Deal", "").unwrap();
+            vault.set_values(id, &[FieldInput::new("full_name", "Example Name", "Name", "text")]).unwrap();
+            id
+        };
+        out(t.request_fill(fill(json!({"paths": {"who": format!("profile:{other}.full_name")}})), local()).await);
+        let error =
+            t.request_fill(fill(json!({"paths": {"who": format!("profile:{other}.egn")}})), local()).await.unwrap_err();
+        assert!(error.contains("no vault field"), "{error}");
+        let error =
+            t.request_fill(fill(json!({"paths": {"who": "profile:9999.full_name"}})), local()).await.unwrap_err();
+        assert!(error.contains("profile 9999"), "{error}");
+        out(t.request_fill(fill(json!({"ask": {"who": "full name as in the ID card"}})), local()).await);
+        let error =
+            t.request_fill(fill(json!({"ask": {"who": "name"}, "values": {"who": "x"}})), local()).await.unwrap_err();
+        assert!(error.contains("one of values, paths or ask"), "{error}");
+
+        // a role whose vars all have other sources needs no profile
+        let unbound = json!({"templates": ["u"], "profiles": {}, "name": "free",
+                             "paths": {"who": format!("profile:{other}.full_name")}, "ask": {"egn": "EGN"}});
+        out(t.request_fill(args(unbound), local()).await);
+        let error = t
+            .request_fill(
+                args(json!({"templates": ["u"], "profiles": {}, "name": "x", "ask": {"egn": "EGN"}})),
+                local(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("Missing profiles for roles: applicant"), "{error}");
+        let error = t.request_fill(fill(json!({"copy_fill_set_id": 9999})), local()).await.unwrap_err();
+        assert!(error.contains("Unknown fill set"), "{error}");
+
+        let bindings = json!({"who": {"path": "full_name", "profile": other}, "egn": {"value": "typed"}});
+        let bindings = bindings.as_object().cloned().unwrap();
+        let context = app.fill_context(&Profiles::new(), &bindings).unwrap();
+        let resolved = fill::resolve(&app.fill_templates(&["u".into()]).unwrap(), &bindings, &context).unwrap();
+        assert_eq!(resolved["u"].0["who"], json!("Example Name"));
+        let set = app.vault().save_fill_set("pinned", &["u".into()], &Profiles::new(), &bindings, None).unwrap();
+        assert_eq!(app.generate_fill(set).unwrap().len(), 1);
     }
 
     #[tokio::test]
