@@ -16,12 +16,12 @@ use serde_json::{json, Map, Value};
 use crate::core::{Blankey, FILE, FILE_KINDS, FILL, PROFILE_INPUT};
 use crate::fieldtypes;
 use crate::links::{link_state, LinkDraft, SpecField, COLLECTION_LINK, DEFAULT_MAX_FILES, LINK_SUBMISSION};
-use crate::mcp::{remote, Remote};
+use crate::mcp::{find, remote, Remote};
 use crate::render::{pdf_form, preview};
 use crate::templates::bindings::example_context;
 use crate::templates::engine::{self, dump};
 use crate::templates::{docx, fill, SaveTemplate, StrMap, TemplateKind, ID_RE};
-use crate::vault::{Profiles, Request};
+use crate::vault::{FieldInfo, Profile, Profiles, Request};
 
 pub const INSTRUCTIONS: &str = r#"Blankey keeps personal data (PII) encrypted in a local vault and renders document templates.
 You never see real values. You see profiles, their field keys, labels, types and value lengths.
@@ -30,9 +30,14 @@ request_fill, create_collection_link, wait_request, get_request, list_requests):
 unlock. Any other tool opens the unlock screen and waits up to 50 s for the user; if it still reports the
 vault as locked, ask the user to unlock Blankey and call again.
 
+Search with criteria instead of paging through everything: the find tools return a capped page (limit,
+next_offset) of matches with counts, and describe_profile, get_template and get_fill_set give one item's detail.
+
 Workflow:
-1. inspect_pdf_form on a blank PDF form (or write a Typst template) to learn its fields.
-2. list_profiles with fields: true to see which data keys exist in every profile.
+1. find_templates first: reuse a template when one fits. Otherwise inspect_pdf_form on a blank PDF form (or
+   write a Typst template) to learn its fields.
+2. find_profiles with keys to see which profiles already hold the data a template needs (e.g.
+   keys: ["egn", "address"]); describe_profile for one profile's fields.
 3. save_template with Jinja bindings per field, e.g. "{{ applicant.address.city }}",
    "{{ 'X' if applicant.citizenship == 'българско' }}", "{{ loan.amount | money }}". Always inside {{ }}:
    a bare applicant.address.city is plain text and is rejected.
@@ -68,8 +73,8 @@ Filled .docx documents (contracts, decisions...):
 3. request_fill for one or more templates, with values, paths and ask as in step 6 above: the user sees
    every blank with its context and can change its source. wait_request returns the fill set id and
    document ids.
-4. list_fill_sets shows saved fill sets (sources only); request_fill with fill_set_id reopens one, with
-   copy_fill_set_id starts a new one from it.
+4. find_fill_sets finds saved fill sets and get_fill_set shows one's sources; request_fill with fill_set_id
+   reopens one, with copy_fill_set_id starts a new one from it.
 
 Flat PDFs (no form fields, e.g. exports or scans):
 1. inspect_pdf_layout: pages with a coordinate grid (PDF points, origin bottom-left) and the printed text lines
@@ -114,6 +119,10 @@ fn ok(content: Vec<ContentBlock>) -> ToolResult {
 
 fn text(value: &impl serde::Serialize) -> ToolResult {
     ok(vec![ContentBlock::text(dump(value))])
+}
+
+fn raw(body: String) -> ToolResult {
+    ok(vec![ContentBlock::text(body)])
 }
 
 fn png(bytes: Vec<u8>) -> ContentBlock {
@@ -196,6 +205,12 @@ fn check_id(id: &str) -> Result<(), String> {
     }
 }
 
+/// The fields under a key: the key itself, or its nested keys ("address" holds "address.city").
+fn key_fields<'a>(fields: &'a [FieldInfo], key: &str) -> Vec<&'a FieldInfo> {
+    let prefix = format!("{key}.");
+    fields.iter().filter(|i| !key.is_empty() && (i.key == key || i.key.starts_with(&prefix))).collect()
+}
+
 fn request_view(request: &Request) -> Value {
     json!({
         "id": request.id,
@@ -246,6 +261,17 @@ mod lenient {
         }
     }
 
+    pub fn ids<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<i64>, D::Error> {
+        match Value::deserialize(d)? {
+            Value::Null => Ok(Vec::new()),
+            Value::Array(items) => items
+                .iter()
+                .map(|v| as_int(v).ok_or_else(|| D::Error::custom(format!("expected an id, got {v}"))))
+                .collect(),
+            v => as_int(&v).map(|id| vec![id]).ok_or_else(|| D::Error::custom("expected a list of ids")),
+        }
+    }
+
     pub fn profiles<'de, D: Deserializer<'de>>(d: D) -> Result<Profiles, D::Error> {
         match Value::deserialize(d)? {
             Value::Null => Ok(Profiles::new()),
@@ -270,10 +296,92 @@ pub struct ProfileArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub struct ListProfilesArgs {
-    /// Also list every profile's field keys with label, type and value length (no values).
+pub struct FindProfilesArgs {
+    /// Words to match in the name, kind, field keys and labels.
+    query: Option<String>,
+    kind: Option<String>,
+    /// Field keys the profile must hold ("address" also matches "address.city").
     #[serde(default)]
-    fields: bool,
+    keys: Vec<String>,
+    /// With keys: only profiles where they are filled. Default true.
+    filled: Option<bool>,
+    #[serde(default, deserialize_with = "lenient::ids")]
+    ids: Vec<i64>,
+    /// List every field (key, label, type, length) instead of counts; for a few profiles, not hundreds.
+    #[serde(default)]
+    with_fields: bool,
+    /// Default 20, at most 100.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    limit: Option<i64>,
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    offset: Option<i64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct FindTemplatesArgs {
+    /// Words to match in the id, name, description, roles, vars and labels.
+    query: Option<String>,
+    #[schemars(extend("enum" = ["pdf_form", "typst", "docx"]))]
+    kind: Option<String>,
+    /// Only templates with this role.
+    role: Option<String>,
+    /// Only templates with this var.
+    var: Option<String>,
+    /// Default 20, at most 100.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    limit: Option<i64>,
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    offset: Option<i64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct FindFillSetsArgs {
+    /// Words to match in the name, template ids and names, and profile names.
+    query: Option<String>,
+    template_id: Option<String>,
+    /// Only fill sets that use this profile for any role.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    profile_id: Option<i64>,
+    /// Default 20, at most 100.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    limit: Option<i64>,
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    offset: Option<i64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct FillSetArgs {
+    #[serde(deserialize_with = "lenient::int")]
+    fill_set_id: i64,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct FindDocumentsArgs {
+    /// Words to match in the title, file name and template id.
+    query: Option<String>,
+    template_id: Option<String>,
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    profile_id: Option<i64>,
+    /// Only documents made on or after this date (YYYY-MM-DD).
+    since: Option<String>,
+    /// Default 20, at most 100.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    limit: Option<i64>,
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    offset: Option<i64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ListLinksArgs {
+    /// Words to match in the title.
+    query: Option<String>,
+    /// open, full, expired or revoked
+    status: Option<String>,
+    /// Default 20, at most 100.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    limit: Option<i64>,
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    offset: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -481,6 +589,11 @@ pub struct WaitRequestArgs {
 pub struct ListRequestsArgs {
     /// pending, done or cancelled
     status: Option<String>,
+    /// Default 20, at most 100.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    limit: Option<i64>,
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    offset: Option<i64>,
 }
 
 // -- tools -------------------------------------------------------------------------------------------------
@@ -534,22 +647,55 @@ impl Tools {
     }
 
     #[tool(
-        description = "List profiles (people, loans, companies...) stored in the vault. With fields: true, also each\nprofile's field keys with label, type and value length (0 = empty), to see in one call where data already is."
+        description = "Find profiles (people, companies, deals...) by name, kind or the field keys they hold. keys shows where\ndata already is: keys: [\"offered_price\"] returns the profiles with that key filled, with its value length.\nEach result has field counts; with_fields lists the fields (no values). Paged: total, next_offset."
     )]
-    async fn list_profiles(&self, Parameters(a): Parameters<ListProfilesArgs>) -> ToolResult {
+    async fn find_profiles(&self, Parameters(a): Parameters<FindProfilesArgs>) -> ToolResult {
         self.run(move |app| {
-            app.audit("mcp", "list_profiles", if a.fields { "fields" } else { "" });
-            let vault = app.vault();
-            let profiles = vault.list_profiles().map_err(string)?;
-            if !a.fields {
-                return text(&profiles);
-            }
-            let mut out = Vec::new();
-            for profile in profiles {
-                let fields = vault.describe(profile.id).map_err(string)?;
-                out.push(json!({"id": profile.id, "name": profile.name, "kind": profile.kind, "fields": fields}));
-            }
-            text(&out)
+            app.audit("mcp", "find_profiles", a.query.as_deref().unwrap_or(""));
+            let (profiles, index) = {
+                let vault = app.vault();
+                (vault.list_profiles().map_err(string)?, vault.field_index().map_err(string)?)
+            };
+            let words = find::words(a.query.as_deref());
+            let kind = a.kind.as_deref().map(find::fold);
+            let filled = a.filled.unwrap_or(true);
+            let none = Vec::new();
+            let mut matched: Vec<(Profile, &Vec<FieldInfo>)> = profiles
+                .into_iter()
+                .map(|p| {
+                    let fields = index.get(&p.id).unwrap_or(&none);
+                    (p, fields)
+                })
+                .filter(|(p, fields)| {
+                    let mut attrs = vec![p.name.as_str(), p.kind.as_str()];
+                    attrs.extend(fields.iter().flat_map(|i| [i.key.as_str(), i.label.as_str()]));
+                    (a.ids.is_empty() || a.ids.contains(&p.id))
+                        && kind.as_ref().is_none_or(|k| find::fold(&p.kind) == *k)
+                        && a.keys.iter().all(|key| {
+                            let held = key_fields(fields, key);
+                            !held.is_empty() && (!filled || held.iter().any(|i| i.length > 0))
+                        })
+                        && find::hit(&words, &attrs)
+                })
+                .collect();
+            find::rank_by(&mut matched, a.query.as_deref(), |(p, _)| (p.id.to_string(), p.name.clone()));
+            raw(find::found(&matched, a.limit, a.offset, |(p, fields)| {
+                let mut item = json!({"id": p.id, "name": p.name, "kind": p.kind, "fields": fields.len(),
+                                      "filled": fields.iter().filter(|i| i.length > 0).count()});
+                if !a.keys.is_empty() {
+                    let keys: Map<String, Value> = a
+                        .keys
+                        .iter()
+                        .flat_map(|key| key_fields(fields, key))
+                        .map(|i| (i.key.clone(), json!(i.length)))
+                        .collect();
+                    item["keys"] = Value::Object(keys);
+                }
+                if a.with_fields {
+                    item["fields"] = json!(fields);
+                }
+                item
+            }))
         })
         .await
     }
@@ -569,17 +715,33 @@ impl Tools {
     }
 
     #[tool(
-        description = "List saved templates. Show the user each template's id next to its name, so they can copy it\nand refer to the template by id later."
+        description = "Find saved templates by words in their id, name, description, roles, vars and labels, or by kind, role\nor var. Look for an existing template before making a new one. Show the user each template's id next to its\nname. get_template gives one template's fields. Paged: total, next_offset."
     )]
-    async fn list_templates(&self) -> ToolResult {
-        self.run(|app| {
-            let list: Vec<Value> = app
+    async fn find_templates(&self, Parameters(a): Parameters<FindTemplatesArgs>) -> ToolResult {
+        self.run(move |app| {
+            let words = find::words(a.query.as_deref());
+            let mut matched: Vec<_> = app
                 .templates
                 .all()
-                .iter()
-                .map(|t| json!({"id": t.id, "name": t.name, "kind": t.kind.as_str(), "roles": t.roles, "fields": t.fields.len()}))
+                .into_iter()
+                .filter(|t| {
+                    let mut attrs = vec![t.id.as_str(), t.name.as_str(), t.description.as_str()];
+                    attrs.extend(t.roles.iter().flat_map(|(role, about)| [role.as_str(), about.as_str()]));
+                    attrs.extend(t.fields.keys().map(String::as_str));
+                    attrs.extend(t.labels.values().map(String::as_str));
+                    a.kind.as_deref().is_none_or(|k| t.kind.as_str() == k)
+                        && a.role.as_ref().is_none_or(|r| t.roles.contains_key(r))
+                        && a.var.as_ref().is_none_or(|v| t.fields.contains_key(v))
+                        && find::hit(&words, &attrs)
+                })
                 .collect();
-            text(&list)
+            matched.sort_by_cached_key(|t| find::fold(&t.name));
+            find::rank_by(&mut matched, a.query.as_deref(), |t| (t.id.clone(), t.name.clone()));
+            raw(find::found(&matched, a.limit, a.offset, |t| {
+                json!({"id": t.id, "name": t.name, "kind": t.kind.as_str(),
+                       "roles": t.roles.keys().collect::<Vec<_>>(), "vars": t.fields.len(),
+                       "description": find::clip(&t.description, 120)})
+            }))
         })
         .await
     }
@@ -893,7 +1055,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Open the fill form for one or more templates. profiles maps each role the bindings use to a profile\nid: pick them yourself (list_profiles with fields: true) instead of asking the user. Give every var a source:\nvalues are non-personal literals (e.g. {\"loan_amount\": \"34 000\"}); paths read vault fields, \"role.key\" or\n\"profile:ID.key\" for any profile (e.g. {\"borrower_egn\": \"manager.egn\", \"price\": \"profile:9.price\"});\nask lists vars the user types in the form, {var: hint}, kept in this fill set only (use it for personal data\nnot in any profile). Other vars start from the template default, or from the fill set; a default that gives no\nvault value (plain text or a missing key) is refused unless allow_defaults is true. fill_set_id reopens a fill\nset and saves over it; copy_fill_set_id starts from one and saves a new fill set under name. name names the\nfill set. Returns a request id; call wait_request."
+        description = "Open the fill form for one or more templates. profiles maps each role the bindings use to a profile\nid: pick them yourself (find_profiles with keys) instead of asking the user. Give every var a source:\nvalues are non-personal literals (e.g. {\"loan_amount\": \"34 000\"}); paths read vault fields, \"role.key\" or\n\"profile:ID.key\" for any profile (e.g. {\"borrower_egn\": \"manager.egn\", \"price\": \"profile:9.price\"});\nask lists vars the user types in the form, {var: hint}, kept in this fill set only (use it for personal data\nnot in any profile). Other vars start from the template default, or from the fill set; a default that gives no\nvault value (plain text or a missing key) is refused unless allow_defaults is true. fill_set_id reopens a fill\nset and saves over it; copy_fill_set_id starts from one and saves a new fill set under name. name names the\nfill set. Returns a request id; call wait_request."
     )]
     async fn request_fill(&self, Parameters(a): Parameters<RequestFillArgs>, ext: Extensions) -> ToolResult {
         let grant = remote(&ext).map(|r| r.grant);
@@ -1040,28 +1202,48 @@ impl Tools {
     }
 
     #[tool(
-        description = "Saved fill sets with the source kind per var (path:role.key, path:profile:ID.key, value or default).\nNo values."
+        description = "Find saved fill sets by words in their name, templates and profile names, or by template_id or\nprofile_id; newest first. get_fill_set shows where each var comes from. Paged: total, next_offset."
     )]
-    async fn list_fill_sets(&self) -> ToolResult {
-        self.run(|app| {
-            let vault = app.vault();
-            let sets = vault.list_fill_sets().map_err(string)?;
-            let unlocked = vault.unlocked();
-            let list: Vec<Value> = sets
-                .iter()
-                .map(|info| {
-                    let mut out = serde_json::to_value(info).unwrap_or_default();
-                    if unlocked {
-                        if let Ok((_, bindings)) = vault.get_fill_set(info.id) {
-                            let vars: Map<String, Value> =
-                                bindings.iter().map(|(v, b)| (v.clone(), json!(fill::describe_binding(b)))).collect();
-                            out["vars"] = Value::Object(vars);
-                        }
-                    }
-                    out
+    async fn find_fill_sets(&self, Parameters(a): Parameters<FindFillSetsArgs>) -> ToolResult {
+        self.run(move |app| {
+            let (sets, profile_names) = {
+                let vault = app.vault();
+                let names: std::collections::HashMap<i64, String> =
+                    vault.list_profiles().map_err(string)?.into_iter().map(|p| (p.id, p.name)).collect();
+                (vault.list_fill_sets().map_err(string)?, names)
+            };
+            let template_names: std::collections::HashMap<String, String> =
+                app.templates.all().into_iter().map(|t| (t.id, t.name)).collect();
+            let words = find::words(a.query.as_deref());
+            let mut matched: Vec<_> = sets
+                .into_iter()
+                .filter(|set| {
+                    let mut attrs = vec![set.name.as_str()];
+                    attrs.extend(set.templates.iter().map(String::as_str));
+                    attrs.extend(set.templates.iter().filter_map(|t| template_names.get(t)).map(String::as_str));
+                    attrs.extend(set.profiles.values().filter_map(|id| profile_names.get(id)).map(String::as_str));
+                    a.template_id.as_ref().is_none_or(|t| set.templates.contains(t))
+                        && a.profile_id.is_none_or(|id| set.profiles.values().any(|p| *p == id))
+                        && find::hit(&words, &attrs)
                 })
                 .collect();
-            text(&list)
+            find::rank_by(&mut matched, a.query.as_deref(), |set| (set.id.to_string(), set.name.clone()));
+            raw(find::found(&matched, a.limit, a.offset, |set| json!(set)))
+        })
+        .await
+    }
+
+    #[tool(
+        description = "One fill set: templates, profiles per role and the source kind per var (path:role.key,\npath:profile:ID.key, value or default). No values."
+    )]
+    async fn get_fill_set(&self, Parameters(a): Parameters<FillSetArgs>) -> ToolResult {
+        self.run(move |app| {
+            let (info, bindings) = app.vault().get_fill_set(a.fill_set_id).map_err(string)?;
+            let mut out = json!(info);
+            let vars: Map<String, Value> =
+                bindings.iter().map(|(v, b)| (v.clone(), json!(fill::describe_binding(b)))).collect();
+            out["vars"] = Value::Object(vars);
+            text(&out)
         })
         .await
     }
@@ -1092,13 +1274,21 @@ impl Tools {
         .await
     }
 
-    #[tool(description = "List requests, optionally filtered by status (pending, done, cancelled).")]
+    #[tool(
+        description = "List requests, newest first, optionally filtered by status (pending, done, cancelled). Paged: total,\nnext_offset."
+    )]
     async fn list_requests(&self, Parameters(a): Parameters<ListRequestsArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
         self.run_any(move |app| {
-            let requests = app.vault().list_requests(a.status.as_deref()).map_err(string)?;
-            let requests = requests.into_iter().filter_map(|r| visible(r, remote.as_ref()).ok());
-            text(&requests.map(|r| request_view(&r)).collect::<Vec<_>>())
+            let mut requests: Vec<Request> = app
+                .vault()
+                .list_requests(a.status.as_deref())
+                .map_err(string)?
+                .into_iter()
+                .filter_map(|r| visible(r, remote.as_ref()).ok())
+                .collect();
+            requests.sort_by_key(|r| std::cmp::Reverse(r.id));
+            raw(find::found(&requests, a.limit, a.offset, request_view))
         })
         .await
     }
@@ -1145,54 +1335,75 @@ impl Tools {
     }
 
     #[tool(
-        description = "Collection links made on this computer: url, status, the fields they ask for, how many\nsubmissions came in and how many wait for the user. No submitted values."
+        description = "Collection links made on this computer, newest first: url, status, the fields they ask for, how\nmany submissions came in and how many wait for the user. Filter by words in the title or by status (open,\nfull, expired, revoked). No submitted values. Paged: total, next_offset."
     )]
-    async fn list_collection_links(&self) -> ToolResult {
-        self.run_any(|app| {
+    async fn list_collection_links(&self, Parameters(a): Parameters<ListLinksArgs>) -> ToolResult {
+        self.run_any(move |app| {
             let (links, submissions) = {
                 let vault = app.vault();
                 (vault.list_links().map_err(string)?, vault.list_submissions(None).map_err(string)?)
             };
-            let list: Vec<Value> = links
-                .iter()
-                .map(|link| {
-                    let fields: Vec<Value> = link.spec["fields"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .map(|f| json!({"key": f["key"], "label": f["label"]}))
-                        .collect();
-                    let mine: Vec<_> = submissions.iter().filter(|r| r.link_id == link.link_id).collect();
-                    let pending = mine.iter().filter(|r| r.status == "pending").count();
-                    let mut saved_into: Vec<i64> =
-                        mine.iter().filter(|r| r.status == "saved").filter_map(|r| r.profile_id).collect();
-                    saved_into.sort_unstable();
-                    saved_into.dedup();
-                    json!({
-                        "id": link.link_id,
-                        "title": link.title,
-                        "url": link.url,
-                        "status": link_state(link),
-                        "fields": fields,
-                        "max_files": link.spec["files"]["max_files"],
-                        "received": link.received,
-                        "pending": pending,
-                        "saved_into": saved_into,
-                        "max_submissions": link.max_submissions,
-                        "profile_id": link.profile_id,
-                        "expires_at": link.expires_at,
-                        "next": next_step(link.received, pending, &saved_into),
-                    })
+            let words = find::words(a.query.as_deref());
+            let links: Vec<_> = links
+                .into_iter()
+                .filter(|link| {
+                    a.status.as_deref().is_none_or(|s| link_state(link) == s) && find::hit(&words, &[&link.title])
                 })
                 .collect();
-            text(&list)
+            raw(find::found(&links, a.limit, a.offset, |link| {
+                let fields: Vec<Value> = link.spec["fields"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|f| json!({"key": f["key"], "label": f["label"]}))
+                    .collect();
+                let mine: Vec<_> = submissions.iter().filter(|r| r.link_id == link.link_id).collect();
+                let pending = mine.iter().filter(|r| r.status == "pending").count();
+                let mut saved_into: Vec<i64> =
+                    mine.iter().filter(|r| r.status == "saved").filter_map(|r| r.profile_id).collect();
+                saved_into.sort_unstable();
+                saved_into.dedup();
+                json!({
+                    "id": link.link_id,
+                    "title": link.title,
+                    "url": link.url,
+                    "status": link_state(link),
+                    "fields": fields,
+                    "max_files": link.spec["files"]["max_files"],
+                    "received": link.received,
+                    "pending": pending,
+                    "saved_into": saved_into,
+                    "max_submissions": link.max_submissions,
+                    "profile_id": link.profile_id,
+                    "expires_at": link.expires_at,
+                    "next": next_step(link.received, pending, &saved_into),
+                })
+            }))
         })
         .await
     }
 
-    #[tool(description = "Generated real documents (metadata only; the user exports them from the app).")]
-    async fn list_documents(&self) -> ToolResult {
-        self.run(|app| text(&app.vault().list_documents().map_err(string)?)).await
+    #[tool(
+        description = "Find generated real documents (metadata only; the user exports them from the app), newest first, by\nwords in the title or file name, template_id, profile_id or since (YYYY-MM-DD). Paged: total, next_offset."
+    )]
+    async fn find_documents(&self, Parameters(a): Parameters<FindDocumentsArgs>) -> ToolResult {
+        self.run(move |app| {
+            let words = find::words(a.query.as_deref());
+            let documents: Vec<_> = app
+                .vault()
+                .list_documents()
+                .map_err(string)?
+                .into_iter()
+                .filter(|d| {
+                    a.template_id.as_ref().is_none_or(|t| d.template_id == *t)
+                        && a.profile_id.is_none_or(|id| d.profiles.values().any(|p| p.as_i64() == Some(id)))
+                        && a.since.as_deref().is_none_or(|since| d.created_at.as_str() >= since)
+                        && find::hit(&words, &[&d.title, &d.filename, &d.template_id])
+                })
+                .collect();
+            raw(find::found(&documents, a.limit, a.offset, |d| json!(d)))
+        })
+        .await
     }
 }
 
@@ -1289,7 +1500,11 @@ pub mod tests {
         let t = Tools { app: app.clone(), unlock_wait: Duration::ZERO };
         let (status, _) = out(t.vault_status().await);
         assert!(status.contains("\"unlocked\": false"), "{status}");
-        for result in [t.list_profiles(args(json!({}))).await, t.list_templates().await, t.list_fill_sets().await] {
+        for result in [
+            t.find_profiles(args(json!({}))).await,
+            t.find_templates(args(json!({}))).await,
+            t.find_fill_sets(args(json!({}))).await,
+        ] {
             let err = result.err().unwrap();
             assert!(err.contains("locked"), "{err}");
         }
@@ -1313,12 +1528,12 @@ pub mod tests {
                           "roles": {"applicant": "person"}});
         let mut outputs = vec![
             out(t.vault_status().await),
-            out(t.list_profiles(args(json!({}))).await),
-            out(t.list_profiles(args(json!({"fields": true}))).await),
+            out(t.find_profiles(args(json!({}))).await),
+            out(t.find_profiles(args(json!({"with_fields": true, "keys": ["name", "egn"]}))).await),
             out(t.describe_profile(args(json!({"profile_id": pid}))).await),
             out(t.inspect_pdf_form(args(json!({"path": source})), local()).await),
             out(t.save_template(args(save), local()).await),
-            out(t.list_templates().await),
+            out(t.find_templates(args(json!({"query": "t"}))).await),
             out(t.get_template(args(json!({"template_id": "t"}))).await),
             out(t
                 .save_example(args(
@@ -1376,14 +1591,17 @@ pub mod tests {
             assert!(hidden.contains("Unknown request"), "{hidden}");
         }
         let link = json!({"title": "More details", "profile_id": pid, "fields": [{"key": "phone", "type": "phone"}]});
-        outputs
-            .extend([out(t.list_collection_links().await), out(t.create_collection_link(args(link), local()).await)]);
         outputs.extend([
-            out(t.list_documents().await),
+            out(t.list_collection_links(args(json!({}))).await),
+            out(t.create_collection_link(args(link), local()).await),
+        ]);
+        outputs.extend([
+            out(t.find_documents(args(json!({}))).await),
             out(t.get_request(args(json!({"request_id": 1})), local()).await),
             out(t.wait_request(args(json!({"request_id": 1, "timeout_s": 0})), local()).await),
             out(t.list_requests(args(json!({})), local()).await),
-            out(t.list_fill_sets().await),
+            out(t.find_fill_sets(args(json!({}))).await),
+            out(t.get_fill_set(args(json!({"fill_set_id": fill_set}))).await),
         ]);
 
         let preview = std::fs::read(app.config.previews_dir().join("t-example.pdf")).unwrap();
@@ -1441,28 +1659,104 @@ pub mod tests {
         assert!(waited.contains(url), "{waited}");
 
         crate::links::tests::stored_link(&app, "Ab3dE9z");
-        let (listed, _) = out(t.list_collection_links().await);
+        let (listed, _) = out(t.list_collection_links(args(json!({}))).await);
         let listed: Value = serde_json::from_str(&listed).unwrap();
-        assert_eq!(listed[0]["status"], "open");
-        assert_eq!(listed[0]["fields"][0], json!({"key": "name", "label": "Full name"}));
-        assert!(listed[0]["url"].as_str().unwrap().contains("/s/Ab3dE9z#"));
-        assert_eq!(listed[0]["next"], "Nothing received yet.");
+        let first = &listed["items"][0];
+        assert_eq!(first["status"], "open");
+        assert_eq!(first["fields"][0], json!({"key": "name", "label": "Full name"}));
+        assert!(first["url"].as_str().unwrap().contains("/s/Ab3dE9z#"));
+        assert_eq!(first["next"], "Nothing received yet.");
 
         use crate::links::tests::{plaintext, stored_link, submit};
         let public = stored_link(&app, "Zz9yX8w");
         submit(&app, "Zz9yX8w", &public, &plaintext(json!({"name": "Jane"}), &[]), "sub-1");
-        let link = |listed: &Value| listed.as_array().unwrap().iter().find(|l| l["id"] == "Zz9yX8w").cloned().unwrap();
-        let listed: Value = serde_json::from_str(&out(t.list_collection_links().await).0).unwrap();
+        let link = |listed: &Value| {
+            listed["items"].as_array().unwrap().iter().find(|l| l["id"] == "Zz9yX8w").cloned().unwrap()
+        };
+        let listed: Value = serde_json::from_str(&out(t.list_collection_links(args(json!({}))).await).0).unwrap();
         assert_eq!((link(&listed)["pending"].as_u64(), link(&listed)["saved_into"].clone()), (Some(1), json!([])));
         assert!(link(&listed)["next"].as_str().unwrap().contains("ask the user to review it in Blankey"));
 
         let values = app.open_submission("sub-1").unwrap().values;
         app.resolve_submission("sub-1", crate::core::Target::Existing(pid), &values, &[]).unwrap();
-        let listed: Value = serde_json::from_str(&out(t.list_collection_links().await).0).unwrap();
+        let listed: Value = serde_json::from_str(&out(t.list_collection_links(args(json!({}))).await).0).unwrap();
         assert_eq!(link(&listed)["saved_into"], json!([pid]));
         let next = link(&listed)["next"].as_str().unwrap().to_string();
         assert!(next.contains(&format!("profile {pid}")) && next.contains("request_fill"), "{next}");
         assert!(!listed.to_string().contains("Jane"));
+    }
+
+    fn page(result: ToolResult) -> Value {
+        serde_json::from_str(&out(result).0).unwrap()
+    }
+
+    fn names(page: &Value) -> Vec<String> {
+        page["items"].as_array().unwrap().iter().map(|i| i["name"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn find_tools_filter_and_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let t = Tools::new(app.clone());
+        let (pid, _) = setup(&app, dir.path());
+        let (filled, empty) = {
+            let mut vault = app.vault();
+            let filled = vault.create_profile("Deal Иван", "deal").unwrap();
+            vault.set_values(filled, &[FieldInput::new("offered_price", "500000", "Offered price", "number")]).unwrap();
+            let empty = vault.create_profile("Deal two", "deal").unwrap();
+            vault.set_values(empty, &[FieldInput::new("offered_price", "", "Offered price", "number")]).unwrap();
+            (filled, empty)
+        };
+
+        let found = page(t.find_profiles(args(json!({"keys": ["offered_price"]}))).await);
+        assert_eq!((found["total"].clone(), names(&found)), (json!(1), vec!["Deal Иван".to_string()]));
+        assert_eq!(found["items"][0]["keys"], json!({"offered_price": 6}));
+        let found = page(t.find_profiles(args(json!({"keys": ["offered_price"], "filled": false}))).await);
+        assert_eq!(found["total"], 2);
+        assert_eq!(names(&page(t.find_profiles(args(json!({"query": "ИВАН"}))).await)), vec!["Deal Иван"]);
+        assert_eq!(page(t.find_profiles(args(json!({"query": "offered price"}))).await)["total"], 2);
+        assert_eq!(page(t.find_profiles(args(json!({"kind": "Deal", "ids": [empty, pid]}))).await)["total"], 1);
+        let first = page(t.find_profiles(args(json!({"limit": 1}))).await);
+        assert_eq!((first["total"].clone(), first["next_offset"].clone()), (json!(3), json!(1)));
+        let last = page(t.find_profiles(args(json!({"limit": 1, "offset": 2}))).await);
+        assert!(last.get("next_offset").is_none(), "{last}");
+        assert_eq!(page(t.find_profiles(args(json!({"limit": 1000}))).await)["items"].as_array().unwrap().len(), 3);
+
+        let template = |name: &str| {
+            args(json!({"template_id": "offer", "name": name, "kind": "typst", "source_text": "",
+                        "fields": {"price": "{{ buyer.offered_price }}"}, "roles": {"buyer": "person"}}))
+        };
+        out(t.save_template(template("Purchase offer"), local()).await);
+        assert_eq!(names(&page(t.find_templates(args(json!({"query": "price"}))).await)), vec!["Purchase offer"]);
+        assert_eq!(page(t.find_templates(args(json!({"role": "seller"}))).await)["total"], 0);
+        assert_eq!(page(t.find_templates(args(json!({"var": "price", "kind": "typst"}))).await)["total"], 1);
+        out(t.save_template(template("Buyer offer"), local()).await);
+        assert_eq!(page(t.find_templates(args(json!({"query": "purchase"}))).await)["total"], 0);
+        assert_eq!(names(&page(t.find_templates(args(json!({"query": "buyer offer"}))).await)), vec!["Buyer offer"]);
+
+        let (older, newer) = {
+            let mut vault = app.vault();
+            let bindings = json!({"price": {"path": "offered_price", "profile": filled}}).as_object().cloned().unwrap();
+            let buyer = |id: i64| -> Profiles { [("buyer".to_string(), id)].into_iter().collect() };
+            let older = vault.save_fill_set("first", &["offer".into()], &buyer(filled), &bindings, None).unwrap();
+            let newer = vault.save_fill_set("second", &["offer".into()], &buyer(pid), &Map::new(), None).unwrap();
+            (older, newer)
+        };
+        assert_eq!(
+            names(&page(t.find_fill_sets(args(json!({"template_id": "offer"}))).await)),
+            vec!["second", "first"]
+        );
+        assert_eq!(names(&page(t.find_fill_sets(args(json!({"profile_id": filled}))).await)), vec!["first"]);
+        assert_eq!(names(&page(t.find_fill_sets(args(json!({"query": "applicant"}))).await)), vec!["second"]);
+        let (set, _) = out(t.get_fill_set(args(json!({"fill_set_id": older}))).await);
+        assert!(set.contains(&format!("path:profile:{filled}.offered_price")), "{set}");
+
+        app.generate_fill(newer).unwrap();
+        let documents = page(t.find_documents(args(json!({"template_id": "offer", "profile_id": pid}))).await);
+        assert_eq!(documents["total"], 1);
+        assert_eq!(page(t.find_documents(args(json!({"since": "2999-01-01"}))).await)["total"], 0);
+        assert_eq!(page(t.find_documents(args(json!({"query": "nothing like it"}))).await)["total"], 0);
     }
 
     #[tokio::test]
@@ -1626,7 +1920,7 @@ pub mod tests {
         let wait = json!({"request_id": id, "timeout_s": 0});
         assert!(t.wait_request(args(wait), other()).await.unwrap_err().contains("Unknown request"));
         assert!(t.get_request(args(json!({"request_id": id})), other()).await.unwrap_err().contains("Unknown request"));
-        assert_eq!(out(t.list_requests(args(json!({})), other()).await).0, "[]");
+        assert!(out(t.list_requests(args(json!({})), other()).await).0.contains("\"total\":0"));
         assert!(out(t.list_requests(args(json!({})), remote()).await).0.contains(&file_id));
         assert!(out(t.list_requests(args(json!({})), local()).await).0.contains(&file_id));
         let error = t.inspect_pdf_form(args(json!({"path": file_id})), other()).await.unwrap_err();

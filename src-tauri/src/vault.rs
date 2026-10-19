@@ -30,8 +30,16 @@ const BACKUPS: usize = 3;
 /// Schema steps; the step at index i brings a vault to user_version i + 1, the numbering the Python app uses.
 /// Every step must be idempotent (IF NOT EXISTS, add_column), so re-running one after a partial upgrade is safe.
 /// Append only: a shipped step never changes. New vaults run every step, so they match upgraded ones.
-const MIGRATIONS: &[fn(&Connection) -> rusqlite::Result<()>] =
-    &[initial_schema, fill_sets, sealed_requests, relay_grants, request_grants, collection_links, link_submissions];
+const MIGRATIONS: &[fn(&Connection) -> rusqlite::Result<()>] = &[
+    initial_schema,
+    fill_sets,
+    sealed_requests,
+    relay_grants,
+    request_grants,
+    collection_links,
+    link_submissions,
+    field_keys,
+];
 
 /// The Python app's DDL (peewee): NOT NULL without SQL defaults, so every insert names all its columns.
 fn initial_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -96,6 +104,11 @@ CREATE TABLE IF NOT EXISTS "link_submissions" ("sid" TEXT NOT NULL PRIMARY KEY, 
 CREATE INDEX IF NOT EXISTS "link_submissions_link_id" ON "link_submissions" ("link_id");
 "#,
     )
+}
+
+/// Finding profiles by the keys they hold.
+fn field_keys(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(r#"CREATE INDEX IF NOT EXISTS "fieldrow_key" ON "fields" ("key");"#)
 }
 
 fn add_column(conn: &Connection, table: &str, column: &str, declaration: &str) -> rusqlite::Result<()> {
@@ -571,6 +584,25 @@ impl Vault {
             Ok(FieldInfo { key: r.get(0)?, label: r.get(1)?, field_type: r.get(2)?, length: r.get(3)? })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Field metadata of every profile at once (no values), for searching.
+    pub fn field_index(&self) -> Result<HashMap<i64, Vec<FieldInfo>>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT profile_id, key, label, type, value_length FROM fields ORDER BY profile_id, key")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                FieldInfo { key: r.get(1)?, label: r.get(2)?, field_type: r.get(3)?, length: r.get(4)? },
+            ))
+        })?;
+        let mut out: HashMap<i64, Vec<FieldInfo>> = HashMap::new();
+        for row in rows {
+            let (id, info) = row?;
+            out.entry(id).or_default().push(info);
+        }
+        Ok(out)
     }
 
     /// Field metadata, plus decrypted values when unlocked.
