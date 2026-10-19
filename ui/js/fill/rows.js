@@ -4,8 +4,8 @@ import { html } from "../lib.js";
 import { describe, kindLabel } from "./source.js";
 
 /** One blank: its label and name, and the source with the current value. Click the source to change it. */
-export function FillRow({ v, binding, row, suggested, active, typing, onSelect, onMenu, onTyped }) {
-  const d = describe(v, binding, row, suggested);
+export function FillRow({ v, binding, row, suggested, ask, profileName, active, typing, onSelect, onMenu, onTyped }) {
+  const d = describe(v, binding, row, suggested, ask, profileName);
   const tip = v.contexts.map(([template, context]) => `${template}: ${context}`).join("\n\n");
   const element = useRef();
   useEffect(() => {
@@ -19,7 +19,7 @@ export function FillRow({ v, binding, row, suggested, active, typing, onSelect, 
         <div class="var">${v.name}</div>
       </div>
       ${typing
-        ? html`<div class="source"><${TypeValue} value=${binding?.value ?? ""} onDone=${onTyped} /></div>`
+        ? html`<div class="source"><${TypeValue} value=${binding?.value ?? ""} hint=${ask} onDone=${onTyped} /></div>`
         : html`
             <div class="source" tabindex="0" onClick=${(e) => onMenu(e.currentTarget)}>
               <span class=${`chip ${d.kind}`}>${kindLabel(d.kind)}</span>
@@ -29,24 +29,24 @@ export function FillRow({ v, binding, row, suggested, active, typing, onSelect, 
     </div>`;
 }
 
-/** Inline input: Enter or leaving the field keeps the value, Escape cancels. onDone(value | null) */
-function TypeValue({ value, onDone }) {
+/** Inline input: Enter or leaving the field keeps the value, Escape cancels. onDone(value | null, viaEnter) */
+function TypeValue({ value, hint, onDone }) {
   const input = useRef();
   const done = useRef(false);
   useEffect(() => {
     input.current.focus();
     input.current.select();
   }, []);
-  const finish = (commit) => {
+  const finish = (commit, enter = false) => {
     if (done.current) return;
     done.current = true;
-    onDone(commit ? input.current.value.trim() : null);
+    onDone(commit ? input.current.value.trim() : null, enter);
   };
   const key = (e) => {
     e.stopPropagation();
-    if (e.key === "Enter") finish(true);
+    if (e.key === "Enter") finish(true, true);
     if (e.key === "Escape") finish(false);
   };
-  return html`<input type="text" ref=${input} value=${value} placeholder=${t("Type a value")} spellcheck="false"
+  return html`<input type="text" ref=${input} value=${value} placeholder=${hint || t("Type a value")} spellcheck="false"
     onKeyDown=${key} onBlur=${() => finish(true)} />`;
 }

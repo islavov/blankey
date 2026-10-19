@@ -403,5 +403,9 @@
   "Saves into {profile}": "Записва в {profile}",
   "{size} KB": "{size} КБ",
   "Sign in to Blankey Online": "Вход в Blankey онлайн",
-  "Blankey Online: {account}, {state}": "Blankey онлайн: {account}, {state}"
+  "Blankey Online: {account}, {state}": "Blankey онлайн: {account}, {state}",
+  "To type": "За въвеждане",
+  "This profile has no fields": "Този профил няма полета",
+  "Not needed": "Не е нужен",
+  "From another profile…": "От друг профил…"
 }

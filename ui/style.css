@@ -315,6 +315,7 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .chip.Value { background: var(--chip-value); }
 .chip.Default { background: var(--chip-default); }
 .chip.Empty { background: var(--chip-empty); }
+.chip.Ask { background: var(--chip-empty); }
 .source .path { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source .val { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .fill-row.is-empty .source .val { color: var(--warn); }

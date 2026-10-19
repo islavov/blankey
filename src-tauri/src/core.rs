@@ -281,6 +281,17 @@ impl Blankey {
         Ok(Value::Object(context))
     }
 
+    /// The role context plus every profile that a binding reads directly.
+    pub fn fill_context(&self, profiles: &Profiles, bindings: &Bindings) -> Result<Value, String> {
+        let mut context = self.real_context(profiles)?;
+        let vault = self.vault();
+        for id in fill::pinned_profiles(bindings) {
+            let values = vault.get_values(id).map_err(|e| e.to_string())?;
+            context[fill::pinned_key(id)] = bindings::profile_context(&values);
+        }
+        Ok(context)
+    }
+
     pub fn fill_templates(&self, ids: &[String]) -> Result<Vec<Template>, String> {
         ids.iter().map(|id| self.templates.get(id)).collect()
     }
@@ -289,7 +300,7 @@ impl Blankey {
     pub fn generate_fill(&self, fill_set_id: i64) -> Result<Vec<i64>, String> {
         let (info, bindings) = self.vault().get_fill_set(fill_set_id).map_err(|e| e.to_string())?;
         let templates = self.fill_templates(&info.templates)?;
-        let context = self.real_context(&info.profiles)?;
+        let context = self.fill_context(&info.profiles, &bindings)?;
         let resolved = fill::resolve(&templates, &bindings, &context)?;
         let mut rendered = Vec::new();
         for template in &templates {

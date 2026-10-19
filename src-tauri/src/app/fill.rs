@@ -10,7 +10,7 @@ use crate::core::Blankey;
 use crate::templates::bindings::{as_text, is_empty};
 use crate::templates::fill::{self, FillVar};
 use crate::templates::preview::{self, Preview};
-use crate::vault::{Profile, Profiles};
+use crate::vault::{Profile, Profiles, Vault};
 
 #[derive(Deserialize, Default)]
 pub struct OpenArgs {
@@ -24,7 +24,12 @@ pub struct OpenArgs {
     pub values: IndexMap<String, String>,
     #[serde(default)]
     pub paths: IndexMap<String, String>,
+    /// var -> hint: blanks the user types in the form; the value stays in the fill set
+    #[serde(default)]
+    pub ask: IndexMap<String, String>,
     pub fill_set_id: Option<i64>,
+    /// start from this fill set but save a new one
+    pub copy_fill_set_id: Option<i64>,
     pub request_id: Option<i64>,
 }
 
@@ -48,6 +53,7 @@ pub struct Session {
     vars: Vec<FillVar>,
     bindings: Map<String, Value>,
     suggested_values: IndexMap<String, String>,
+    ask: IndexMap<String, String>,
 }
 
 pub fn open(app: &Blankey, args: OpenArgs) -> Result<Session, String> {
@@ -56,11 +62,13 @@ pub fn open(app: &Blankey, args: OpenArgs) -> Result<Session, String> {
     let mut name = args.name;
     let vault_fill_set = match args.fill_set_id {
         Some(id) => Some(id),
-        None if !name.is_empty() => app.vault().find_fill_set(&name).map_err(|e| e.to_string())?,
+        None if !name.is_empty() && args.copy_fill_set_id.is_none() => {
+            app.vault().find_fill_set(&name).map_err(|e| e.to_string())?
+        }
         None => None,
     };
     let mut bindings = Map::new();
-    if let Some(id) = vault_fill_set {
+    if let Some(id) = vault_fill_set.or(args.copy_fill_set_id) {
         let (info, saved) = app.vault().get_fill_set(id).map_err(|e| e.to_string())?;
         if templates.is_empty() {
             templates = info.templates;
@@ -77,7 +85,13 @@ pub fn open(app: &Blankey, args: OpenArgs) -> Result<Session, String> {
         bindings.insert(var.clone(), json!({fill::VALUE: value}));
     }
     for (var, path) in &args.paths {
-        bindings.insert(var.clone(), json!({fill::PATH: path}));
+        bindings.insert(var.clone(), fill::path_binding(path)?);
+    }
+    for var in args.ask.keys() {
+        let typed = bindings.get(var).is_some_and(|b| b.get(fill::VALUE).is_some());
+        if !typed {
+            bindings.insert(var.clone(), json!({fill::VALUE: ""}));
+        }
     }
     let loaded = app.fill_templates(&templates)?;
     let roles = fill::roles(&loaded);
@@ -112,6 +126,7 @@ pub fn open(app: &Blankey, args: OpenArgs) -> Result<Session, String> {
         vars: vars.into_values().collect(),
         bindings,
         suggested_values: args.values,
+        ask: args.ask,
     })
 }
 
@@ -119,6 +134,9 @@ pub fn open(app: &Blankey, args: OpenArgs) -> Result<Session, String> {
 pub struct SourceEntry {
     path: String,
     value: String,
+    /// set for a profile read directly; path is then its key
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -132,10 +150,12 @@ pub struct RowState {
 
 #[derive(Serialize)]
 pub struct Evaluation {
-    /// role -> vault fields of its profile with their values
+    /// role (or "profile:ID" for a profile read directly) -> vault fields of its profile with their values
     sources: IndexMap<String, Vec<SourceEntry>>,
     rows: IndexMap<String, RowState>,
     empty: Vec<String>,
+    /// roles the bindings still read, so they need a profile
+    used_roles: Vec<String>,
 }
 
 fn row_value(binding: &Value, context: &Value, var: &FillVar) -> String {
@@ -154,7 +174,10 @@ pub fn evaluate(
 ) -> Result<Evaluation, String> {
     let loaded = app.fill_templates(templates)?;
     let vars = fill::variables(&loaded)?;
-    let context = app.real_context(profiles)?;
+    let roles = fill::roles(&loaded);
+    let used = fill::used_roles(&vars, bindings, &roles.keys().cloned().collect());
+    let used_roles = roles.into_keys().filter(|r| used.contains(r)).collect();
+    let context = app.fill_context(profiles, bindings)?;
     let mut sources = IndexMap::new();
     {
         let vault = app.vault();
@@ -163,9 +186,12 @@ pub fn evaluate(
                 .get_values(*id)
                 .map_err(|e| e.to_string())?
                 .into_iter()
-                .map(|(key, (_, value))| SourceEntry { path: format!("{role}.{key}"), value })
+                .map(|(key, (_, value))| SourceEntry { path: format!("{role}.{key}"), value, profile: None })
                 .collect();
             sources.insert(role.clone(), entries);
+        }
+        for id in fill::pinned_profiles(bindings) {
+            sources.insert(format!("profile:{id}"), profile_entries_of(&vault, id)?);
         }
     }
     let default = json!({fill::DEFAULT: true});
@@ -181,7 +207,21 @@ pub fn evaluate(
         let default_value = (!var.defaults.is_empty()).then(|| row_value(&default, &context, var));
         rows.insert(var.name.clone(), RowState { value, empty: is_blank, default_value });
     }
-    Ok(Evaluation { sources, rows, empty })
+    Ok(Evaluation { sources, rows, empty, used_roles })
+}
+
+fn profile_entries_of(vault: &Vault, profile_id: i64) -> Result<Vec<SourceEntry>, String> {
+    Ok(vault
+        .get_values(profile_id)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(key, (_, value))| SourceEntry { path: key, value, profile: Some(profile_id) })
+        .collect())
+}
+
+/// The fields of any profile with their values, to bind a blank to it directly.
+pub fn profile_entries(app: &Blankey, profile_id: i64) -> Result<Vec<SourceEntry>, String> {
+    profile_entries_of(&app.vault(), profile_id)
 }
 
 /// Previews of every template with the chosen values in place.
@@ -192,7 +232,7 @@ pub fn previews(
     bindings: &Map<String, Value>,
 ) -> Result<IndexMap<String, Preview>, String> {
     let loaded = app.fill_templates(templates)?;
-    let context = app.real_context(profiles)?;
+    let context = app.fill_context(profiles, bindings)?;
     let resolved = fill::resolve(&loaded, bindings, &context)?;
     Ok(loaded
         .iter()
@@ -227,8 +267,9 @@ pub fn save(app: &Blankey, args: SaveArgs) -> Result<Saved, String> {
         problems.push("Enter a fill set name".to_string());
     }
     let loaded = app.fill_templates(&args.templates)?;
-    let mut missing: Vec<String> =
-        fill::roles(&loaded).into_keys().filter(|r| !args.profiles.contains_key(r)).collect();
+    let role_names: HashSet<String> = fill::roles(&loaded).into_keys().collect();
+    let used = fill::used_roles(&fill::variables(&loaded)?, &args.bindings, &role_names);
+    let mut missing: Vec<String> = used.into_iter().filter(|r| !args.profiles.contains_key(r)).collect();
     if !missing.is_empty() {
         missing.sort();
         problems.push(format!("Choose profiles for: {}", missing.join(", ")));

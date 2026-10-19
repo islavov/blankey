@@ -163,12 +163,17 @@ const fillSession = (db, args) => ({
     { name: "who", label: "Borrower", defaults: { loan: "{{ applicant.name }}" }, contexts: [] },
     { name: "amount", label: "Amount", defaults: {}, contexts: [] },
   ],
-  bindings: {},
+  bindings: Object.fromEntries(Object.keys(args.ask || {}).map((name) => [name, { value: "" }])),
   suggested_values: { amount: "34 000" },
+  ask: args.ask || {},
 });
 
 function evaluate({ bindings, profiles }) {
-  const value = (name, fallback) => bindings[name]?.value ?? (bindings[name]?.path ? `from ${bindings[name].path}` : fallback);
+  const value = (name, fallback) => {
+    const b = bindings[name];
+    if (b?.path) return b.profile ? `from ${b.profile}:${b.path}` : `from ${b.path}`;
+    return b?.value ?? fallback;
+  };
   const row = (name, fallback) => {
     const v = value(name, fallback);
     return { value: v, empty: !v, default_value: fallback };
@@ -177,7 +182,11 @@ function evaluate({ bindings, profiles }) {
   const sources = profiles.applicant
     ? { applicant: [{ path: "applicant.name", value: "John Watson" }, { path: "applicant.egn", value: "" }] }
     : {};
-  return { sources, rows, empty: Object.keys(rows).filter((k) => rows[k].empty) };
+  for (const b of Object.values(bindings)) {
+    if (b?.profile) sources[`profile:${b.profile}`] = [{ path: b.path, value: `from ${b.profile}:${b.path}`, profile: b.profile }];
+  }
+  const readsRole = Object.keys(rows).some((k) => !bindings[k] || bindings[k].default || (bindings[k].path && !bindings[k].profile));
+  return { sources, rows, empty: Object.keys(rows).filter((k) => rows[k].empty), used_roles: readsRole ? ["applicant"] : [] };
 }
 
 export function createBackend(db = seed()) {
@@ -324,6 +333,7 @@ export function createBackend(db = seed()) {
     fill_open: ({ args }) => fillSession(db, args),
     fill_evaluate: ({ args }) => evaluate(args),
     fill_preview: () => ({ nzok: pagesPreview, loan: htmlPreview }),
+    fill_profile_entries: ({ profileId }) => [{ path: "name", value: `profile ${profileId} name`, profile: profileId }],
     fill_save: ({ args }) => {
       if (!args.name) throw "Enter a fill set name";
       if (args.request_id) removeRequest(args.request_id);
