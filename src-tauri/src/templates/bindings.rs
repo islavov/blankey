@@ -13,6 +13,7 @@ use serde_json::{Map, Value};
 use crate::fieldtypes;
 
 static TAG_REGION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)\{\{(.*?)\}\}|\{%(.*?)%\}").unwrap());
+static BARE_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\w+)(\.\w+)+$").unwrap());
 
 fn environment() -> &'static Environment<'static> {
     static ENV: OnceLock<Environment<'static>> = OnceLock::new();
@@ -152,6 +153,13 @@ pub fn referenced_paths(expression: &str, roles: &HashSet<String>) -> BTreeSet<S
     let all: Vec<String> = paths.iter().cloned().collect();
     paths.retain(|p| !all.iter().any(|other| other != p && other.starts_with(&format!("{p}."))));
     paths
+}
+
+/// A binding written as plain text "role.key" instead of "{{ role.key }}": it would render as that text.
+pub fn bare_path(expression: &str, roles: &HashSet<String>) -> Option<String> {
+    let text = expression.trim();
+    let role = BARE_PATH.captures(text)?.get(1)?.as_str();
+    roles.contains(role).then(|| text.to_string())
 }
 
 fn scan_paths(code: &str, roles: &HashSet<String>, out: &mut BTreeSet<String>) {
@@ -357,6 +365,18 @@ mod tests {
         );
         assert_eq!(referenced_paths("{{ 'applicant.name' }} applicant.x", &r), set(&[]));
         assert_eq!(referenced_paths("{{ applicant.name.upper() }}", &r), set(&["applicant.name"]));
+    }
+
+    #[test]
+    fn bare_paths_are_detected() {
+        let r = roles(&["applicant", "loan"]);
+        assert_eq!(bare_path(" applicant.address.city ", &r).as_deref(), Some("applicant.address.city"));
+        assert_eq!(bare_path("loan.items.0", &r).as_deref(), Some("loan.items.0"));
+        assert_eq!(bare_path("other.name", &r), None);
+        assert_eq!(bare_path("{{ applicant.name }}", &r), None);
+        assert_eq!(bare_path("applicant.name | upper", &r), None);
+        assert_eq!(bare_path("applicant", &r), None);
+        assert_eq!(bare_path("гр. София", &r), None);
     }
 
     #[test]
