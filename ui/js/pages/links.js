@@ -7,7 +7,7 @@ import { confirmDialog, toast } from "../ui/feedback.js";
 import { openSheet, SheetHead } from "../ui/sheet.js";
 import { Empty, Page } from "../ui/page.js";
 import { Select } from "../ui/select.js";
-import { Table } from "../ui/table.js";
+import { Table, useSelection } from "../ui/table.js";
 import { relaySignIn } from "./connections.js";
 
 const linkState = (state) => ({ open: t("Open"), expired: t("Expired"), revoked: t("Revoked"), full: t("Full") })[state] || state;
@@ -52,30 +52,38 @@ function columns(narrow) {
 export function Links() {
   const { relay } = useStore();
   const links = useLoad(() => call("list_links"), []);
-  const [selected, setSelected] = useRemembered("links", null);
+  const [picked, pick, setSelected] = useSelection("links");
   const [filter, setFilter] = useRemembered("links.filter", "all");
   if (!links || !relay) return null;
 
-  const link = links.find((l) => l.link_id === selected);
-  const need = (action) => () => (link ? action(link) : toast(t("Select a link")));
+  const chosen = links.filter((l) => picked.includes(l.link_id));
+  // what came in shows beside the table for a single link
+  const link = chosen.length === 1 ? chosen[0] : null;
+  const last = links.find((l) => l.link_id === picked.at(-1));
+  const need = (action) => () => (last ? action(last) : toast(t("Select a link")));
+  const needAll = (action) => () => (chosen.length ? action(chosen) : toast(t("Select a link")));
 
   const create = async () => {
     await openLinkSheet();
     reload();
   };
 
-  const remove = async (l) => {
+  const remove = async (chosen) => {
     const text = t("The link stops working and is removed, with what it received that you have not saved. Values and files you saved stay.");
-    if (!(await confirmDialog(t("Delete \"{name}\"?", { name: l.title }), text))) return;
-    await call("delete_link", { linkId: l.link_id });
-    setSelected(null);
+    const title =
+      chosen.length === 1 ? t("Delete \"{name}\"?", { name: chosen[0].title }) : tn(chosen.length, "Delete {n} link?", "Delete {n} links?");
+    if (!(await confirmDialog(title, text))) return;
+    for (const l of chosen) await call("delete_link", { linkId: l.link_id });
+    setSelected([]);
     reload();
   };
 
-  const revoke = async (l) => {
+  const revoke = async (chosen) => {
     const text = t("The form stops taking answers. What you already received stays here.");
-    if (!(await confirmDialog(t("Revoke \"{name}\"?", { name: l.title }), text, t("Revoke")))) return;
-    await call("revoke_link", { linkId: l.link_id });
+    const title =
+      chosen.length === 1 ? t("Revoke \"{name}\"?", { name: chosen[0].title }) : tn(chosen.length, "Revoke {n} link?", "Revoke {n} links?");
+    if (!(await confirmDialog(title, text, t("Revoke")))) return;
+    for (const l of chosen) await call("revoke_link", { linkId: l.link_id });
     reload();
   };
 
@@ -100,8 +108,8 @@ export function Links() {
     <${Page} title=${t("Collection links")} subtitle=${pending ? tn(pending, "{n} submission to review", "{n} submissions to review") : tn(links.length, "{n} link", "{n} links")} actions=${[
       [t("New link"), create, "primary"],
       [t("Copy link"), need((l) => copyLink(l.url))],
-      [t("Revoke"), need(revoke)],
-      [t("Delete"), need(remove), "danger"],
+      [t("Revoke"), needAll(revoke)],
+      [t("Delete"), needAll(remove), "danger"],
     ]}>
       <div class=${`links-split ${link ? "with-side" : ""}`}>
         <div class="links-main">
@@ -114,14 +122,14 @@ export function Links() {
           ${rows.length
             ? html`<${Table}
                 rows=${rows}
-                selected=${[selected]}
-                onSelect=${([id]) => setSelected(id)}
+                selected=${picked}
+                onPick=${pick}
                 onOpen=${(id) => copyLink(links.find((l) => l.link_id === id).url)}
                 rowClass=${(l) => (l.pending ? "pending" : "")}
                 columns=${columns(!!link)} />`
             : html`<${Empty}>${links.length ? t("No links match.") : html`${t("No collection links yet.")}<br /><span class="small">${t("Make one to ask someone for the data of a profile, with files.")}</span>`}</${Empty}>`}
         </div>
-        ${link && html`<${Submissions} key=${link.link_id} link=${link} close=${() => setSelected(null)} />`}
+        ${link && html`<${Submissions} key=${link.link_id} link=${link} close=${() => setSelected([])} />`}
       </div>
     </${Page}>`;
 }

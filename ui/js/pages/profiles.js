@@ -5,25 +5,31 @@ import { html, matches, placeholder, reload, state, useLoad, useRemembered } fro
 import { confirmDialog, dialog, toast } from "../ui/feedback.js";
 import { Page } from "../ui/page.js";
 import { Select } from "../ui/select.js";
+import { keepText, useSelection } from "../ui/table.js";
 
 export function Profiles() {
   const profiles = useLoad(() => call("list_profiles"), []);
-  const [selected, setSelected] = useRemembered("profiles", null);
+  const [picked, pick, setSelected] = useSelection("profiles");
   const [dirty, setDirty] = useState(false);
   // bumped after a save, so the detail reloads its fields from the vault
   const [version, setVersion] = useState(0);
   if (!profiles) return null;
 
   const visible = profiles.filter((p) => matches(p.name, p.kind));
-  const current = visible.some((p) => p.id === selected) ? selected : visible[0]?.id;
+  const order = visible.map((p) => p.id);
+  const chosen = picked.filter((id) => order.includes(id));
+  const selected = chosen.length ? chosen : order.slice(0, 1);
+  // the detail shows the profile clicked last
+  const current = selected.at(-1);
   const profile = profiles.find((p) => p.id === current);
 
-  const choose = async (id) => {
+  const choose = async (e, id) => {
+    const event = { metaKey: e.metaKey, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey };
     if (dirty && id !== current) {
       if (!(await confirmDialog(t("Discard unsaved changes?"), t("The fields of this profile were edited."), t("Discard")))) return;
     }
     setDirty(false);
-    setSelected(id);
+    pick(event, id, order, selected);
   };
 
   const create = async () => {
@@ -36,7 +42,7 @@ export function Profiles() {
       ok: t("Create"),
     });
     if (!values?.name?.trim()) return;
-    setSelected(await call("create_profile", values));
+    setSelected([await call("create_profile", values)]);
     reload();
   };
 
@@ -57,9 +63,15 @@ export function Profiles() {
 
   const remove = async () => {
     if (!profile) return toast(t("Select a profile"));
-    if (!(await confirmDialog(t("Delete the profile \"{name}\"?", { name: profile.name }), t("All its fields are removed from the vault.")))) return;
-    await call("delete_profile", { id: profile.id });
-    setSelected(null);
+    const chosen = profiles.filter((p) => selected.includes(p.id));
+    const title =
+      chosen.length === 1
+        ? t("Delete the profile \"{name}\"?", { name: chosen[0].name })
+        : tn(chosen.length, "Delete {n} profile?", "Delete {n} profiles?");
+    if (!(await confirmDialog(title, t("All its fields are removed from the vault.")))) return;
+    for (const p of chosen) await call("delete_profile", { id: p.id });
+    setDirty(false);
+    setSelected([]);
     reload();
   };
 
@@ -79,7 +91,8 @@ export function Profiles() {
           ${visible.length
             ? visible.map(
                 (p) => html`
-                  <div key=${p.id} class=${`list-item ${p.id === current ? "active" : ""}`} onClick=${() => choose(p.id)}>
+                  <div key=${p.id} class=${`list-item ${selected.includes(p.id) ? "active" : ""}`} onMouseDown=${keepText}
+                    onClick=${(e) => choose(e, p.id)}>
                     <div class="title">${p.name}</div>
                     <div class="muted small">${p.kind || t("profile")} · #${p.id}</div>
                   </div>`
