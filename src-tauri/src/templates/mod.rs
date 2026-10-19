@@ -7,9 +7,9 @@ pub mod fill;
 pub mod preview;
 pub mod typst;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 
 use indexmap::IndexMap;
 use regex::Regex;
@@ -135,8 +135,12 @@ pub fn yaml_dump<T: Serialize>(data: &T) -> String {
     serde_yaml::to_string(data).unwrap_or_default()
 }
 
+/// Manifest stamp: re-parsed when the file changes.
+type Stamp = (std::time::SystemTime, u64);
+
 pub struct TemplateStore {
     root: PathBuf,
+    cache: Mutex<HashMap<String, (Stamp, Template)>>,
 }
 
 pub struct SaveTemplate<'a> {
@@ -155,7 +159,7 @@ pub struct SaveTemplate<'a> {
 
 impl TemplateStore {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self { root, cache: Mutex::default() }
     }
 
     pub fn root(&self) -> &Path {
@@ -179,7 +183,21 @@ impl TemplateStore {
             return Err(unknown());
         }
         let directory = self.root.join(id);
-        let text = std::fs::read_to_string(directory.join("manifest.yaml")).map_err(|_| unknown())?;
+        let manifest = directory.join("manifest.yaml");
+        let meta = std::fs::metadata(&manifest).map_err(|_| unknown())?;
+        let stamp: Stamp = (meta.modified().map_err(|e| e.to_string())?, meta.len());
+        if let Some((cached, template)) = self.cache.lock().expect("template cache").get(id) {
+            if *cached == stamp {
+                return Ok(template.clone());
+            }
+        }
+        let template = self.parse(id, directory, &manifest)?;
+        self.cache.lock().expect("template cache").insert(id.to_string(), (stamp, template.clone()));
+        Ok(template)
+    }
+
+    fn parse(&self, id: &str, directory: PathBuf, manifest: &Path) -> Result<Template, String> {
+        let text = std::fs::read_to_string(manifest).map_err(|_| format!("Unknown template {id:?}"))?;
         let data: serde_yaml::Value = serde_yaml::from_str(&text).map_err(|e| format!("{id}: {e}"))?;
         let kind = TemplateKind::parse(data.get("kind").and_then(|k| k.as_str()).unwrap_or(""))?;
         let boxes = data
@@ -239,11 +257,14 @@ impl TemplateStore {
         }
         std::fs::write(template.directory.join("manifest.yaml"), yaml_dump(&template.manifest_out()))
             .map_err(|e| e.to_string())?;
+        self.cache.lock().expect("template cache").remove(spec.id);
         Ok(template)
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
-        std::fs::remove_dir_all(self.get(id)?.directory).map_err(|e| e.to_string())
+        let directory = self.get(id)?.directory;
+        self.cache.lock().expect("template cache").remove(id);
+        std::fs::remove_dir_all(directory).map_err(|e| e.to_string())
     }
 
     pub fn examples(&self, id: &str) -> Result<Vec<String>, String> {
