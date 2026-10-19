@@ -83,6 +83,13 @@ impl Blankey {
         self.vault.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Unlocks with the keychain-wrapped key, reading the keychain without holding the vault lock.
+    pub fn unlock_with_keyring(&self) -> bool {
+        let secrets = self.vault().secrets();
+        let Ok(Some(stored)) = secrets.get() else { return false };
+        self.vault().unlock_with_keyring_secret(&stored)
+    }
+
     pub fn language(&self) -> String {
         self.language.read().unwrap().clone()
     }
@@ -370,5 +377,51 @@ impl Blankey {
         let id = vault.save_fill_set(&name, &templates, &profiles, &bindings, existing).map_err(|e| e.to_string())?;
         let _ = vault.audit("user", "import_fill_set", &id.to_string());
         Ok(id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, OnceLock, Weak};
+
+    use super::*;
+    use crate::keychain::MemoryStore;
+
+    /// Notes whether the vault lock was free while the keychain was read.
+    struct Probe {
+        store: MemoryStore,
+        app: Arc<OnceLock<Weak<Blankey>>>,
+        vault_free: Arc<Mutex<Option<bool>>>,
+    }
+
+    impl SecretStore for Probe {
+        fn get(&self) -> Result<Option<String>, String> {
+            if let Some(app) = self.app.get().and_then(Weak::upgrade) {
+                *self.vault_free.lock().unwrap() = Some(app.vault.try_lock().is_ok());
+            }
+            self.store.get()
+        }
+
+        fn set(&self, value: &str) -> Result<(), String> {
+            self.store.set(value)
+        }
+
+        fn delete(&self) -> Result<(), String> {
+            self.store.delete()
+        }
+    }
+
+    #[test]
+    fn keyring_unlock_reads_the_keychain_outside_the_vault_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::load_from(dir.path().join("data")).unwrap();
+        let (slot, vault_free) = (Arc::new(OnceLock::new()), Arc::new(Mutex::new(None)));
+        let probe = Probe { store: MemoryStore::default(), app: slot.clone(), vault_free: vault_free.clone() };
+        let app = Arc::new(Blankey::new(config, Box::new(probe)).unwrap());
+        slot.set(Arc::downgrade(&app)).unwrap();
+        app.vault().initialize("correct horse battery staple", true).unwrap();
+        app.vault().lock();
+        assert!(app.unlock_with_keyring());
+        assert_eq!(*vault_free.lock().unwrap(), Some(true));
     }
 }
