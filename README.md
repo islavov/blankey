@@ -120,7 +120,7 @@ you sign in to the new one. `config.toml` keeps `relay_enabled` and `relay_url`.
 
 ### Flat PDFs
 
-PDFs without form fields (exports, scans) become `pdf_form` templates through the assistant: `inspect_pdf_layout`
+PDFs without form fields (exports, scans) become `pdf_form` templates through the assistant: `inspect_pdf`
 shows each page with a coordinate grid and the printed text positions, and `save_pdf_overlay_template` takes the flat
 PDF plus boxes (`{name, page, rect, type: text|check}` in PDF points) and field bindings, adds real form fields and
 returns the pages with the boxes outlined. The original is kept as `flat.pdf`, so boxes can be corrected later.

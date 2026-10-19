@@ -91,17 +91,26 @@ mod tests {
         let app = tools::tests::app(dir.path());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(serve(app, listener, std::future::pending()));
+        tokio::spawn(serve(app.clone(), listener, std::future::pending()));
         tokio::task::spawn_blocking(move || {
             let health = ureq::get(&format!("http://127.0.0.1:{port}/health")).call().unwrap().into_string().unwrap();
             assert_eq!(health, "blankey");
             let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
                 "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}});
-            let (status, reply) = post(port, init, None);
+            let (status, reply) = post(port, init.clone(), None);
             assert_eq!(status, 200, "{reply}");
             assert!(reply["result"]["instructions"].as_str().unwrap().contains("Blankey"));
             let (_, tools) = post(port, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), None);
-            assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 25);
+            let names: Vec<&str> =
+                tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+            assert_eq!(names.len(), 18, "collection link tools need a Blankey Online sign-in: {names:?}");
+            assert!(!names.contains(&"create_collection_link"));
+            assert!(!reply["result"]["instructions"].as_str().unwrap().contains("create_collection_link"));
+            app.vault().set_relay_account(Some("someone@example.com")).unwrap();
+            let (_, tools) = post(port, json!({"jsonrpc": "2.0", "id": 5, "method": "tools/list"}), None);
+            assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 20);
+            let (_, signed_in) = post(port, init.clone(), None);
+            assert!(signed_in["result"]["instructions"].as_str().unwrap().contains("create_collection_link"));
             // a find with no arguments at all
             let find = json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "find_templates"}});
             let (_, reply) = post(port, find, None);
@@ -145,18 +154,18 @@ mod tests {
         let remote = || Some(Remote { grant: "g1".into(), client_name: "Claude".into() });
         let raw = json!({"path": path});
 
-        let reply = call_in_process(app.clone(), remote(), "inspect_pdf_form", raw.clone()).await;
+        let reply = call_in_process(app.clone(), remote(), "inspect_pdf", raw.clone()).await;
         assert_eq!(reply["result"]["isError"], true, "{reply}");
         assert!(reply["result"]["content"][0]["text"].as_str().unwrap().contains("request_file"), "{reply}");
-        let reply = call_in_process(app.clone(), None, "inspect_pdf_form", raw).await;
+        let reply = call_in_process(app.clone(), None, "inspect_pdf", raw).await;
         assert_ne!(reply["result"]["isError"], true, "{reply}");
 
         let id = app.create_request(crate::core::FILE, json!({"kind": "pdf", "reason": "r"}), Some("g1")).unwrap();
         let file_id = app.store_upload(id, &path).unwrap()["file_id"].clone();
-        let reply = call_in_process(app.clone(), remote(), "inspect_pdf_form", json!({"path": file_id})).await;
+        let reply = call_in_process(app.clone(), remote(), "inspect_pdf", json!({"path": file_id})).await;
         assert_ne!(reply["result"]["isError"], true, "{reply}");
         let other = Some(Remote { grant: "g2".into(), client_name: "Other".into() });
-        let reply = call_in_process(app, other, "inspect_pdf_form", json!({"path": file_id})).await;
+        let reply = call_in_process(app, other, "inspect_pdf", json!({"path": file_id})).await;
         assert_eq!(reply["result"]["isError"], true, "{reply}");
     }
 }
