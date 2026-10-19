@@ -7,7 +7,7 @@ const SERVICE: &str = "blankey";
 const USER: &str = "vault-kek";
 const RELAY_TOKEN_USER: &str = "relay-refresh-token";
 
-pub trait SecretStore: Send {
+pub trait SecretStore: Send + Sync {
     fn get(&self) -> Result<Option<String>, String>;
     fn set(&self, value: &str) -> Result<(), String>;
     fn delete(&self) -> Result<(), String>;

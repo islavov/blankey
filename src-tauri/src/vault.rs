@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -338,7 +339,7 @@ fn parse_profiles(text: &str) -> Profiles {
 pub struct Vault {
     path: PathBuf,
     conn: Connection,
-    secrets: Box<dyn SecretStore>,
+    secrets: Arc<dyn SecretStore>,
     dek: Option<Key>,
     seal_private: Option<Key>,
     /// resolved results for the MCP client, readable while locked for the life of this process
@@ -351,6 +352,7 @@ impl Vault {
         conn.pragma_update(None, "journal_mode", "wal")?;
         conn.pragma_update(None, "foreign_keys", 1)?;
         migrate(&mut conn)?;
+        let secrets = secrets.into();
         Ok(Self { path: path.to_path_buf(), conn, secrets, dek: None, seal_private: None, results: HashMap::new() })
     }
 
@@ -400,10 +402,20 @@ impl Vault {
     /// False when there is no keychain key or it does not open the vault.
     pub fn unlock_with_keyring(&mut self) -> bool {
         let Ok(Some(stored)) = self.secrets.get() else { return false };
+        self.unlock_with_keyring_secret(&stored)
+    }
+
+    /// The keychain, to read outside the vault lock: a keychain prompt can wait on the user for minutes.
+    pub fn secrets(&self) -> Arc<dyn SecretStore> {
+        self.secrets.clone()
+    }
+
+    /// `stored` is the keychain entry, read with `secrets()`.
+    pub fn unlock_with_keyring_secret(&mut self, stored: &str) -> bool {
         if self.meta("wrapped_keyring").ok().flatten().is_none() {
             return false;
         }
-        let Ok(kek) = crypto::decode_b64(&stored) else { return false };
+        let Ok(kek) = crypto::decode_b64(stored) else { return false };
         let Ok(kek) = crypto::key_from(&kek) else { return false };
         self.unwrap_dek(&kek, "wrapped_keyring").is_ok()
     }

@@ -90,7 +90,7 @@ pub fn quick_unlock(handle: &AppHandle, reason: &str) -> bool {
         eprintln!("quick unlock: Touch ID was cancelled or failed");
         return false;
     }
-    let unlocked = app.vault().unlock_with_keyring();
+    let unlocked = app.unlock_with_keyring();
     if !unlocked {
         eprintln!("quick unlock: the keychain key is missing, unreadable or does not open the vault");
     }
@@ -203,12 +203,9 @@ pub fn run() {
     let secrets = OsKeyring::for_data_dir(&config.data_dir, &Config::default_data_dir());
     let app = Arc::new(Blankey::new(config, Box::new(secrets)).expect("cannot open the vault"));
     app.set_language(&i18n::resolve(app.vault().relay_language().ok().flatten().as_deref()));
-    {
-        let mut vault = app.vault();
-        // with Touch ID the vault stays locked until first use
-        if vault.initialized() && !keychain::biometric_available() {
-            vault.unlock_with_keyring();
-        }
+    // with Touch ID the vault stays locked until first use
+    if app.vault().initialized() && !keychain::biometric_available() {
+        app.unlock_with_keyring();
     }
 
     tauri::Builder::default()

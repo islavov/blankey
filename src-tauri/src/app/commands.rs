@@ -53,8 +53,9 @@ pub struct Status {
     languages: serde_json::Map<String, Value>,
 }
 
+// async so it runs off the main thread: the window waits on it before drawing anything
 #[tauri::command]
-fn status(state: State<AppState>) -> CmdResult<Status> {
+async fn status(state: State<'_, AppState>) -> CmdResult<Status> {
     let app = &state.app;
     let vault = app.vault();
     Ok(Status {

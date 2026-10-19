@@ -8,7 +8,9 @@
       "minimumSystemVersion": "13.0",
       "frameworks": [
         "pdfium/libpdfium.dylib"
-      ]
+      ],
+      "signingIdentity": "-",
+      "hardenedRuntime": false
     }
   }
 }
