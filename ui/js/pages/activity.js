@@ -31,7 +31,7 @@ export function Activity() {
         ? html`<${Table}
             rows=${visible}
             selected=${[selected]}
-            onSelect=${([id]) => setSelected(id)}
+            onPick=${(e, id) => setSelected(id)}
             onOpen=${open}
             rowClass=${(r) => (r.status === "pending" ? "pending" : "")}
             columns=${[

@@ -1,9 +1,9 @@
 import { call } from "../api.js";
 import { t, tn } from "../i18n.js";
-import { html, matches, megabytes, reload, useLoad, useRemembered, when } from "../lib.js";
+import { html, matches, megabytes, reload, useLoad, when } from "../lib.js";
 import { confirmDialog, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
-import { Table } from "../ui/table.js";
+import { Table, useSelection } from "../ui/table.js";
 
 const extension = (name) => (name.includes(".") ? name.split(".").pop().toUpperCase() : t("File"));
 
@@ -37,9 +37,10 @@ const split = (ids, prefix) => ids.filter((id) => id.startsWith(prefix)).map((id
 
 export function Documents() {
   const docs = useLoad(() => Promise.all([call("list_documents"), call("list_collected_files")]), []);
-  const [selected, setSelected] = useRemembered("documents", []);
+  const [picked, pick, setSelected] = useSelection("documents");
   if (!docs) return null;
   const all = rows(...docs);
+  const selected = picked.filter((id) => all.some((d) => d.id === id));
 
   const need = (action) => () => (selected.length ? action(selected) : toast(t("Select a document")));
   const open = async (ids) => {
@@ -73,9 +74,8 @@ export function Documents() {
       ${visible.length
         ? html`<${Table}
             rows=${visible}
-            multi
             selected=${selected}
-            onSelect=${setSelected}
+            onPick=${pick}
             onOpen=${(id) => open([id])}
             columns=${[
               { title: t("Title"), cell: (d) => d.title },

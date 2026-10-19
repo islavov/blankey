@@ -108,7 +108,6 @@ export function Connections() {
       ${rows.length
         ? html`<${Table}
             rows=${rows}
-            onSelect=${() => {}}
             columns=${[
               { title: t("Agent"), cell: (g) => g.client_name },
               { title: t("Host"), cell: (g) => html`<span class="mono">${g.redirect_host}</span>` },
