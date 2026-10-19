@@ -1,6 +1,6 @@
 [package]
 name = "blankey"
-version = "0.2.4"
+version = "0.2.5"
 description = "Local encrypted PII vault and document templating with an MCP server"
 license = "MIT"
 edition = "2021"

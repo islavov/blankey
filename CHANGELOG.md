@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.5
 
 - Template bindings written as plain text (`buyer.name` instead of `{{ buyer.name }}`) are refused when a template is
   saved, and check_bindings reports existing ones as `literal` instead of ok.
