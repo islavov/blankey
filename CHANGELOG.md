@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.4
 
 - macOS no longer calls a downloaded Blankey damaged: the whole app is signed (ad hoc), so macOS asks once to open an
   app from an unverified developer (System Settings, Privacy & Security, Open Anyway).
