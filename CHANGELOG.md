@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.5
+
+- Template bindings written as plain text (`buyer.name` instead of `{{ buyer.name }}`) are refused when a template is
+  saved, and check_bindings reports existing ones as `literal` instead of ok.
+- request_fill refuses to open the fill form while a variable would start from a template default that gives no vault
+  value, and lists the profile keys to map in paths; `allow_defaults: true` opens it anyway. The MCP instructions and
+  the collection link's next step tell the assistant to map every variable to a profile key before filling.
+
 ## 0.2.4
 
 - macOS no longer calls a downloaded Blankey damaged: the whole app is signed (ad hoc), so macOS asks once to open an

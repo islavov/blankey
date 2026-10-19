@@ -6,10 +6,11 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
-use super::bindings::{evaluate, referenced_paths};
+use super::bindings::{bare_path, evaluate, referenced_paths};
 use super::engine::Values;
 use super::{docx, Template, TemplateKind};
 use crate::render::{pdf_form, preview};
+use crate::vault::FieldInfo;
 
 pub const PATH: &str = "path";
 pub const VALUE: &str = "value";
@@ -109,6 +110,22 @@ pub fn default_binding(var: &FillVar, role_names: &HashSet<String>) -> Value {
     }
 }
 
+pub fn has_field(infos: &[FieldInfo], key: &str) -> bool {
+    !key.is_empty() && infos.iter().any(|i| i.key == key || i.key.starts_with(&format!("{key}.")))
+}
+
+/// A var left to its template default that cannot give a vault value: the default is a bare "role.key" (plain
+/// text) or reads a key the role's profile does not have.
+pub fn uncovered(var: &FillVar, role_names: &HashSet<String>, fields: &IndexMap<String, Vec<FieldInfo>>) -> bool {
+    var.defaults.values().any(|expression| {
+        bare_path(expression, role_names).is_some()
+            || referenced_paths(expression, role_names).iter().any(|path| {
+                let (role, key) = path.split_once('.').unwrap_or((path, ""));
+                !fields.get(role).is_some_and(|infos| has_field(infos, key))
+            })
+    })
+}
+
 pub fn evaluate_binding(binding: &Value, context: &Value, expression: Option<&str>) -> Result<Value, String> {
     if let Some(path) = binding.get(PATH).and_then(Value::as_str) {
         return evaluate(&format!("{{{{ {path} }}}}"), context);
@@ -186,6 +203,20 @@ mod tests {
         assert_eq!(default_binding(&var(&[]), &roles), json!({"value": ""}));
         assert_eq!(describe_binding(&json!({"path": "manager.egn"})), "path:manager.egn");
         assert_eq!(describe_binding(&json!({"value": "secret"})), "value");
+    }
+
+    #[test]
+    fn uncovered_defaults() {
+        let roles: HashSet<String> = ["buyer".to_string()].into_iter().collect();
+        let info =
+            |key: &str| FieldInfo { key: key.into(), label: String::new(), field_type: "text".into(), length: 1 };
+        let fields: IndexMap<String, Vec<FieldInfo>> =
+            [("buyer".to_string(), vec![info("full_name"), info("address.city")])].into_iter().collect();
+        assert!(uncovered(&var(&[("a", "buyer.full_name")]), &roles, &fields));
+        assert!(uncovered(&var(&[("a", "{{ buyer.phone }}")]), &roles, &fields));
+        assert!(!uncovered(&var(&[("a", "{{ buyer.full_name | upper }}")]), &roles, &fields));
+        assert!(!uncovered(&var(&[("a", "{{ buyer.address }}")]), &roles, &fields));
+        assert!(!uncovered(&var(&[("a", "{{ today() }}")]), &roles, &fields));
     }
 
     #[test]

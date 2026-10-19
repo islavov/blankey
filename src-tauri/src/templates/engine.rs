@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use super::bindings::{as_text, evaluate, referenced_paths};
+use super::bindings::{as_text, bare_path, evaluate, referenced_paths};
 use super::{docx, typst, Template, TemplateKind};
 use crate::render::{fonts, pdf_form};
 use crate::vault::FieldInfo;
@@ -27,7 +27,7 @@ impl Rendered {
 #[derive(Serialize, Debug, Clone)]
 pub struct BindingReport {
     pub field: String,
-    /// ok | missing | empty | error | overflow | glyphs
+    /// ok | literal | missing | empty | error | overflow | glyphs
     pub status: String,
     pub missing: Vec<String>,
     pub empty: Vec<String>,
@@ -134,7 +134,12 @@ pub fn check(
     let mut reports = Vec::new();
     for (name, expression) in &template.fields {
         let mut report = BindingReport::new(name);
-        for path in referenced_paths(expression, &roles) {
+        let bare = bare_path(expression, &roles);
+        let paths = match &bare {
+            Some(path) => [path.clone()].into(),
+            None => referenced_paths(expression, &roles),
+        };
+        for path in paths {
             let (role, key) = path.split_once('.').unwrap_or((&path, ""));
             let Some(infos) = profile_fields.get(role) else {
                 report.missing.push(path.clone());
@@ -154,6 +159,12 @@ pub fn check(
             report.status = "missing".into();
         } else if !report.empty.is_empty() {
             report.status = "empty".into();
+        }
+        if let Some(path) = bare {
+            report.status = "literal".into();
+            report.error = Some(format!("plain text, not a binding; write \"{{{{ {path} }}}}\""));
+            reports.push(report);
+            continue;
         }
         if let Some(context) = context {
             let text = match evaluate(expression, context) {

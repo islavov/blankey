@@ -7,6 +7,7 @@ pub mod fill;
 pub mod preview;
 pub mod typst;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -203,6 +204,16 @@ impl TemplateStore {
         if !ID_RE.is_match(spec.id) {
             return Err("Template id must be lowercase letters, digits, '-' or '_'".into());
         }
+        let roles: HashSet<String> = spec.roles.keys().cloned().collect();
+        let bare: Vec<String> = spec
+            .fields
+            .iter()
+            .filter_map(|(name, expression)| bindings::bare_path(expression, &roles).map(|p| (name, p)))
+            .map(|(name, path)| format!("{name}: {path:?} is plain text; write \"{{{{ {path} }}}}\""))
+            .collect();
+        if !bare.is_empty() {
+            return Err(format!("Bindings must be Jinja expressions. {}", bare.join("; ")));
+        }
         let template = Template {
             id: spec.id.to_string(),
             name: spec.name.to_string(),
@@ -303,6 +314,25 @@ mod tests {
         assert_eq!(store.get_example("t", "ex").unwrap()["applicant"]["name"], "Иван");
         assert!(store.get("../x").is_err());
         assert_eq!(store.all().len(), 1);
+
+        let bare: StrMap = [("name".into(), "applicant.name".into())].into_iter().collect();
+        let error = store
+            .save(SaveTemplate {
+                id: "t",
+                name: "Т",
+                kind: TemplateKind::Typst,
+                roles: [("applicant".into(), "person".into())].into_iter().collect(),
+                fields: bare,
+                description: "",
+                source_file: None,
+                source_bytes: None,
+                source_text: None,
+                labels: StrMap::new(),
+                boxes: vec![],
+            })
+            .unwrap_err();
+        assert!(error.contains("{{ applicant.name }}"), "{error}");
+        assert_eq!(store.get("t").unwrap().fields, template.fields);
     }
 
     #[test]
