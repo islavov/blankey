@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- macOS no longer calls a downloaded Blankey damaged: the whole app is signed (ad hoc), so macOS asks once to open an
+  app from an unverified developer (System Settings, Privacy & Security, Open Anyway).
+- The window no longer stays white while macOS asks for keychain access during quick unlock.
+
 ## 0.2.3
 
 - Anonymous usage statistics: a minute after launch and then every hour, Blankey posts to the official relay how
