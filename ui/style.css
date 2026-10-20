@@ -190,6 +190,7 @@ table.grid { width: 100%; border-collapse: collapse; }
 .root-path { flex: 1; min-width: 0; }
 .root-path .title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-note { padding: 12px 14px; }
+.shared-path { max-width: 640px; margin: 24px auto; padding: 0 24px; word-break: break-all; }
 .empty { padding: 56px 24px; text-align: center; color: var(--muted); }
 .nowrap { white-space: nowrap; }
 

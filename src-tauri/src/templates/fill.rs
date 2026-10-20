@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
-use super::bindings::{bare_path, evaluate, referenced_paths};
+use super::bindings::{bare_path, evaluate, plain_path, referenced_paths};
 use super::engine::Values;
 use super::{docx, Template, TemplateKind};
 use crate::render::{pdf_form, preview};
@@ -126,12 +126,8 @@ fn unique_defaults(var: &FillVar) -> Vec<&String> {
 pub fn default_binding(var: &FillVar, role_names: &HashSet<String>) -> Value {
     let expressions = unique_defaults(var);
     if let [expression] = expressions[..] {
-        let paths = referenced_paths(expression, role_names);
-        if paths.len() == 1 {
-            let path = paths.iter().next().expect("one path");
-            if expression.replace(' ', "") == format!("{{{{{path}}}}}") {
-                return json!({PATH: path});
-            }
+        if let Some(path) = plain_path(expression, role_names) {
+            return json!({PATH: path});
         }
     }
     if expressions.is_empty() {

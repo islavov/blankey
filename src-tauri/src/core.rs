@@ -272,6 +272,34 @@ impl Blankey {
             .ok_or_else(unknown)
     }
 
+    /// Lets the agent of a `file` request that names a library file (`source: lib:<id>`) read that file; the user
+    /// approved it in the app. Nothing is copied: the agent gets the `lib:` id back.
+    pub fn share_library_file(&self, request_id: i64) -> Result<Value, String> {
+        let request = self.vault().get_request(request_id).map_err(|e| e.to_string())?;
+        let source = request.payload.get("source").and_then(Value::as_str).unwrap_or_default().to_string();
+        if request.kind != FILE || request.status != "pending" || library::parse_source(&source).is_none() {
+            return Err(format!("Request {request_id} does not ask for a library file"));
+        }
+        let path = self.library.path(&source)?;
+        let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+        let kind = request.payload.get("kind").and_then(Value::as_str).unwrap_or_default();
+        let result = json!({"outcome": "shared", "file_id": source, "kind": kind, "size": size});
+        let mut vault = self.vault();
+        vault.resolve_request(request_id, "done", result.clone()).map_err(|e| e.to_string())?;
+        let _ = vault.audit("user", "share_library_file", &format!("request={request_id} file={source}"));
+        Ok(result)
+    }
+
+    /// Whether the user let this remote agent read the library file `source` (a `lib:<id>`). Needs the vault
+    /// unlocked: request results are sealed.
+    pub fn library_shared(&self, grant: &str, source: &str) -> bool {
+        self.vault().list_requests(Some("done")).unwrap_or_default().iter().any(|r| {
+            r.kind == FILE
+                && r.grant_id.as_deref() == Some(grant)
+                && r.result.as_ref().and_then(|v| v.get("file_id")).and_then(Value::as_str) == Some(source)
+        })
+    }
+
     // -- metadata (safe for MCP) -------------------------------------------
 
     pub fn profile_fields(&self, profiles: &Profiles) -> Result<IndexMap<String, Vec<FieldInfo>>, String> {

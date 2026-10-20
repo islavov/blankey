@@ -157,9 +157,10 @@ function ProfileInput({ request, profile_name, existing, close }) {
     </div>`;
 }
 
-/** The assistant asks for a document; Blankey keeps a copy of the picked file and gives the assistant only its id. */
+/** The assistant asks for a document: one the user picks (Blankey keeps a copy and gives the assistant only its id),
+ * or, with `source`, one from the user's folders that the assistant may read once allowed. */
 function FileRequest({ request, close }) {
-  const { kind = "", reason } = request.payload;
+  const { kind = "", reason, source, path } = request.payload;
 
   const cancel = async () => {
     await invoke("cancel_request", { id: request.id });
@@ -172,6 +173,26 @@ function FileRequest({ request, close }) {
     toast(t("Shared {name}", { name: file.name }));
     close();
   };
+
+  const allow = async () => {
+    const shared = await call("share_library_request", { id: request.id }).catch(() => null);
+    if (!shared) return;
+    toast(t("Shared {name}", { name: path.split("/").pop() }));
+    close();
+  };
+
+  if (source) {
+    return html`
+      <div class="sheet-head">
+        <${SheetHead} icon="doc" title=${t("Your AI assistant asks to read a file from your folders")} reason=${reason} />
+      </div>
+      <div class="sheet-body"><p class="mono selectable shared-path">${path}</p></div>
+      <div class="sheet-foot">
+        <span class="note">${t("The assistant will read the text and pages of this file, nothing else in your folders.")}</span>
+        <button onClick=${cancel}>${t("Cancel")}</button>
+        <button class="primary" onClick=${allow}>${t("Allow")}</button>
+      </div>`;
+  }
 
   return html`
     <div class="sheet-head">

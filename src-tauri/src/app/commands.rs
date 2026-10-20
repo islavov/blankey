@@ -804,6 +804,15 @@ async fn resolve_file_request(handle: AppHandle, state: State<'_, AppState>, id:
     Ok(Some(result))
 }
 
+/// The user lets the agent read the library file a `file` request names.
+#[tauri::command]
+fn share_library_request(handle: AppHandle, state: State<AppState>, id: i64) -> CmdResult<Value> {
+    let result = state.app.share_library_file(id)?;
+    tray::refresh(&handle);
+    let _ = handle.emit("requests-changed", ());
+    Ok(result)
+}
+
 // -- collection links --------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -1166,6 +1175,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         cancel_request,
         resolve_profile_input,
         resolve_file_request,
+        share_library_request,
         list_links,
         create_link,
         revoke_link,
