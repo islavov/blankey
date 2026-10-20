@@ -429,5 +429,45 @@
     "other": "Да се изтрият ли {n} шаблона?"
   },
   "Suggested by the assistant": "Предложено от асистента",
-  "Use suggestion: {value}": "Използвай предложението: {value}"
+  "Use suggestion: {value}": "Използвай предложението: {value}",
+  "Ready to bind": "Готов за свързване",
+  "Has blanks": "Има празни места",
+  "Needs the assistant": "Нужен е асистентът",
+  "Scanned, no text": "Сканиран, без текст",
+  "Cannot be read": "Не може да се прочете",
+  "Folders": "Папки",
+  "Out of date": "Остарял",
+  "Remove the folder \"{path}\"?": "Да се премахне ли папката „{path}“?",
+  "Its files stay where they are. Templates made from them keep working from their own copy.": "Файловете ѝ остават на мястото си. Шаблоните, направени от тях, продължават да работят от собствено копие.",
+  "Remove": "Премахни",
+  "Add folder…": "Добави папка…",
+  "Rescan": "Прегледай отново",
+  "No files match.": "Няма съвпадащи файлове.",
+  "Every file in these folders is a template already.": "Всеки файл в тези папки вече е шаблон.",
+  "Add the folders where you keep forms and model contracts. Blankey reads them in place; your AI assistant turns a file into a template when you need it.": "Добавете папките, в които държите бланки и образци на договори. Blankey ги чете на място, а AI асистентът превръща файл в шаблон, когато ви потрябва.",
+  "Indexed {n} file": {
+    "one": "Индексиран е {n} файл",
+    "other": "Индексирани са {n} файла"
+  },
+  "{n} folder": {
+    "one": "{n} папка",
+    "other": "{n} папки"
+  },
+  "Leases": "Наем",
+  "Employment": "Трудови",
+  "Powers of attorney": "Пълномощни",
+  "Sales": "Покупко-продажби",
+  "Loans": "Заеми и кредити",
+  "Confidentiality": "Поверителност",
+  "Services": "Услуги",
+  "Offers": "Оферти",
+  "Invoices": "Фактури",
+  "Declarations": "Декларации",
+  "Applications": "Заявления и молби",
+  "Claims": "Искове и жалби",
+  "Minutes and resolutions": "Протоколи и решения",
+  "Notices": "Уведомления",
+  "Certificates": "Удостоверения",
+  "Agreements": "Споразумения и анекси",
+  "Contracts": "Договори"
 }

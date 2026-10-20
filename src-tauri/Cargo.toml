@@ -61,6 +61,7 @@ schemars = { version = "1", features = ["indexmap2"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "sync"] }
 ureq = "2"
 open = "5"
+notify = "8"
 uuid = { version = "1", features = ["v4"] }
 toml = "1"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }

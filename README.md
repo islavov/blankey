@@ -134,12 +134,25 @@ the assistant proposed (non-PII only), the template default, or type a value. Do
 fill set. The choices are saved as a named fill set, encrypted in the vault, and can be reopened, regenerated,
 exported (YAML, or a zip with the templates) and imported on the Fill sets page.
 
+### Template folders
+
+Templates page → Folders → "Add folder…" adds a folder the user already keeps forms and model contracts in (any
+number of them). Blankey indexes every .docx and .pdf in place in `library.db` (title, form fields or `{{ }}` tags,
+blanks such as dot runs, a category from the file and folder names) and never writes to the folder. A file watcher
+(FSEvents, ReadDirectoryChangesW, inotify) rescans right after changes, a poll every minute covers network shares,
+and fills rescan first; only files whose size or modification time changed are read again. `find_templates` lists
+the files as `status: candidate` with a `lib:<id>` source, and the assistant templatizes one only when a fill needs
+it, passing `lib:<id>` to `inspect_docx` / `inspect_pdf` and the save tools. The template records the file's hash and,
+for docx, the replacements; when the file changes the template is rebuilt from it, or marked out of date when the
+replacements no longer apply.
+
 ## Layout
 
 - `src-tauri/src/vault.rs`, `crypto.rs`, `keychain.rs`: SQLite vault, AES-256-GCM per field, Argon2id-wrapped keys,
   X25519-sealed requests, keychain / Touch ID unlock, rotating backups
 - `src-tauri/src/templates/`: template store, Jinja bindings (minijinja), docx tokenizing and rendering, Typst,
   fill sets, previews
+- `src-tauri/src/library/`: template folders: roots, the scan, metadata and name categories (`categories.yaml`)
 - `src-tauri/src/relay/`: Blankey Online client (discovery, OAuth with PKCE, device WebSocket); its tests run a stub
   server
 - `src-tauri/src/links.rs`: collection links: the public form spec, the sealed submissions and saving them

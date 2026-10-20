@@ -98,6 +98,10 @@ impl Config {
         self.data_dir.join("templates")
     }
 
+    pub fn library_db_path(&self) -> PathBuf {
+        self.data_dir.join("library.db")
+    }
+
     pub fn previews_dir(&self) -> PathBuf {
         self.data_dir.join("previews")
     }

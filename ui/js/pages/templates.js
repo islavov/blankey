@@ -2,7 +2,7 @@ import { useEffect, useState } from "../../vendor/preact-htm.js";
 import { call } from "../api.js";
 import { openFill } from "../fill/form.js";
 import { t, tn } from "../i18n.js";
-import { html, KIND_NAMES, matches, reload, state, useLoad, useStore } from "../lib.js";
+import { html, KIND_NAMES, matches, reload, state, useLoad, useRemembered, useStore } from "../lib.js";
 import { decodePreview, Preview } from "../preview.js";
 import { confirmDialog, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
@@ -13,7 +13,46 @@ const copyId = async (id) => {
   toast(t("Copied {id}", { id }));
 };
 
+const READINESS = {
+  ready: () => t("Ready to bind"),
+  blanks: () => t("Has blanks"),
+  needs_ai: () => t("Needs the assistant"),
+  scan: () => t("Scanned, no text"),
+  unreadable: () => t("Cannot be read"),
+};
+
+/** The categories of src-tauri/src/library/categories.yaml. */
+const CATEGORIES = {
+  lease: () => t("Leases"),
+  employment: () => t("Employment"),
+  power_of_attorney: () => t("Powers of attorney"),
+  sale: () => t("Sales"),
+  loan: () => t("Loans"),
+  nda: () => t("Confidentiality"),
+  services: () => t("Services"),
+  offer: () => t("Offers"),
+  invoice: () => t("Invoices"),
+  declaration: () => t("Declarations"),
+  application: () => t("Applications"),
+  claim: () => t("Claims"),
+  minutes: () => t("Minutes and resolutions"),
+  notice: () => t("Notices"),
+  certificate: () => t("Certificates"),
+  agreement: () => t("Agreements"),
+  contract: () => t("Contracts"),
+};
+
 export function Templates() {
+  const [view, setView] = useRemembered("templates-view", "templates");
+  const switcher = html`
+    <div class="filters">
+      ${[["templates", t("Templates")], ["folders", t("Folders")]].map(([id, label]) => html`
+        <button class=${`chip ${view === id ? "active" : ""}`} onClick=${() => setView(id)}>${label}</button>`)}
+    </div>`;
+  return view === "folders" ? html`<${Folders} switcher=${switcher} />` : html`<${TemplateList} switcher=${switcher} />`;
+}
+
+function TemplateList({ switcher }) {
   const templates = useLoad(() => call("list_templates"), []);
   const [picked, pick, setSelected] = useSelection("templates");
   if (!templates) return null;
@@ -46,9 +85,9 @@ export function Templates() {
     <${Page} title=${t("Templates")} subtitle=${tn(templates.length, "{n} template", "{n} templates")} actions=${[
       [t("Fill"), needAll((ids) => openFill({ templates: ids }))],
       [t("Copy ID"), need(copyId)],
-      [t("Show in Finder"), () => call("show_template_folder", { id: current })],
       [t("Delete"), needAll(remove), "danger"],
     ]}>
+      ${switcher}
       ${templates.length
         ? html`
             <div class="split">
@@ -71,7 +110,7 @@ function Card({ tpl, active, onSelect }) {
   if (tpl.used_by.length) meta.push(tn(tpl.used_by.length, "{n} fill set", "{n} fill sets"));
   return html`
     <div class=${`card ${active ? "active" : ""}`} onMouseDown=${keepText} onClick=${onSelect} onDblClick=${() => openFill({ templates: [tpl.id] })}>
-      <div class="title">${tpl.name}</div>
+      <div class="title">${tpl.name}${tpl.stale && html` <span class="status stale" title=${tpl.stale}>${t("Out of date")}</span>`}</div>
       <div class="muted small">${meta.join("  ·  ")}</div>
       ${tpl.description && html`<div class="desc muted">${tpl.description}</div>`}
     </div>`;
@@ -105,6 +144,7 @@ function TemplateDetail({ template }) {
         <div class="muted small"><span class="mono selectable">${tpl.id}</span>${info.map((part) => ` \u00a0·\u00a0 ${part}`)}</div>
       </div>
       <button onClick=${() => copyId(tpl.id)}>${t("Copy ID")}</button>
+      <button onClick=${() => call("show_template_folder", { id: tpl.id })}>${t("Show in Finder")}</button>
     </div>
     <${Preview} key=${tpl.id} preview=${data.preview} interactive=${false} style="margin-top:12px" />
     <h4>${t("Bindings")}</h4>
@@ -124,4 +164,112 @@ function TemplateDetail({ template }) {
     </table>
     ${data.examples.length > 0 &&
     html`<h4>${t("Examples")}</h4>${data.examples.map((e) => html`<span class="pill">${e}</span>`)}`}`;
+}
+
+/** The user's own folders: Blankey indexes them in place and the assistant makes templates from their files. */
+function Folders({ switcher }) {
+  const roots = useLoad(() => call("library_roots"), []);
+  const files = useLoad(() => call("library_files"), []);
+  const [picked, setPicked] = useRemembered("folders-file", null);
+  if (!roots || !files) return null;
+
+  const add = async () => {
+    const added = await call("add_library_root");
+    if (!added) return;
+    toast(tn(added.report.added, "Indexed {n} file", "Indexed {n} files"));
+    reload();
+  };
+  const remove = async (root) => {
+    const title = t("Remove the folder \"{path}\"?", { path: root.path });
+    const text = t("Its files stay where they are. Templates made from them keep working from their own copy.");
+    if (!(await confirmDialog(title, text, t("Remove")))) return;
+    await call("remove_library_root", { id: root.id });
+    reload();
+  };
+  const rescan = async () => {
+    await call("rescan_library");
+    reload();
+  };
+  const reveal = (file) => call("show_library_file", { id: file.id });
+
+  const visible = files.filter((f) => matches(f.title, f.rel_path, f.category && categoryName(f.category), ...f.tags));
+  const current = visible.find((f) => f.id === picked) || visible[0];
+
+  return html`
+    <${Page} title=${t("Templates")} subtitle=${tn(roots.length, "{n} folder", "{n} folders")} actions=${[
+      [t("Add folder…"), add, "primary"],
+      [t("Rescan"), rescan],
+    ]}>
+      ${switcher}
+      ${roots.length
+        ? html`
+            <div class="split">
+              <div class="list">
+                <div class="roots">
+                  ${roots.map((root) => html`
+                    <div class="root" key=${root.id}>
+                      <div class="root-path" title=${root.path}>
+                        <div class="title">${root.path.split(/[\\/]/).filter(Boolean).pop()}</div>
+                        <div class="muted small">${tn(root.files, "{n} file", "{n} files")}</div>
+                      </div>
+                      <button class="danger" onClick=${() => remove(root)}>${t("Remove")}</button>
+                    </div>`)}
+                </div>
+                ${visible.map((f) => html`
+                  <div key=${f.id} class=${`card library-file ${current?.id === f.id ? "active" : ""}`} onMouseDown=${keepText}
+                    onClick=${() => setPicked(f.id)} onDblClick=${() => reveal(f)}>
+                    <div class="title">${fileName(f)}</div>
+                    <div class="muted small">${fileMeta(f).join("  ·  ")}</div>
+                  </div>`)}
+                ${!visible.length && html`<div class="muted small list-note">${files.length ? t("No files match.") : t("Every file in these folders is a template already.")}</div>`}
+              </div>
+              <div class="detail">${current && html`<${FileDetail} file=${current} onReveal=${() => reveal(current)} />`}</div>
+            </div>`
+        : html`<${Empty}>
+            ${t("Add the folders where you keep forms and model contracts. Blankey reads them in place; your AI assistant turns a file into a template when you need it.")}
+          </${Empty}>`}
+    </${Page}>`;
+}
+
+const categoryName = (category) => (CATEGORIES[category] || (() => category))();
+const fileName = (f) => f.title || f.rel_path.split("/").pop();
+
+function fileMeta(f) {
+  const meta = [f.kind === "pdf" ? "PDF" : KIND_NAMES[f.kind] || f.kind, (READINESS[f.readiness] || (() => f.readiness))()];
+  if (f.category) meta.push(categoryName(f.category));
+  return meta;
+}
+
+/** Keeps showing the previous file until the next one's preview is loaded and decoded. */
+function FileDetail({ file, onReveal }) {
+  const { revision } = useStore();
+  const [shown, setShown] = useState(null);
+  useEffect(() => {
+    let live = true;
+    call("library_preview", { id: file.id })
+      .then(async (preview) => {
+        await decodePreview(preview);
+        if (live) setShown({ file, preview });
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [file.id, revision]);
+  if (!shown) return null;
+
+  const { file: f, preview } = shown;
+  const info = fileMeta(f);
+  if (f.fields) info.push(tn(f.fields, "{n} field", "{n} fields"));
+  if (f.blanks) info.push(tn(f.blanks, "{n} blank", "{n} blanks"));
+  return html`
+    <div class="detail-head">
+      <div style="flex:1;min-width:0">
+        <h3>${fileName(f)}</h3>
+        <div class="muted small"><span class="mono selectable">${f.rel_path}</span>${info.map((part) => ` \u00a0·\u00a0 ${part}`)}</div>
+      </div>
+      <button onClick=${() => call("open_library_file", { id: f.id })}>${t("Open")}</button>
+      <button onClick=${onReveal}>${t("Show in Finder")}</button>
+    </div>
+    <${Preview} key=${f.id} preview=${preview} interactive=${false} style="margin-top:12px" />`;
 }

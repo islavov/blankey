@@ -12,9 +12,11 @@ use sha2::{Digest, Sha256};
 use crate::config::Config;
 use crate::fieldtypes;
 use crate::keychain::SecretStore;
+use crate::library::{self, Library};
+use crate::render::pdf_form;
 use crate::render::preview;
 use crate::templates::engine::{self, BindingReport, Rendered};
-use crate::templates::{bindings, fill, yaml_dump, Template, TemplateStore};
+use crate::templates::{bindings, docx, fill, yaml_dump, Origin, Template, TemplateKind, TemplateStore};
 use crate::vault::{Bindings, FieldInfo, FieldInput, Profiles, Vault};
 
 pub const PROFILE_INPUT: &str = "profile_input";
@@ -23,6 +25,10 @@ pub const FILE: &str = "file";
 /// Extensions a `file` request can ask for.
 pub const FILE_KINDS: &[&str] = &["pdf", "docx"];
 const UPLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
+/// How old a library scan may be before a fill or a search looks at the folders again.
+pub const LIBRARY_SYNC_AGE: Duration = Duration::from_secs(10);
+/// Rescan interval for what the file watcher misses (network shares, sync clients).
+pub const LIBRARY_POLL: Duration = Duration::from_secs(60);
 
 /// Something wrong with a typed value: the field's own label (empty for the form as a whole) and an English
 /// message the window translates.
@@ -54,13 +60,17 @@ pub enum Target<'a> {
 
 type RequestHook = Box<dyn Fn(i64) + Send + Sync>;
 type UnlockHook = Box<dyn Fn(&str) + Send + Sync>;
+type LibraryHook = Box<dyn Fn() + Send + Sync>;
 
 pub struct Blankey {
     pub config: Config,
     vault: Mutex<Vault>,
     pub templates: TemplateStore,
+    pub library: Library,
     on_request: RwLock<RequestHook>,
     on_unlock_needed: RwLock<UnlockHook>,
+    /// after a scan changed what the library shows
+    on_library_change: RwLock<LibraryHook>,
     /// the UI language (i18n); MCP output stays English
     language: RwLock<String>,
 }
@@ -69,12 +79,15 @@ impl Blankey {
     pub fn new(config: Config, secrets: Box<dyn SecretStore>) -> Result<Self, String> {
         let vault = Vault::open(&config.db_path(), secrets).map_err(|e| e.to_string())?;
         let templates = TemplateStore::new(config.templates_dir());
+        let library = Library::open(&config.library_db_path())?;
         Ok(Self {
             config,
             vault: Mutex::new(vault),
             templates,
+            library,
             on_request: RwLock::new(Box::new(|_| {})),
             on_unlock_needed: RwLock::new(Box::new(|_| {})),
+            on_library_change: RwLock::new(Box::new(|| {})),
             language: RwLock::new(crate::i18n::resolve(None)),
         })
     }
@@ -108,6 +121,10 @@ impl Blankey {
     }
 
     /// Asks the user to unlock and waits up to `timeout` for it. True once the vault is unlocked.
+    pub fn set_library_hook(&self, hook: impl Fn() + Send + Sync + 'static) {
+        *self.on_library_change.write().unwrap() = Box::new(hook);
+    }
+
     pub fn wait_for_unlock(&self, reason: &str, timeout: Duration) -> bool {
         if self.vault().unlocked() {
             return true;
@@ -293,7 +310,70 @@ impl Blankey {
     }
 
     pub fn fill_templates(&self, ids: &[String]) -> Result<Vec<Template>, String> {
-        ids.iter().map(|id| self.templates.get(id)).collect()
+        self.sync_library(LIBRARY_SYNC_AGE);
+        ids.iter()
+            .map(|id| match library::parse_source(id) {
+                Some(file) => Err(self.not_a_template(file)),
+                None => self.templates.get(id),
+            })
+            .collect()
+    }
+
+    fn not_a_template(&self, file: i64) -> String {
+        let readiness = self.library.file(file).map(|f| f.readiness).unwrap_or_default();
+        format!(
+            "lib:{file} is a file, not a template yet (readiness {readiness:?}): inspect_docx or inspect_pdf with path \
+             lib:{file}, then save_docx_template, save_template or save_pdf_overlay_template with source_path lib:{file}"
+        )
+    }
+
+    // -- library -----------------------------------------------------------
+
+    /// Rescans the folders when the last scan is older than `max_age`, rebuilds the templates whose file changed and
+    /// tells the library hook when anything changed.
+    pub fn sync_library(&self, max_age: Duration) {
+        match self.library.sync(max_age) {
+            Ok(report) if !report.is_empty() => {
+                self.refresh_templates(&report.changed);
+                (self.on_library_change.read().unwrap())();
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("library: scan failed: {e}"),
+        }
+    }
+
+    pub fn refresh_templates(&self, files: &[i64]) {
+        if files.is_empty() {
+            return;
+        }
+        let sources: Vec<String> = files.iter().map(|id| format!("lib:{id}")).collect();
+        for template in self.templates.all() {
+            if template.origin.as_ref().is_some_and(|o| sources.contains(&o.file)) {
+                if let Err(e) = self.refresh_template(&template) {
+                    eprintln!("library: refreshing template {}: {e}", template.id);
+                }
+            }
+        }
+    }
+
+    /// Replays the recipe on the changed library file. On success the template's copy and hash follow the file;
+    /// otherwise the template keeps its copy and records why in `stale`.
+    pub fn refresh_template(&self, template: &Template) -> Result<Template, String> {
+        let Some(origin) = template.origin.clone() else { return Ok(template.clone()) };
+        let file = match library::parse_source(&origin.file).map(|id| self.library.file(id)) {
+            Some(Ok(file)) if !file.missing => file,
+            _ => return self.templates.set_origin(&template.id, Some(origin), "The source file is gone"),
+        };
+        if file.sha256 == origin.sha256 {
+            return match template.stale.is_empty() {
+                true => Ok(template.clone()),
+                false => self.templates.set_origin(&template.id, Some(origin), ""),
+            };
+        }
+        match rebuild(template, &origin, &file.path) {
+            Ok(()) => self.templates.set_origin(&template.id, Some(Origin { sha256: file.sha256, ..origin }), ""),
+            Err(e) => self.templates.set_origin(&template.id, Some(origin), &e),
+        }
     }
 
     /// Renders every template of a fill set and stores the documents.
@@ -388,6 +468,56 @@ impl Blankey {
         let id = vault.save_fill_set(&name, &templates, &profiles, &bindings, existing).map_err(|e| e.to_string())?;
         let _ = vault.audit("user", "import_fill_set", &id.to_string());
         Ok(id)
+    }
+}
+
+impl library::watch::Folders for Blankey {
+    fn roots(&self) -> Vec<PathBuf> {
+        self.library.roots().unwrap_or_default().into_iter().map(|r| PathBuf::from(r.path)).collect()
+    }
+
+    fn generation(&self) -> u64 {
+        self.library.generation()
+    }
+
+    fn rescan(&self, changed: bool) {
+        self.sync_library(if changed { Duration::ZERO } else { LIBRARY_POLL })
+    }
+}
+
+/// Writes the template's source anew from its library file: the docx recipe replayed, a PDF form copied when every
+/// bound field is still there, a flat PDF's boxes placed again when its pages kept their sizes.
+fn rebuild(template: &Template, origin: &Origin, source: &Path) -> Result<(), String> {
+    let target = template.source_path();
+    match template.kind {
+        TemplateKind::Docx => {
+            let scratch = template.directory.join("template.docx.new");
+            let result = docx::tokenize(source, &scratch, &origin.recipe)
+                .and_then(|_| std::fs::rename(&scratch, &target).map_err(|e| e.to_string()));
+            let _ = std::fs::remove_file(&scratch);
+            result
+        }
+        TemplateKind::PdfForm if template.boxes.is_empty() => {
+            let pdf = std::fs::read(source).map_err(|e| e.to_string())?;
+            let names: Vec<String> = pdf_form::inspect_form(&pdf)?.into_iter().map(|f| f.name).collect();
+            let mut gone: Vec<&str> =
+                template.fields.keys().filter(|f| !names.contains(f)).map(String::as_str).collect();
+            if !gone.is_empty() {
+                gone.sort();
+                return Err(format!("Fields no longer in the PDF: {}", gone.join(", ")));
+            }
+            std::fs::write(&target, pdf).map_err(|e| e.to_string())
+        }
+        TemplateKind::PdfForm => {
+            let flat = std::fs::read(source).map_err(|e| e.to_string())?;
+            let saved = std::fs::read(template.directory.join("flat.pdf")).map_err(|e| e.to_string())?;
+            if preview::page_sizes(&flat)? != preview::page_sizes(&saved)? {
+                return Err("The pages changed size; place the boxes again".into());
+            }
+            std::fs::write(&target, pdf_form::add_fields(&flat, &template.boxes)?).map_err(|e| e.to_string())?;
+            std::fs::write(template.directory.join("flat.pdf"), flat).map_err(|e| e.to_string())
+        }
+        TemplateKind::Typst => Ok(()),
     }
 }
 
