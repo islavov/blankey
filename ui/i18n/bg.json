@@ -469,5 +469,7 @@
   "Notices": "Уведомления",
   "Certificates": "Удостоверения",
   "Agreements": "Споразумения и анекси",
-  "Contracts": "Договори"
+  "Contracts": "Договори",
+  "Your AI assistant asks to read a file from your folders": "AI асистентът иска да прочете файл от вашите папки",
+  "The assistant will read the text and pages of this file, nothing else in your folders.": "Асистентът ще прочете текста и страниците на този файл и нищо друго от вашите папки."
 }

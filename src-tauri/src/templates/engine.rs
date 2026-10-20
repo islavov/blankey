@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use super::bindings::{as_text, bare_path, evaluate, referenced_paths};
+use super::bindings::{as_text, bare_path, evaluate, plain_path, referenced_paths};
 use super::{docx, typst, Template, TemplateKind};
 use crate::render::{fonts, pdf_form};
 use crate::vault::FieldInfo;
@@ -24,29 +24,21 @@ impl Rendered {
     }
 }
 
+/// What the assistant learns about one binding. Only statuses, never measurements or characters of a value: the
+/// assistant writes the expressions, so anything computed from real values would let it read them.
 #[derive(Serialize, Debug, Clone)]
 pub struct BindingReport {
     pub field: String,
-    /// ok | literal | missing | empty | error | overflow | glyphs
+    /// ok | literal | missing | empty | overflow | glyphs
     pub status: String,
     pub missing: Vec<String>,
     pub empty: Vec<String>,
-    pub fit_ratio: Option<f64>,
-    pub missing_glyphs: Vec<String>,
     pub error: Option<String>,
 }
 
 impl BindingReport {
     fn new(field: &str) -> Self {
-        Self {
-            field: field.to_string(),
-            status: "ok".into(),
-            missing: Vec::new(),
-            empty: Vec::new(),
-            fit_ratio: None,
-            missing_glyphs: Vec::new(),
-            error: None,
-        }
+        Self { field: field.to_string(), status: "ok".into(), missing: Vec::new(), empty: Vec::new(), error: None }
     }
 }
 
@@ -118,7 +110,10 @@ fn render_with(template: &Template, values: &Values, errors: Vec<String>, downlo
 }
 
 /// Checks each binding. `profile_fields` is metadata per role; `context` holds real values when the vault is
-/// unlocked and enables fit / glyph checks. Reports never include values.
+/// unlocked and enables fit / glyph checks, for plain "{{ role.key }}" bindings only. Those measure the stored value
+/// as it is, so the expression cannot choose what is measured; computed expressions are never evaluated on real data
+/// (a conditional error or a character mapping would turn the report into a channel for the value). What remains:
+/// whether a stored value fits a box the assistant sized, which narrows down its width, never its characters.
 pub fn check(
     template: &Template,
     profile_fields: &IndexMap<String, Vec<FieldInfo>>,
@@ -166,28 +161,17 @@ pub fn check(
             reports.push(report);
             continue;
         }
-        if let Some(context) = context {
-            let text = match evaluate(expression, context) {
-                Ok(value) => as_text(&value),
-                Err(_) => {
-                    report.status = "error".into();
-                    report.error = Some("error with real values".into());
-                    reports.push(report);
-                    continue;
-                }
-            };
-            report.missing_glyphs = fonts::missing_glyphs(&text);
+        if let (Some(context), Some(_)) = (context, plain_path(expression, &roles)) {
+            let text = evaluate(expression, context).map(|v| as_text(&v)).unwrap_or_default();
             if let Some(field) = form_fields.get(name) {
                 if field.field_type == "text" && !text.is_empty() {
                     let comb_len = if field.comb { field.max_len.unwrap_or(0).max(0) as usize } else { 0 };
-                    let fit = pdf_form::measure(field.rects[0], &text, comb_len);
-                    report.fit_ratio = Some(fit.ratio);
-                    if !fit.fits && report.status == "ok" {
+                    if !pdf_form::measure(field.rects[0], &text, comb_len).fits && report.status == "ok" {
                         report.status = "overflow".into();
                     }
                 }
             }
-            if !report.missing_glyphs.is_empty() && report.status == "ok" {
+            if !fonts::missing_glyphs(&text).is_empty() && report.status == "ok" {
                 report.status = "glyphs".into();
             }
         }

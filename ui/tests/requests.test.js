@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { before, test } from "node:test";
-import { fileRequest, fillRequest, linkRequest, profileInputRequest, submission, submissionRequest } from "./backend.js";
+import { fileRequest, fillRequest, libraryRequest, linkRequest, profileInputRequest, submission, submissionRequest } from "./backend.js";
 import { $, $$, byText, check, choose, click, key, settle, startApp, submit, text, type } from "./setup.js";
 
 let backend;
@@ -69,6 +69,19 @@ test("file request: Cancel cancels it", async () => {
   await settle(300);
   await click(byText(".sheet-foot button", "Cancel"));
   assert.deepEqual(backend.called("cancel_request").at(-1), { id: 11 });
+  assert.equal($(".sheet"), null);
+});
+
+test("file request for a library file: shows the file and shares it on Allow", async () => {
+  backend.db.requests.push(libraryRequest(13));
+  backend.emit("request-created", 13);
+  await settle(300);
+  assert.equal(text(".sheet h2"), "Your AI assistant asks to read a file from your folders");
+  assert.equal(text(".sheet .shared-path"), "Leases/Lease agreement.docx");
+  assert.ok(!$$(".sheet-foot button").some((b) => b.textContent.trim() === "Choose file…"));
+  await click(byText(".sheet-foot button", "Allow"));
+  assert.deepEqual(backend.called("share_library_request").at(-1), { id: 13 });
+  assert.equal(text("#toast"), "Shared Lease agreement.docx");
   assert.equal($(".sheet"), null);
 });
 

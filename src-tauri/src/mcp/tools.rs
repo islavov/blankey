@@ -38,7 +38,8 @@ or save_pdf_overlay_template (flat); inspect_docx, then save_docx_template; or s
 source_text. Bindings are Jinja in {{ }}: "{{ applicant.address.city }}", "{{ loan.amount | money }}".
 Check it with render_example and check_bindings.
 find_templates also lists the user's own files (status candidate, source lib:<id>): templatize one only when a fill
-needs it, passing lib:<id> as path and source_path. Blankey rebuilds the template when the file changes.
+needs it, passing lib:<id> as path and source_path (remote sessions: request_file with source lib:<id> first).
+Blankey rebuilds the template when the file changes.
 "#;
 
 /// Added to the instructions when the user is signed in to Blankey Online.
@@ -75,11 +76,17 @@ pub fn expand(path: &str) -> PathBuf {
     }
 }
 
-/// A local path, a `file:<uuid>` id from request_file or a `lib:<id>` file from find_templates; remote sessions
-/// only get ids.
+/// A local path, a `file:<uuid>` id from request_file or a `lib:<id>` file from find_templates. Remote sessions
+/// only get ids, and a `lib:` file only once the user shared it through request_file.
 fn source_path(app: &Blankey, remote: Option<&Remote>, path: &str) -> Result<PathBuf, String> {
     if path.starts_with("lib:") {
-        app.library.path(path)
+        match remote {
+            Some(r) if !app.library_shared(&r.grant, path) => Err(format!(
+                "Ask the user first: call request_file with source {path:?}, then wait_request; the file opens once \
+                 they allow it"
+            )),
+            _ => app.library.path(path),
+        }
     } else if path.starts_with("file:") {
         app.upload_path(path, remote.map(|r| r.grant.as_str()))
     } else if remote.is_some() {
@@ -493,10 +500,14 @@ pub struct RequestFillArgs {
 
 #[derive(Deserialize, JsonSchema)]
 pub struct RequestFileArgs {
+    /// The kind of file to pick; ignored with source.
     #[schemars(extend("enum" = ["pdf", "docx"]))]
+    #[serde(default)]
     kind: String,
     /// Shown to the user: which document you need and what for.
     reason: String,
+    /// A lib:<id> from find_templates: ask to read that file from the user's folders instead of picking one.
+    source: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -968,7 +979,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Check a template against real profiles ({role: profile_id}) without revealing values:\nmissing/empty keys and plain-text bindings (status literal) always; fit_ratio (> 1 = text too wide) and\nmissing glyphs when the vault is unlocked."
+        description = "Check a template against real profiles ({role: profile_id}) without revealing values:\nmissing/empty keys and plain-text bindings (status literal) always. When the vault is unlocked, plain\n\"{{ role.key }}\" bindings are also checked against the stored value: status overflow (too wide for its PDF field)\nor glyphs (a character the font lacks). Computed expressions are never evaluated on real data; check them with\nrender_example and invented data."
     )]
     async fn check_bindings(&self, Parameters(a): Parameters<CheckBindingsArgs>) -> ToolResult {
         self.run(move |app| {
@@ -1167,19 +1178,31 @@ impl Tools {
     }
 
     #[tool(
-        description = "Ask the user to pick a pdf or docx file in the app (remote sessions cannot read local paths).\nReturns a request id; wait_request then gives {file_id, kind, size}. Pass file_id as path or source_path."
+        description = "Ask the user to pick a pdf or docx file in the app (remote sessions cannot read local paths), or, with\nsource lib:<id> from find_templates, to let you read that file from their folders (remote sessions need this before\nany lib: file opens). Returns a request id; wait_request then gives {file_id, kind, size}. Pass file_id as path or\nsource_path."
     )]
     async fn request_file(&self, Parameters(a): Parameters<RequestFileArgs>, ext: Extensions) -> ToolResult {
         let grant = remote(&ext).map(|r| r.grant);
         self.run(move |app| {
-            let kind = a.kind.trim().trim_start_matches('.').to_lowercase();
-            if !FILE_KINDS.contains(&kind.as_str()) {
-                return Err(format!("kind must be one of {}", FILE_KINDS.join(", ")));
-            }
             if a.reason.trim().is_empty() {
                 return Err("Pass a reason: the user sees it when picking the file".into());
             }
-            let id = app.create_request(FILE, json!({"kind": kind, "reason": a.reason.trim()}), grant.as_deref())?;
+            let payload = match a.source.as_deref().filter(|s| !s.is_empty()) {
+                Some(source) => {
+                    let id = library::parse_source(source)
+                        .ok_or_else(|| format!("source must be a lib:<id> from find_templates, not {source:?}"))?;
+                    let file = app.library.file(id)?;
+                    app.library.path(source)?;
+                    json!({"kind": file.kind, "reason": a.reason.trim(), "source": source, "path": file.rel_path})
+                }
+                None => {
+                    let kind = a.kind.trim().trim_start_matches('.').to_lowercase();
+                    if !FILE_KINDS.contains(&kind.as_str()) {
+                        return Err(format!("kind must be one of {}", FILE_KINDS.join(", ")));
+                    }
+                    json!({"kind": kind, "reason": a.reason.trim()})
+                }
+            };
+            let id = app.create_request(FILE, payload, grant.as_deref())?;
             text(&json!({"request_id": id, "status": "pending"}))
         })
         .await
@@ -1728,6 +1751,41 @@ pub mod tests {
         assert_eq!(page(t.find_documents(args(json!({"query": "nothing like it"}))).await)["total"], 0);
     }
 
+    /// Expressions the assistant writes must not turn check_bindings into a reader of real values.
+    #[tokio::test]
+    async fn check_bindings_reveals_nothing_about_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let t = Tools::new(app.clone());
+        let (sam, tom) = {
+            let mut vault = app.vault();
+            let sam = vault.create_profile("A", "person").unwrap();
+            vault.set_values(sam, &[FieldInput::new("name", "Sam Rivers", "Name", "text")]).unwrap();
+            let tom = vault.create_profile("B", "person").unwrap();
+            vault.set_values(tom, &[FieldInput::new("name", "Tom Rivers", "Name", "text")]).unwrap();
+            (sam, tom)
+        };
+        let fields = json!({
+            "plain": "{{ applicant.name }}",
+            "branch": "{% if applicant.name[0] == \"S\" %}{{ nope() }}{% endif %}",
+            "glyph": "{{ applicant.name | replace(\"S\", \"一\") }}",
+        });
+        out(t
+            .save_template(
+                args(json!({"template_id": "probe", "name": "Probe", "kind": "typst", "source_text": "",
+                            "fields": fields, "roles": {"applicant": "person"}})),
+                local(),
+            )
+            .await);
+        let check = |pid: i64| args(json!({"template_id": "probe", "profiles": {"applicant": pid}}));
+        let (for_sam, _) = out(t.check_bindings(check(sam)).await);
+        let (for_tom, _) = out(t.check_bindings(check(tom)).await);
+        assert_eq!(for_sam, for_tom);
+        for secret in ["Sam", "Tom", "Rivers", "一"] {
+            assert!(!for_sam.contains(secret), "leaked {secret}: {for_sam}");
+        }
+    }
+
     #[tokio::test]
     async fn library_files_become_templates_on_demand() {
         let dir = tempfile::tempdir().unwrap();
@@ -1755,8 +1813,26 @@ pub mod tests {
         let error = t.request_fill(args(fill), local()).await.unwrap_err();
         assert!(error.contains("not a template yet"), "{error}");
 
+        // local agents read library files directly; remote ones only after the user shares the file
+        let (inspected, _) = out(t.inspect_docx(args(json!({"path": source})), local()).await);
+        assert!(inspected.contains("John Smith"));
+        let refused = t.inspect_docx(args(json!({"path": source})), remote()).await.unwrap_err();
+        assert!(refused.contains("request_file"), "{refused}");
+        let ask = json!({"reason": "Make a lease template", "source": source});
+        let (asked, _) = out(t.request_file(args(ask), remote()).await);
+        let request_id = serde_json::from_str::<Value>(&asked).unwrap()["request_id"].as_i64().unwrap();
+        let request = app.vault().get_request(request_id).unwrap();
+        assert_eq!(request.payload["path"], "Leases/Lease agreement.docx");
+        assert_eq!(request.payload["kind"], "docx");
+        assert!(t.inspect_docx(args(json!({"path": source})), remote()).await.is_err(), "pending is not shared");
+        let shared = app.share_library_file(request_id).unwrap();
+        assert_eq!(shared["file_id"], json!(source));
         let (inspected, _) = out(t.inspect_docx(args(json!({"path": source})), remote()).await);
         assert!(inspected.contains("John Smith"));
+        assert!(t.inspect_docx(args(json!({"path": source})), remote_as("g2")).await.is_err(), "another agent");
+        assert!(app.share_library_file(request_id).is_err(), "a request is shared once");
+        let bad = t.request_file(args(json!({"reason": "x", "source": "lib:999"})), remote()).await;
+        assert!(bad.is_err());
         let save = json!({"template_id": "lease", "name": "Lease", "source_path": source,
                           "replacements": [{"find": "John Smith", "var": "manager_name"}],
                           "fields": {"manager_name": ""}, "roles": {}});

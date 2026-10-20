@@ -162,6 +162,13 @@ pub fn bare_path(expression: &str, roles: &HashSet<String>) -> Option<String> {
     roles.contains(role).then(|| text.to_string())
 }
 
+/// The path of a binding that is exactly "{{ role.key }}": it renders the stored value and nothing else.
+pub fn plain_path(expression: &str, roles: &HashSet<String>) -> Option<String> {
+    let paths = referenced_paths(expression, roles);
+    let [path] = paths.iter().collect::<Vec<_>>()[..] else { return None };
+    (expression.replace(' ', "") == format!("{{{{{path}}}}}")).then(|| path.clone())
+}
+
 fn scan_paths(code: &str, roles: &HashSet<String>, out: &mut BTreeSet<String>) {
     let chars: Vec<char> = code.chars().collect();
     let mut i = 0;
@@ -348,6 +355,18 @@ mod tests {
 
     fn roles(names: &[&str]) -> HashSet<String> {
         names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn plain_paths_are_only_role_keys() {
+        let r = roles(&["applicant"]);
+        assert_eq!(plain_path("{{ applicant.name }}", &r).as_deref(), Some("applicant.name"));
+        assert_eq!(plain_path("{{applicant.address.city}}", &r).as_deref(), Some("applicant.address.city"));
+        assert_eq!(plain_path("{{ applicant.name | upper }}", &r), None);
+        assert_eq!(plain_path("{{ applicant.name }} {{ applicant.egn }}", &r), None);
+        assert_eq!(plain_path("Mr {{ applicant.name }}", &r), None);
+        assert_eq!(plain_path("{% if applicant.name %}x{% endif %}", &r), None);
+        assert_eq!(plain_path("{{ other.name }}", &r), None);
     }
 
     #[test]

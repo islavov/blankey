@@ -149,6 +149,11 @@ export const linkRequest = (id = 14) => ({
 });
 
 export const fileRequest = (id = 10) => ({ id, kind: "file", payload: { kind: "pdf", reason: "The blank NZOK form" } });
+export const libraryRequest = (id = 13) => ({
+  id,
+  kind: "file",
+  payload: { kind: "docx", reason: "Make a lease template", source: "lib:4", path: "Leases/Lease agreement.docx" },
+});
 
 const fillSession = (db, args) => ({
   request_id: args.request_id,
@@ -347,6 +352,10 @@ export function createBackend(db = seed()) {
       if (db.pickedFile === null) return null;
       removeRequest(id);
       return { outcome: "uploaded", file_id: "file:0f8fad5b-d9cb-469f-a165-70867728950e", name: db.pickedFile || "form.pdf", size: 1024 };
+    },
+    share_library_request: ({ id }) => {
+      removeRequest(id);
+      return { outcome: "shared", file_id: "lib:4", kind: "docx", size: 2048 };
     },
     fill_open: ({ args }) => fillSession(db, args),
     fill_evaluate: ({ args }) => evaluate(args),
