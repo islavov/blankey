@@ -911,7 +911,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Ask the user to type data into the app. fields: [{key, label, type, required, hint}] with type one of\ntext, number, date, bool, egn, iban, email, phone. Give profile_id to extend a profile, or\nnew_profile_name to create one. Returns a request id; call wait_request for the outcome."
+        description = "Ask the user to type data into the app. fields: [{key, label, type, required, hint, suggested}] with type one of\ntext, number, date, bool, egn, iban, email, phone. suggested: a value you already know (e.g. public company data);\nthe form starts with it and the user confirms or changes it. hint is only a placeholder. Give profile_id to extend a\nprofile, or new_profile_name to create one. Returns a request id; call wait_request for the outcome."
     )]
     async fn request_profile_input(
         &self,
@@ -934,6 +934,9 @@ impl Tools {
                 let field_type = item.get("type").and_then(Value::as_str).unwrap_or("text");
                 if !fieldtypes::is_type(field_type) {
                     return Err(format!("Unknown field type {field_type:?}; use {}", fieldtypes::TYPES.join(", ")));
+                }
+                if item.get("suggested").is_some_and(|v| v.is_array() || v.is_object()) {
+                    return Err("suggested must be a string, number or bool".into());
                 }
             }
             let new_profile = a
@@ -1643,6 +1646,19 @@ pub mod tests {
         assert_eq!(documents["total"], 1);
         assert_eq!(page(t.find_documents(args(json!({"since": "2999-01-01"}))).await)["total"], 0);
         assert_eq!(page(t.find_documents(args(json!({"query": "nothing like it"}))).await)["total"], 0);
+    }
+
+    #[tokio::test]
+    async fn request_profile_input_passes_suggestions() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let t = Tools::new(app.clone());
+        let ask = |field: Value| args(json!({"new_profile_name": "Example Ltd", "fields": [field]}));
+        let error = t.request_profile_input(ask(json!({"key": "eik", "suggested": {"a": 1}})), local()).await;
+        assert!(error.unwrap_err().contains("suggested"));
+        out(t.request_profile_input(ask(json!({"key": "eik", "suggested": "123456789"})), local()).await);
+        let request = app.vault().get_request(1).unwrap();
+        assert_eq!(request.payload["fields"][0]["suggested"], "123456789");
     }
 
     #[tokio::test]

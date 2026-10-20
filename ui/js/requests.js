@@ -102,20 +102,40 @@ function ProfileInput({ request, profile_name, existing, close }) {
     }
   };
 
+  const useSuggestion = (i, value) => {
+    const input = form.current.elements[`f${i}`];
+    input.value = value;
+    input.classList.add("suggested");
+    input.focus();
+  };
+
   const field = (spec, i) => {
     const label = (spec.label || spec.key) + (spec.required ? " *" : "");
-    const current = existing[spec.key] || "";
+    const existingValue = existing[spec.key] || "";
+    const suggested = spec.suggested == null ? "" : String(spec.suggested);
+    const prefill = !existingValue.trim() && suggested.trim() !== "";
+    const current = prefill ? suggested : existingValue;
+    const offer = !prefill && suggested.trim() !== "" && suggested !== existingValue;
     if (spec.type === "bool") {
       return html`
         <label>${label}</label>
         <label class="check-row">
           <input type="checkbox" name=${`f${i}`} checked=${TRUE_WORDS.includes(current.trim().toLowerCase())} />
           <span class="muted small">${spec.hint || ""}</span>
+          ${prefill && html`<span class="chip Suggested">${t("Suggested")}</span>`}
         </label>`;
     }
     return html`
       <label title=${spec.key}>${label}</label>
-      <input type="text" name=${`f${i}`} value=${current} placeholder=${spec.hint || placeholder(spec.type)} spellcheck="false" />`;
+      <input type="text" name=${`f${i}`} class=${prefill ? "suggested" : ""} title=${prefill ? t("Suggested by the assistant") : ""}
+        value=${current} placeholder=${spec.hint || placeholder(spec.type)} spellcheck="false"
+        onInput=${(e) => e.target.classList.remove("suggested")} />
+      ${offer &&
+      html`<div class="hint">
+        <button type="button" class="chip Suggested" onClick=${() => useSuggestion(i, suggested)}>
+          ${t("Use suggestion: {value}", { value: suggested })}
+        </button>
+      </div>`}`;
   };
 
   return html`

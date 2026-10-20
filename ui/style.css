@@ -262,6 +262,8 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .input-form { max-width: 640px; margin: 24px auto; display: grid; grid-template-columns: 200px 1fr; gap: 12px 14px; align-items: center; padding: 0 24px; }
 .input-form > label { text-align: right; }
 .input-form .hint { grid-column: 2; margin-top: -8px; }
+.input-form input.suggested { background: var(--chip-suggested); }
+.input-form .hint .chip { cursor: pointer; text-align: left; }
 .input-form > label.top { align-self: start; padding-top: 14px; }
 .link-form { max-width: 860px; }
 .filters { display: flex; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--line); }

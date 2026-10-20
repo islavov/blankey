@@ -427,5 +427,7 @@
   "Delete {n} template?": {
     "one": "Да се изтрие ли {n} шаблон?",
     "other": "Да се изтрият ли {n} шаблона?"
-  }
+  },
+  "Suggested by the assistant": "Предложено от асистента",
+  "Use suggestion: {value}": "Използвай предложението: {value}"
 }
