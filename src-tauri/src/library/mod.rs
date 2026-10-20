@@ -3,25 +3,21 @@
 
 pub mod categorize;
 pub mod extract;
+mod repo;
 mod scan;
 pub mod watch;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+
+use repo::Repo;
 use std::time::{Duration, Instant};
 
-use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 pub use scan::ScanReport;
-
-const MIGRATIONS: &[&str] = &[r#"
-CREATE TABLE IF NOT EXISTS "roots" ("id" INTEGER NOT NULL PRIMARY KEY, "path" TEXT NOT NULL UNIQUE, "added_at" TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS "files" ("id" INTEGER NOT NULL PRIMARY KEY, "root_id" INTEGER NOT NULL REFERENCES "roots" ("id") ON DELETE CASCADE, "rel_path" TEXT NOT NULL, "kind" TEXT NOT NULL, "size" INTEGER NOT NULL, "mtime" INTEGER NOT NULL, "sha256" TEXT NOT NULL, "title" TEXT NOT NULL, "pages" INTEGER, "fields" INTEGER NOT NULL, "blanks" INTEGER NOT NULL, "readiness" TEXT NOT NULL, "error" TEXT, "category" TEXT, "tags" TEXT NOT NULL, "indexed_at" TEXT NOT NULL, "missing_at" TEXT, UNIQUE ("root_id", "rel_path"));
-CREATE INDEX IF NOT EXISTS "files_sha256" ON "files" ("sha256");
-"#];
 
 pub const UNREADABLE: &str = "unreadable";
 
@@ -85,74 +81,20 @@ pub fn hash_file(path: &Path) -> std::io::Result<String> {
 }
 
 pub struct Library {
-    conn: Mutex<Connection>,
+    repo: Repo,
     /// held for a whole scan, so scans never overlap; the time of the last full one
     scanned: Mutex<Option<Instant>>,
     /// bumped when a root is added or removed, so a watch knows to follow
     generation: AtomicU64,
 }
 
-const FILE_COLUMNS: &str =
-    "f.id, f.root_id, f.rel_path, f.kind, f.size, f.sha256, f.title, f.pages, f.fields, f.blanks, \
-                            f.readiness, f.category, f.tags, f.missing_at IS NOT NULL, r.path";
-
-fn file_row(row: &Row) -> rusqlite::Result<LibraryFile> {
-    let rel_path: String = row.get(2)?;
-    let root: String = row.get(14)?;
-    let tags: String = row.get(12)?;
-    Ok(LibraryFile {
-        id: row.get(0)?,
-        root_id: row.get(1)?,
-        path: rel_path.split('/').fold(PathBuf::from(root), |p, part| p.join(part)),
-        rel_path,
-        kind: row.get(3)?,
-        size: row.get(4)?,
-        sha256: row.get(5)?,
-        title: row.get(6)?,
-        pages: row.get(7)?,
-        fields: row.get(8)?,
-        blanks: row.get(9)?,
-        readiness: row.get(10)?,
-        category: row.get(11)?,
-        tags: serde_json::from_str(&tags).unwrap_or_default(),
-        missing: row.get(13)?,
-    })
-}
-
-fn string(e: impl std::fmt::Display) -> String {
-    e.to_string()
-}
-
 impl Library {
     pub fn open(path: &Path) -> Result<Self, String> {
-        let mut conn = Connection::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        conn.pragma_update(None, "foreign_keys", true).map_err(string)?;
-        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).map_err(string)?;
-        for (index, step) in MIGRATIONS.iter().enumerate().skip(version.max(0) as usize) {
-            let tx = conn.transaction().map_err(string)?;
-            tx.execute_batch(step).map_err(string)?;
-            tx.pragma_update(None, "user_version", index as i64 + 1).map_err(string)?;
-            tx.commit().map_err(string)?;
-        }
-        Ok(Self { conn: Mutex::new(conn), scanned: Mutex::new(None), generation: AtomicU64::new(0) })
-    }
-
-    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().expect("library connection")
+        Ok(Self { repo: Repo::open(path)?, scanned: Mutex::new(None), generation: AtomicU64::new(0) })
     }
 
     pub fn roots(&self) -> Result<Vec<Root>, String> {
-        let conn = self.conn();
-        let mut stmt = conn
-            .prepare(
-                "SELECT r.id, r.path, r.added_at, (SELECT COUNT(*) FROM files f WHERE f.root_id = r.id AND f.missing_at IS NULL) \
-                 FROM roots r ORDER BY r.path",
-            )
-            .map_err(string)?;
-        let rows = stmt
-            .query_map([], |r| Ok(Root { id: r.get(0)?, path: r.get(1)?, added_at: r.get(2)?, files: r.get(3)? }))
-            .map_err(string)?;
-        rows.collect::<rusqlite::Result<_>>().map_err(string)
+        self.repo.roots()
     }
 
     /// Adds a folder; refuses one that is inside an existing root or contains one. Call `scan` afterwards.
@@ -167,18 +109,13 @@ impl Library {
                 return Err(format!("{} overlaps the folder {} already added", path.display(), root.path));
             }
         }
-        let conn = self.conn();
-        conn.execute(
-            "INSERT INTO roots (path, added_at) VALUES (?1, ?2)",
-            params![path.to_string_lossy(), crate::vault::now()],
-        )
-        .map_err(string)?;
+        let id = self.repo.insert_root(&path.to_string_lossy())?;
         self.generation.fetch_add(1, Ordering::SeqCst);
-        Ok(conn.last_insert_rowid())
+        Ok(id)
     }
 
     pub fn remove_root(&self, id: i64) -> Result<(), String> {
-        self.conn().execute("DELETE FROM roots WHERE id = ?1", [id]).map_err(string)?;
+        self.repo.delete_root(id)?;
         self.generation.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -189,23 +126,11 @@ impl Library {
 
     /// Files on disk (not missing), by root and path.
     pub fn files(&self) -> Result<Vec<LibraryFile>, String> {
-        let conn = self.conn();
-        let sql = format!(
-            "SELECT {FILE_COLUMNS} FROM files f JOIN roots r ON r.id = f.root_id WHERE f.missing_at IS NULL \
-             ORDER BY r.path, f.rel_path"
-        );
-        let mut stmt = conn.prepare(&sql).map_err(string)?;
-        let rows = stmt.query_map([], file_row).map_err(string)?;
-        rows.collect::<rusqlite::Result<_>>().map_err(string)
+        self.repo.files()
     }
 
     pub fn file(&self, id: i64) -> Result<LibraryFile, String> {
-        let sql = format!("SELECT {FILE_COLUMNS} FROM files f JOIN roots r ON r.id = f.root_id WHERE f.id = ?1");
-        self.conn()
-            .query_row(&sql, [id], file_row)
-            .optional()
-            .map_err(string)?
-            .ok_or_else(|| format!("Unknown library file lib:{id}"))
+        self.repo.file(id)?.ok_or_else(|| format!("Unknown library file lib:{id}"))
     }
 
     /// The path behind a `lib:<id>` source, when the file is still there.
