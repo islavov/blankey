@@ -5,13 +5,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use rusqlite::params;
 use serde::Serialize;
 
 use super::categorize::categorize;
 use super::extract::{extract, kind_of};
-use super::{hash_file, string, Library, Root, UNREADABLE};
-use crate::vault::now;
+use super::repo::{FileRow, Known};
+use super::{hash_file, Library, Root, UNREADABLE};
 
 const MAX_DEPTH: usize = 24;
 const SKIPPED_DIRS: &[&str] = &["_blankey_trash", "node_modules", "$RECYCLE.BIN"];
@@ -50,14 +49,6 @@ struct OnDisk {
     mtime: i64,
 }
 
-struct Known {
-    id: i64,
-    size: i64,
-    mtime: i64,
-    sha256: String,
-    missing: bool,
-}
-
 fn walk(dir: &Path, rel: &str, depth: usize, out: &mut Vec<OnDisk>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
@@ -85,21 +76,8 @@ fn walk(dir: &Path, rel: &str, depth: usize, out: &mut Vec<OnDisk>) {
 pub fn scan(library: &Library, root: &Root) -> Result<ScanReport, String> {
     let mut on_disk = Vec::new();
     walk(Path::new(&root.path), "", 0, &mut on_disk);
-    let known: HashMap<String, Known> = {
-        let conn = library.conn();
-        let mut stmt = conn
-            .prepare("SELECT rel_path, id, size, mtime, sha256, missing_at IS NOT NULL FROM files WHERE root_id = ?1")
-            .map_err(string)?;
-        let rows = stmt
-            .query_map([root.id], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    Known { id: r.get(1)?, size: r.get(2)?, mtime: r.get(3)?, sha256: r.get(4)?, missing: r.get(5)? },
-                ))
-            })
-            .map_err(string)?;
-        rows.collect::<rusqlite::Result<_>>().map_err(string)?
-    };
+    let repo = &library.repo;
+    let known: HashMap<String, Known> = repo.known(root.id)?;
     let seen: HashSet<&str> = on_disk.iter().map(|f| f.rel_path.as_str()).collect();
     // a vanished row is where a new path with the same content moved from
     let mut vanished: HashMap<&str, &Known> = HashMap::new();
@@ -114,15 +92,12 @@ pub fn scan(library: &Library, root: &Root) -> Result<ScanReport, String> {
         match known.get(&file.rel_path) {
             Some(row) if row.size == file.size && row.mtime == file.mtime => {
                 if row.missing {
-                    library
-                        .conn()
-                        .execute("UPDATE files SET missing_at = NULL WHERE id = ?1", [row.id])
-                        .map_err(string)?;
+                    repo.set_missing(row.id, false)?;
                     report.changed.push(row.id);
                 }
             }
             Some(row) => {
-                let sha256 = hash_file(&file.path).map_err(string)?;
+                let sha256 = hash_file(&file.path).map_err(|e| e.to_string())?;
                 store(library, root.id, file, &sha256)?;
                 report.updated += 1;
                 if sha256 != row.sha256 || row.missing {
@@ -130,18 +105,11 @@ pub fn scan(library: &Library, root: &Root) -> Result<ScanReport, String> {
                 }
             }
             None => {
-                let sha256 = hash_file(&file.path).map_err(string)?;
+                let sha256 = hash_file(&file.path).map_err(|e| e.to_string())?;
                 match vanished.remove(sha256.as_str()) {
                     Some(row) => {
                         let (category, tags) = categorize(&file.rel_path);
-                        library
-                            .conn()
-                            .execute(
-                                "UPDATE files SET rel_path = ?2, size = ?3, mtime = ?4, category = ?5, tags = ?6, missing_at = NULL \
-                                 WHERE id = ?1",
-                                params![row.id, file.rel_path, file.size, file.mtime, category, json_tags(&tags)],
-                            )
-                            .map_err(string)?;
+                        repo.move_file(row.id, &file.rel_path, file.size, file.mtime, category.as_deref(), &tags)?;
                         moved_ids.insert(row.id);
                         report.moved += 1;
                         if row.missing {
@@ -158,19 +126,12 @@ pub fn scan(library: &Library, root: &Root) -> Result<ScanReport, String> {
     }
     for (rel_path, row) in &known {
         if !seen.contains(rel_path.as_str()) && !row.missing && !moved_ids.contains(&row.id) {
-            library
-                .conn()
-                .execute("UPDATE files SET missing_at = ?2 WHERE id = ?1", params![row.id, now()])
-                .map_err(string)?;
+            repo.set_missing(row.id, true)?;
             report.missing += 1;
             report.changed.push(row.id);
         }
     }
     Ok(report)
-}
-
-fn json_tags(tags: &[String]) -> String {
-    serde_json::to_string(tags).expect("tags serialize")
 }
 
 /// Reads the file's metadata (outside the connection lock) and writes its row, keeping the id of an existing one.
@@ -180,36 +141,24 @@ fn store(library: &Library, root_id: i64, file: &OnDisk, sha256: &str) -> Result
         Ok(meta) => (meta, None),
         Err(e) => (Default::default(), Some(e)),
     };
-    let readiness = if error.is_some() { UNREADABLE } else { meta.readiness };
-    library
-        .conn()
-        .execute(
-            "INSERT INTO files (root_id, rel_path, kind, size, mtime, sha256, title, pages, fields, blanks, readiness, \
-             error, category, tags, indexed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15) \
-             ON CONFLICT (root_id, rel_path) DO UPDATE SET kind = excluded.kind, size = excluded.size, \
-             mtime = excluded.mtime, sha256 = excluded.sha256, title = excluded.title, pages = excluded.pages, \
-             fields = excluded.fields, blanks = excluded.blanks, readiness = excluded.readiness, error = excluded.error, \
-             category = excluded.category, tags = excluded.tags, indexed_at = excluded.indexed_at, missing_at = NULL",
-            params![
-                root_id,
-                file.rel_path,
-                file.kind,
-                file.size,
-                file.mtime,
-                sha256,
-                meta.title,
-                meta.pages,
-                meta.fields,
-                meta.blanks,
-                readiness,
-                error,
-                category,
-                json_tags(&tags),
-                now(),
-            ],
-        )
-        .map_err(string)?;
-    Ok(())
+    library.repo.upsert_file(
+        root_id,
+        &FileRow {
+            rel_path: &file.rel_path,
+            kind: file.kind,
+            size: file.size,
+            mtime: file.mtime,
+            sha256,
+            title: &meta.title,
+            pages: meta.pages,
+            fields: meta.fields,
+            blanks: meta.blanks,
+            readiness: if error.is_some() { UNREADABLE } else { meta.readiness },
+            error: error.as_deref(),
+            category: category.as_deref(),
+            tags: &tags,
+        },
+    )
 }
 
 #[cfg(test)]
