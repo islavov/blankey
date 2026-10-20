@@ -68,6 +68,10 @@ listen("relay-status", () => {
   refreshRelay();
   if (state.page === "connections") reload();
 });
+// a template folder changed on disk (file watcher or poll)
+listen("library-changed", () => {
+  if (state.page === "templates") reload();
+});
 listen("show-page", ({ payload }) => update({ page: payload, search: "" }));
 
 (async () => {

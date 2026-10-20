@@ -64,6 +64,54 @@ test("templates: the previous preview stays until the next one is ready", async 
   await settle(450);
   assert.equal(text(".detail h3"), "Loan contract");
   assert.ok($(".detail .paper [data-var=who]"));
+  assert.equal($$("#page-actions button").filter((b) => b.textContent === "Show in Finder").length, 0);
+  await click(byText(".detail button", "Show in Finder"));
+  assert.deepEqual(backend.called("show_template_folder").at(-1), { id: "loan" });
+});
+
+test("templates: folders list their files with a preview and are added and removed", async () => {
+  await goTo("Templates");
+  await click(byText(".filters .chip", "Folders"));
+  assert.equal(text(".toolbar .muted"), "1 folder");
+  assert.deepEqual(
+    $$(".library-file .title").map((el) => el.textContent),
+    ["Lease agreement.docx", "Application for a permit"]
+  );
+  await settle();
+  assert.equal(text(".detail h3"), "Lease agreement.docx");
+  assert.equal(backend.called("library_preview").at(-1).id, 4);
+  assert.equal($$("#page-actions button").filter((b) => b.textContent === "Show in Finder").length, 0);
+
+  await click(byText(".library-file .title", "Application for a permit").parentElement);
+  await settle();
+  assert.equal(text(".detail h3"), "Application for a permit");
+  await click(byText(".detail button", "Show in Finder"));
+  assert.deepEqual(backend.called("show_library_file").at(-1), { id: 5 });
+  await click(byText(".detail button", "Open"));
+  assert.deepEqual(backend.called("open_library_file").at(-1), { id: 5 });
+
+  // a file deleted on disk: the watcher's event reloads the list
+  const deleted = backend.db.libraryFiles.shift();
+  backend.emit("library-changed");
+  await settle();
+  assert.deepEqual($$(".library-file .title").map((el) => el.textContent), ["Application for a permit"]);
+  backend.db.libraryFiles.unshift(deleted);
+  backend.emit("library-changed");
+  await settle();
+  assert.equal($$(".library-file").length, 2);
+
+  await action("Add folder…");
+  assert.equal(backend.called("add_library_root").length, 1);
+  assert.equal($$(".root").length, 2);
+
+  await click(byText(".root button", "Remove"));
+  await submit($(".modal form"));
+  assert.deepEqual(backend.called("remove_library_root")[0], { id: 1 });
+  assert.equal($$(".root").length, 1);
+  assert.equal(text(".list-note"), "Every file in these folders is a template already.");
+
+  await click(byText(".filters .chip", "Templates"));
+  assert.ok($(".card .title"));
 });
 
 test("profiles: edits mark the profile unsaved, problems are shown, switching away asks", async () => {

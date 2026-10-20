@@ -70,6 +70,22 @@ pub struct Template {
     pub labels: StrMap,
     /// fields drawn on a flat PDF (see flat.pdf)
     pub boxes: Vec<Value>,
+    /// the library file it was made from
+    pub origin: Option<Origin>,
+    /// why the template no longer matches its library file; it keeps working from its own copy
+    pub stale: String,
+}
+
+/// A template made from a library file: Blankey owns the recipe, the user owns the file. The source in the
+/// template folder is a copy rebuilt from the file and the recipe when the file changes.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Origin {
+    /// lib:<id>
+    pub file: String,
+    pub sha256: String,
+    /// docx replacements ({find, var, occurrence?}) as save_docx_template took them
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recipe: Vec<Value>,
 }
 
 #[derive(Serialize)]
@@ -83,6 +99,10 @@ struct ManifestOut<'a> {
     labels: &'a StrMap,
     #[serde(skip_serializing_if = "<[Value]>::is_empty")]
     boxes: &'a [Value],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    origin: Option<&'a Origin>,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    stale: &'a str,
 }
 
 impl Template {
@@ -108,6 +128,8 @@ impl Template {
             fields: &self.fields,
             labels: &self.labels,
             boxes: &self.boxes,
+            origin: self.origin.as_ref(),
+            stale: &self.stale,
         }
     }
 }
@@ -155,6 +177,8 @@ pub struct SaveTemplate<'a> {
     pub source_text: Option<&'a str>,
     pub labels: StrMap,
     pub boxes: Vec<Value>,
+    /// the library file the source came from; see `Origin`
+    pub origin: Option<Origin>,
 }
 
 impl TemplateStore {
@@ -215,6 +239,8 @@ impl TemplateStore {
             description: data.get("description").map(scalar_text).unwrap_or_default(),
             labels: str_map(data.get("labels")),
             boxes,
+            origin: data.get("origin").and_then(|o| serde_yaml::from_value(o.clone()).ok()),
+            stale: data.get("stale").map(scalar_text).unwrap_or_default(),
         })
     }
 
@@ -242,6 +268,8 @@ impl TemplateStore {
             description: spec.description.to_string(),
             labels: spec.labels,
             boxes: spec.boxes,
+            origin: spec.origin,
+            stale: String::new(),
         };
         std::fs::create_dir_all(&template.directory).map_err(|e| e.to_string())?;
         let target = template.source_path();
@@ -255,9 +283,23 @@ impl TemplateStore {
         if !target.exists() {
             return Err(format!("Template {:?} has no source; pass source_path or source_text", spec.id));
         }
+        self.write_manifest(&template)?;
+        Ok(template)
+    }
+
+    fn write_manifest(&self, template: &Template) -> Result<(), String> {
         std::fs::write(template.directory.join("manifest.yaml"), yaml_dump(&template.manifest_out()))
             .map_err(|e| e.to_string())?;
-        self.cache.lock().expect("template cache").remove(spec.id);
+        self.cache.lock().expect("template cache").remove(&template.id);
+        Ok(())
+    }
+
+    /// Records a rebuild from the library file (new origin hash) or why it failed (stale).
+    pub fn set_origin(&self, id: &str, origin: Option<Origin>, stale: &str) -> Result<Template, String> {
+        let mut template = self.get(id)?;
+        template.origin = origin;
+        template.stale = stale.to_string();
+        self.write_manifest(&template)?;
         Ok(template)
     }
 
@@ -325,6 +367,7 @@ mod tests {
                 source_text: Some("#let d = json(bytes(sys.inputs.data))"),
                 labels: StrMap::new(),
                 boxes: vec![],
+                origin: None,
             })
             .unwrap();
         let loaded = store.get("t").unwrap();
@@ -350,10 +393,17 @@ mod tests {
                 source_text: None,
                 labels: StrMap::new(),
                 boxes: vec![],
+                origin: None,
             })
             .unwrap_err();
         assert!(error.contains("{{ applicant.name }}"), "{error}");
         assert_eq!(store.get("t").unwrap().fields, template.fields);
+
+        let origin =
+            Origin { file: "lib:3".into(), sha256: "ab".into(), recipe: vec![json!({"find": "x", "var": "y"})] };
+        store.set_origin("t", Some(origin.clone()), "changed").unwrap();
+        let loaded = store.get("t").unwrap();
+        assert_eq!((loaded.origin, loaded.stale.as_str()), (Some(origin), "changed"));
     }
 
     #[test]

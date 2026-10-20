@@ -183,6 +183,13 @@ table.grid { width: 100%; border-collapse: collapse; }
 .grid tr.pending td:first-child { font-weight: 600; }
 .status { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 9px; background: var(--selected); white-space: nowrap; }
 .status.pending { background: var(--pending); }
+.status.stale, .status.unreadable, .status.scan { background: var(--warn-soft); color: var(--warn); }
+.status.ready { background: var(--accent-soft); }
+.roots { border-bottom: 1px solid var(--line); padding: 4px 0; }
+.root { display: flex; align-items: center; gap: 8px; padding: 6px 14px; }
+.root-path { flex: 1; min-width: 0; }
+.root-path .title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-note { padding: 12px 14px; }
 .empty { padding: 56px 24px; text-align: center; color: var(--muted); }
 .nowrap { white-space: nowrap; }
 

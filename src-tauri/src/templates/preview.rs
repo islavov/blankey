@@ -13,6 +13,8 @@ use crate::render::pdf_form;
 use crate::render::preview::{self as pdf, Place};
 
 pub const DPI: f32 = 110.0;
+/// Pages shown for a library file; enough to recognise the document.
+const FILE_PAGES: usize = 10;
 
 #[derive(Serialize)]
 pub struct PagePreview {
@@ -42,6 +44,24 @@ pub fn preview(template: &Template, values: Option<&Values>) -> Preview {
     result.unwrap_or_else(|message| Preview::Error { message })
 }
 
+/// A library file as it is: a docx as HTML (existing {{ }} tags as chips), a PDF as its first pages with any form
+/// fields outlined.
+pub fn file_preview(path: &std::path::Path, kind: &str) -> Preview {
+    let result = match kind {
+        "docx" => docx::to_html(path, &IndexMap::new(), None)
+            .and_then(|html| Ok(Preview::Html { html, names: docx::variables(path)? })),
+        _ => std::fs::read(path).map_err(|e| e.to_string()).and_then(|pdf_bytes| {
+            let mut boxes: IndexMap<String, Vec<Place>> = IndexMap::new();
+            for field in pdf_form::inspect_form(&pdf_bytes).unwrap_or_default() {
+                boxes.entry(field.name.clone()).or_default().extend(field.rects.iter().map(|r| (field.page, *r)));
+            }
+            let names = boxes.keys().cloned().collect();
+            Ok(Preview::Pages { pages: pages(&pdf_bytes, &boxes, FILE_PAGES)?, names })
+        }),
+    };
+    result.unwrap_or_else(|message| Preview::Error { message })
+}
+
 fn texts(values: &Values) -> IndexMap<String, String> {
     values.iter().map(|(k, v)| (k.clone(), as_text(v))).collect()
 }
@@ -52,9 +72,10 @@ fn docx_preview(template: &Template, values: Option<&Values>) -> Result<Preview,
     Ok(Preview::Html { html: docx::to_html(&path, &template.labels, shown.as_ref())?, names: docx::variables(&path)? })
 }
 
-fn pages(pdf_bytes: &[u8], boxes: &IndexMap<String, Vec<Place>>) -> Result<Vec<PagePreview>, String> {
+fn pages(pdf_bytes: &[u8], boxes: &IndexMap<String, Vec<Place>>, limit: usize) -> Result<Vec<PagePreview>, String> {
     let sizes = pdf::page_sizes(pdf_bytes)?;
-    let images = pdf::render_pages(pdf_bytes, &[], DPI)?;
+    let shown: Vec<usize> = (1..=sizes.len().min(limit)).collect();
+    let images = pdf::render_pages(pdf_bytes, &shown, DPI)?;
     let encoder = base64::engine::general_purpose::STANDARD;
     Ok(images
         .into_iter()
@@ -89,7 +110,7 @@ fn form_preview(template: &Template, values: Option<&Values>) -> Result<Preview,
         None => source,
     };
     let names = boxes.keys().cloned().collect();
-    Ok(Preview::Pages { pages: pages(&pdf_bytes, &boxes)?, names })
+    Ok(Preview::Pages { pages: pages(&pdf_bytes, &boxes, usize::MAX)?, names })
 }
 
 /// Shown in place of empty values: the label in brackets, or the name when labels repeat.
@@ -140,7 +161,7 @@ fn typst_preview(template: &Template, values: Option<&Values>) -> Result<Preview
     let marker_boxes = pdf::find_text(&marker_pdf, &markers)?;
     let Some(values) = values else {
         let names = marker_boxes.keys().cloned().collect();
-        return Ok(Preview::Pages { pages: pages(&marker_pdf, &marker_boxes)?, names });
+        return Ok(Preview::Pages { pages: pages(&marker_pdf, &marker_boxes, usize::MAX)?, names });
     };
     // empty values keep their marker; filled values are found near where their marker was
     let shown: IndexMap<String, String> = markers
@@ -159,7 +180,7 @@ fn typst_preview(template: &Template, values: Option<&Values>) -> Result<Preview
         .map(|(name, anchors)| (name.clone(), nearest(found.get(name).map_or(&[][..], Vec::as_slice), anchors)))
         .collect();
     let names = boxes.keys().cloned().collect();
-    Ok(Preview::Pages { pages: pages(&pdf_bytes, &boxes)?, names })
+    Ok(Preview::Pages { pages: pages(&pdf_bytes, &boxes, usize::MAX)?, names })
 }
 
 #[cfg(test)]
@@ -186,6 +207,7 @@ mod tests {
                 source_text: Some("#let d = json(bytes(sys.inputs.data))\n#set text(font: \"Noto Sans\")\nГрад: #d.city\n\nКупувач: #d.buyer\n"),
                 labels,
                 boxes: vec![],
+                origin: None,
             })
             .unwrap()
     }
@@ -205,6 +227,17 @@ mod tests {
     }
 
     #[test]
+    fn library_files_preview_as_they_are() {
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
+        let Preview::Html { html, names } = file_preview(&data.join("filled.docx"), "docx") else { panic!("no html") };
+        assert!(html.contains("John Smith") && names.is_empty());
+        let Preview::Pages { pages, names } = file_preview(&data.join("form.pdf"), "pdf") else { panic!("no pages") };
+        assert_eq!(pages.len(), 1);
+        assert!(names.contains(&"egn".to_string()));
+        assert!(matches!(file_preview(&data.join("missing.pdf"), "pdf"), Preview::Error { .. }));
+    }
+
+    #[test]
     fn form_preview_has_field_boxes() {
         let dir = tempfile::tempdir().unwrap();
         let store = TemplateStore::new(dir.path().to_path_buf());
@@ -221,6 +254,7 @@ mod tests {
                 source_text: None,
                 labels: StrMap::new(),
                 boxes: vec![],
+                origin: None,
             })
             .unwrap();
         let values: Values = [("name".to_string(), json!("Ана"))].into_iter().collect();

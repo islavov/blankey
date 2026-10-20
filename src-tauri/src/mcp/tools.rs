@@ -14,14 +14,15 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::core::{Blankey, FILE, FILE_KINDS, FILL, PROFILE_INPUT};
+use crate::core::{Blankey, FILE, FILE_KINDS, FILL, LIBRARY_SYNC_AGE, PROFILE_INPUT};
 use crate::fieldtypes;
+use crate::library::{self, LibraryFile};
 use crate::links::{link_state, LinkDraft, SpecField, COLLECTION_LINK, DEFAULT_MAX_FILES, LINK_SUBMISSION};
 use crate::mcp::{find, remote, Remote};
 use crate::render::{pdf_form, preview};
 use crate::templates::bindings::example_context;
 use crate::templates::engine::{self, dump};
-use crate::templates::{docx, fill, SaveTemplate, StrMap, TemplateKind, ID_RE};
+use crate::templates::{docx, fill, Origin, SaveTemplate, StrMap, Template, TemplateKind, ID_RE};
 use crate::vault::{FieldInfo, Profile, Profiles, Request};
 
 pub const INSTRUCTIONS: &str = r#"Blankey fills document templates from personal data in an encrypted local vault. You never see values,
@@ -36,6 +37,8 @@ New template, named for the kind of document and party (not this case): inspect_
 or save_pdf_overlay_template (flat); inspect_docx, then save_docx_template; or save_template with Typst
 source_text. Bindings are Jinja in {{ }}: "{{ applicant.address.city }}", "{{ loan.amount | money }}".
 Check it with render_example and check_bindings.
+find_templates also lists the user's own files (status candidate, source lib:<id>): templatize one only when a fill
+needs it, passing lib:<id> as path and source_path. Blankey rebuilds the template when the file changes.
 "#;
 
 /// Added to the instructions when the user is signed in to Blankey Online.
@@ -72,9 +75,12 @@ pub fn expand(path: &str) -> PathBuf {
     }
 }
 
-/// A local path or a `file:<uuid>` id from request_file; remote sessions only get ids.
+/// A local path, a `file:<uuid>` id from request_file or a `lib:<id>` file from find_templates; remote sessions
+/// only get ids.
 fn source_path(app: &Blankey, remote: Option<&Remote>, path: &str) -> Result<PathBuf, String> {
-    if path.starts_with("file:") {
+    if path.starts_with("lib:") {
+        app.library.path(path)
+    } else if path.starts_with("file:") {
         app.upload_path(path, remote.map(|r| r.grant.as_str()))
     } else if remote.is_some() {
         Err(format!(
@@ -85,8 +91,40 @@ fn source_path(app: &Blankey, remote: Option<&Remote>, path: &str) -> Result<Pat
     }
 }
 
+/// Where a saved template's source came from: a library file with its current hash, nothing for another source,
+/// the existing origin when the source stays.
+fn origin(
+    app: &Blankey,
+    source: Option<&str>,
+    recipe: Vec<Value>,
+    existing: Option<&Template>,
+) -> Result<Option<Origin>, String> {
+    match source {
+        Some(file) if file.starts_with("lib:") => {
+            let sha256 = library::hash_file(&app.library.path(file)?).map_err(string)?;
+            Ok(Some(Origin { file: file.to_string(), sha256, recipe }))
+        }
+        Some(_) => Ok(None),
+        None => Ok(existing.and_then(|t| t.origin.clone())),
+    }
+}
+
 fn read_file(app: &Blankey, remote: Option<&Remote>, path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(source_path(app, remote, path)?).map_err(|e| format!("{path}: {e}"))
+}
+
+/// A find_templates hit: a template, or a library file nobody templatized yet.
+enum Found<'a> {
+    Template(&'a Template),
+    File(&'a LibraryFile),
+}
+
+fn template_status(template: &Template) -> &'static str {
+    if template.stale.is_empty() {
+        "template"
+    } else {
+        "stale"
+    }
 }
 
 /// What an agent does next with a collection link; it never gets the submitted values.
@@ -249,10 +287,14 @@ pub struct FindProfilesArgs {
 
 #[derive(Deserialize, JsonSchema)]
 pub struct FindTemplatesArgs {
-    /// Words to match in the id, name, description, roles, vars and labels.
+    /// Words to match in the id, name, description, roles, vars and labels; for the user's own files in the
+    /// path, title, category and tags.
     query: Option<String>,
     #[schemars(extend("enum" = ["pdf_form", "typst", "docx"]))]
     kind: Option<String>,
+    /// template, stale (its library file changed and the rebuild failed) or candidate (a file not templatized yet).
+    #[schemars(extend("enum" = ["template", "stale", "candidate"]))]
+    status: Option<String>,
     /// Only templates with this role.
     role: Option<String>,
     /// Only templates with this var.
@@ -321,13 +363,13 @@ pub struct TemplateArgs {
 
 #[derive(Deserialize, JsonSchema)]
 pub struct PathArgs {
-    /// A local path, or a file id from request_file.
+    /// A local path, a file id from request_file, or a lib:<id> from find_templates.
     path: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct InspectPdfArgs {
-    /// A local path, or a file id from request_file.
+    /// A local path, a file id from request_file, or a lib:<id> from find_templates.
     path: String,
     /// 1-based pages to render: a form's pages with its fields outlined (default none), a flat PDF's pages
     /// with the grid (default all).
@@ -347,7 +389,7 @@ pub struct SavePdfOverlayArgs {
     roles: StrMap,
     #[serde(deserialize_with = "lenient::str_map")]
     fields: StrMap,
-    /// A local path, or a file id from request_file.
+    /// A local path, a file id from request_file, or a lib:<id> from find_templates.
     source_path: Option<String>,
     #[serde(default, deserialize_with = "lenient::str_map")]
     labels: StrMap,
@@ -365,7 +407,7 @@ pub struct SaveTemplateArgs {
     #[serde(deserialize_with = "lenient::str_map")]
     roles: StrMap,
     description: Option<String>,
-    /// A local path, or a file id from request_file.
+    /// A local path, a file id from request_file, or a lib:<id> from find_templates.
     source_path: Option<String>,
     source_text: Option<String>,
 }
@@ -374,7 +416,7 @@ pub struct SaveTemplateArgs {
 pub struct SaveDocxArgs {
     template_id: String,
     name: String,
-    /// A local path, or a file id from request_file.
+    /// A local path, a file id from request_file, or a lib:<id> from find_templates.
     source_path: String,
     /// [{find, var, occurrence?}]
     replacements: Vec<Map<String, Value>>,
@@ -627,15 +669,18 @@ impl Tools {
     }
 
     #[tool(
-        description = "Find saved templates by words in their id, name, description, roles, vars and labels, or by kind, role\nor var. Look for an existing template before making a new one. Show the user each template's id next to its\nname. get_template gives one template's fields. Paged: total, next_offset."
+        description = "Find saved templates by words in their id, name, description, roles, vars and labels, or by kind, role\nor var. Look for an existing template before making a new one. Show the user each template's id next to its\nname. get_template gives one template's fields. The user's own folders come after the templates: status candidate,\nsource lib:<id>, with a category from the file name and readiness (ready: has fields or tags, blanks: dots or\nunderscores where values go, needs_ai, scan). Paged: total, next_offset."
     )]
     async fn find_templates(&self, Parameters(a): Parameters<FindTemplatesArgs>) -> ToolResult {
         self.run(move |app| {
+            app.sync_library(LIBRARY_SYNC_AGE);
             let words = find::words(a.query.as_deref());
-            let mut matched: Vec<_> = app
-                .templates
-                .all()
-                .into_iter()
+            let wanted = |status: &str| a.status.as_deref().is_none_or(|s| s == status);
+            let all = app.templates.all();
+            let templatized: HashSet<&str> =
+                all.iter().filter_map(|t| t.origin.as_ref()).map(|o| o.file.as_str()).collect();
+            let mut templates: Vec<&Template> = all
+                .iter()
                 .filter(|t| {
                     let mut attrs = vec![t.id.as_str(), t.name.as_str(), t.description.as_str()];
                     attrs.extend(t.roles.iter().flat_map(|(role, about)| [role.as_str(), about.as_str()]));
@@ -644,15 +689,46 @@ impl Tools {
                     a.kind.as_deref().is_none_or(|k| t.kind.as_str() == k)
                         && a.role.as_ref().is_none_or(|r| t.roles.contains_key(r))
                         && a.var.as_ref().is_none_or(|v| t.fields.contains_key(v))
+                        && wanted(template_status(t))
                         && find::hit(&words, &attrs)
                 })
                 .collect();
-            matched.sort_by_cached_key(|t| find::fold(&t.name));
-            find::rank_by(&mut matched, a.query.as_deref(), |t| (t.id.clone(), t.name.clone()));
-            raw(find::found(&matched, a.limit, a.offset, |t| {
-                json!({"id": t.id, "name": t.name, "kind": t.kind.as_str(),
-                       "roles": t.roles.keys().collect::<Vec<_>>(), "vars": t.fields.len(),
-                       "description": find::clip(&t.description, 120)})
+            templates.sort_by_cached_key(|t| find::fold(&t.name));
+            let file_kind = match a.kind.as_deref() {
+                None => None,
+                Some("docx") => Some("docx"),
+                Some("pdf_form") => Some("pdf"),
+                Some(_) => Some(""),
+            };
+            let files: Vec<LibraryFile> = if a.role.is_none() && a.var.is_none() && wanted("candidate") {
+                app.library
+                    .files()?
+                    .into_iter()
+                    .filter(|f| {
+                        let mut attrs = vec![f.rel_path.as_str(), f.title.as_str(), f.kind.as_str()];
+                        attrs.extend(f.category.as_deref());
+                        attrs.extend(f.tags.iter().map(String::as_str));
+                        !templatized.contains(f.source().as_str())
+                            && file_kind.is_none_or(|k| f.kind == k)
+                            && find::hit(&words, &attrs)
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let mut matched: Vec<Found> =
+                templates.into_iter().map(Found::Template).chain(files.iter().map(Found::File)).collect();
+            find::rank_by(&mut matched, a.query.as_deref(), |item| match item {
+                Found::Template(t) => (t.id.clone(), t.name.clone()),
+                Found::File(f) => (f.source(), f.name().to_string()),
+            });
+            raw(find::found(&matched, a.limit, a.offset, |item| match item {
+                Found::Template(t) => json!({"id": t.id, "name": t.name, "kind": t.kind.as_str(),
+                       "status": template_status(t), "roles": t.roles.keys().collect::<Vec<_>>(),
+                       "vars": t.fields.len(), "description": find::clip(&t.description, 120)}),
+                Found::File(f) => json!({"source": f.source(), "status": "candidate", "name": f.name(),
+                       "kind": f.kind, "path": f.rel_path, "category": f.category, "tags": f.tags,
+                       "readiness": f.readiness, "fields": f.fields, "blanks": f.blanks, "pages": f.pages}),
             }))
         })
         .await
@@ -740,6 +816,8 @@ impl Tools {
             };
             let boxes: Vec<Value> = a.boxes.into_iter().map(Value::Object).collect();
             let form = pdf_form::add_fields(&flat, &boxes)?;
+            let existing = app.templates.get(&a.template_id).ok();
+            let origin = origin(app, a.source_path.as_deref(), Vec::new(), existing.as_ref())?;
             let template = app.templates.save(SaveTemplate {
                 id: &a.template_id,
                 name: &a.name,
@@ -752,6 +830,7 @@ impl Tools {
                 source_text: None,
                 labels: a.labels,
                 boxes: boxes.clone(),
+                origin,
             })?;
             std::fs::write(template.directory.join("flat.pdf"), &flat).map_err(string)?;
             app.audit("mcp", "save_template", &a.template_id);
@@ -790,6 +869,7 @@ impl Tools {
         self.run(move |app| {
             let source = a.source_path.as_deref().map(|path| source_path(app, remote.as_ref(), path)).transpose()?;
             let existing = app.templates.get(&a.template_id).ok();
+            let origin = origin(app, a.source_path.as_deref(), Vec::new(), existing.as_ref())?;
             let template = app.templates.save(SaveTemplate {
                 id: &a.template_id,
                 name: &a.name,
@@ -802,6 +882,7 @@ impl Tools {
                 source_text: a.source_text.as_deref(),
                 labels: existing.as_ref().map(|t| t.labels.clone()).unwrap_or_default(),
                 boxes: existing.map(|t| t.boxes).unwrap_or_default(),
+                origin,
             })?;
             app.audit("mcp", "save_template", &a.template_id);
             text(&engine::describe_template(&template))
@@ -827,6 +908,7 @@ impl Tools {
             let source = source_path(app, remote.as_ref(), &a.source_path)?;
             let scratch = tempfile_path("docx");
             let replacements: Vec<Value> = a.replacements.into_iter().map(Value::Object).collect();
+            let origin = origin(app, Some(&a.source_path), replacements.clone(), None)?;
             let saved = docx::tokenize(&source, &scratch, &replacements).and_then(|report| {
                 let template = app.templates.save(SaveTemplate {
                     id: &a.template_id,
@@ -840,6 +922,7 @@ impl Tools {
                     source_text: None,
                     labels: a.labels,
                     boxes: Vec::new(),
+                    origin,
                 })?;
                 Ok((template, report))
             });
@@ -1646,6 +1729,81 @@ pub mod tests {
         assert_eq!(documents["total"], 1);
         assert_eq!(page(t.find_documents(args(json!({"since": "2999-01-01"}))).await)["total"], 0);
         assert_eq!(page(t.find_documents(args(json!({"query": "nothing like it"}))).await)["total"], 0);
+    }
+
+    #[tokio::test]
+    async fn library_files_become_templates_on_demand() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let t = Tools::new(app.clone());
+        let forms = dir.path().join("Forms");
+        std::fs::create_dir_all(forms.join("Leases")).unwrap();
+        let original = forms.join("Leases/Lease agreement.docx");
+        std::fs::copy(fixture("filled.docx"), &original).unwrap();
+        std::fs::copy(fixture("form.pdf"), forms.join("Application.pdf")).unwrap();
+        let root = app.library.add_root(&forms).unwrap();
+        app.library.scan_root(root).unwrap();
+
+        assert_eq!(page(t.find_templates(args(json!({}))).await)["total"], 2);
+        let found = page(t.find_templates(args(json!({"query": "lease"}))).await);
+        let lease = &found["items"][0];
+        assert_eq!((lease["status"].clone(), lease["readiness"].clone()), (json!("candidate"), json!("blanks")));
+        assert_eq!((lease["category"].clone(), lease["kind"].clone()), (json!("lease"), json!("docx")));
+        let source = lease["source"].as_str().unwrap().to_string();
+        assert_eq!(page(t.find_templates(args(json!({"kind": "typst"}))).await)["total"], 0);
+        assert_eq!(page(t.find_templates(args(json!({"kind": "pdf_form"}))).await)["total"], 1);
+        assert_eq!(page(t.find_templates(args(json!({"status": "template"}))).await)["total"], 0);
+
+        let fill = json!({"templates": [source], "profiles": {}, "name": "n"});
+        let error = t.request_fill(args(fill), local()).await.unwrap_err();
+        assert!(error.contains("not a template yet"), "{error}");
+
+        let (inspected, _) = out(t.inspect_docx(args(json!({"path": source})), remote()).await);
+        assert!(inspected.contains("John Smith"));
+        let save = json!({"template_id": "lease", "name": "Lease", "source_path": source,
+                          "replacements": [{"find": "John Smith", "var": "manager_name"}],
+                          "fields": {"manager_name": ""}, "roles": {}});
+        out(t.save_docx_template(args(save), remote()).await);
+        let template = app.templates.get("lease").unwrap();
+        let origin = template.origin.clone().unwrap();
+        assert_eq!((origin.file.as_str(), origin.recipe.len()), (source.as_str(), 1));
+        let found = page(t.find_templates(args(json!({"query": "lease"}))).await);
+        assert_eq!((found["total"].clone(), found["items"][0]["status"].clone()), (json!(1), json!("template")));
+
+        // the user edits the original elsewhere: the recipe still applies, so the copy follows
+        let edited = dir.path().join("edited.docx");
+        docx::tokenize(
+            &fixture("filled.docx"),
+            &edited,
+            json!([{"find": "34 000", "var": "amount"}]).as_array().unwrap(),
+        )
+        .unwrap();
+        std::fs::copy(&edited, &original).unwrap();
+        app.sync_library(Duration::ZERO);
+        let rebuilt = app.templates.get("lease").unwrap();
+        assert_eq!(rebuilt.stale, "");
+        assert_ne!(rebuilt.origin.as_ref().unwrap().sha256, origin.sha256);
+        assert_eq!(docx::variables(&rebuilt.source_path()).unwrap(), ["manager_name", "amount"]);
+
+        // the span the recipe needs is gone: the template keeps its copy and says why
+        let broken = dir.path().join("broken.docx");
+        docx::tokenize(
+            &fixture("filled.docx"),
+            &broken,
+            json!([{"find": "John Smith", "var": "x"}]).as_array().unwrap(),
+        )
+        .unwrap();
+        std::fs::copy(&broken, &original).unwrap();
+        app.sync_library(Duration::ZERO);
+        let stale = app.templates.get("lease").unwrap();
+        assert!(stale.stale.contains("John Smith"), "{}", stale.stale);
+        assert_eq!(docx::variables(&stale.source_path()).unwrap(), ["manager_name", "amount"]);
+        assert_eq!(page(t.find_templates(args(json!({"status": "stale"}))).await)["total"], 1);
+
+        std::fs::remove_file(&original).unwrap();
+        app.sync_library(Duration::ZERO);
+        assert_eq!(app.templates.get("lease").unwrap().stale, "The source file is gone");
+        assert!(t.inspect_docx(args(json!({"path": source})), local()).await.is_err());
     }
 
     #[tokio::test]

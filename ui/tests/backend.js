@@ -42,6 +42,11 @@ export function seed() {
       { id: "nzok", name: "NZOK request", kind: "pdf_form", blanks: 2, used_by: ["acme"], description: "Data subject request" },
       { id: "loan", name: "Loan contract", kind: "docx", blanks: 2, used_by: [], description: "" },
     ],
+    roots: [{ id: 1, path: "/Users/test/Forms", files: 2, added_at: "2026-10-18T09:00:00+00:00" }],
+    libraryFiles: [
+      { id: 4, root_id: 1, rel_path: "Leases/Lease agreement.docx", kind: "docx", title: "", category: "lease", tags: ["leases"], readiness: "blanks", fields: 0, blanks: 6, pages: null, missing: false },
+      { id: 5, root_id: 1, rel_path: "Application.pdf", kind: "pdf", title: "Application for a permit", category: null, tags: [], readiness: "ready", fields: 4, blanks: 0, pages: 1, missing: false },
+    ],
     requests: [],
     links: [
       {
@@ -284,6 +289,19 @@ export function createBackend(db = seed()) {
       db.docs = db.docs.filter((d) => !ids.includes(d.id));
     },
     list_templates: () => db.templates,
+    library_roots: () => db.roots,
+    library_files: () => db.libraryFiles.filter((f) => db.roots.some((r) => r.id === f.root_id)),
+    add_library_root: () => {
+      db.roots.push({ id: 2, path: "/Users/test/Models", files: 0, added_at: "2026-10-20T09:00:00+00:00" });
+      return { id: 2, report: { added: 0, updated: 0, moved: 0, missing: 0 } };
+    },
+    remove_library_root: ({ id }) => {
+      db.roots = db.roots.filter((r) => r.id !== id);
+    },
+    rescan_library: () => null,
+    show_library_file: () => null,
+    open_library_file: () => null,
+    library_preview: ({ id }) => (id === 5 ? pagesPreview : htmlPreview),
     show_template_folder: () => null,
     delete_template: ({ id }) => {
       db.templates = db.templates.filter((t) => t.id !== id);

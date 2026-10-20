@@ -250,6 +250,11 @@ pub fn run() {
             telemetry.start(&tauri::async_runtime::handle().inner().clone());
             handle.manage(telemetry);
             start_auto_lock(&handle);
+            let library_handle = handle.clone();
+            app.set_library_hook(move || {
+                let _ = library_handle.emit("library-changed", ());
+            });
+            crate::library::watch::start(app.clone(), crate::core::LIBRARY_POLL);
             if let Some(old) = moved_from {
                 let message = i18n::tf(
                     &app.language(),

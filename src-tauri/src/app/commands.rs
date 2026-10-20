@@ -237,6 +237,9 @@ struct TemplateCard {
     description: String,
     blanks: usize,
     used_by: Vec<String>,
+    /// lib:<id> when made from a library file
+    source: Option<String>,
+    stale: String,
 }
 
 fn blanks(template: &crate::templates::Template) -> usize {
@@ -261,6 +264,8 @@ fn list_templates(state: State<AppState>) -> CmdResult<Vec<TemplateCard>> {
             description: t.description.clone(),
             blanks: blanks(t),
             used_by: sets.iter().filter(|s| s.templates.contains(&t.id)).map(|s| s.name.clone()).collect(),
+            source: t.origin.as_ref().map(|o| o.file.clone()),
+            stale: t.stale.clone(),
         })
         .collect())
 }
@@ -294,6 +299,66 @@ fn show_template_folder(state: State<AppState>, id: Option<String>) -> CmdResult
         None => state.app.templates.root().to_path_buf(),
     };
     platform::reveal(&path)
+}
+
+// -- library folders -----------------------------------------------------------
+
+#[tauri::command]
+fn library_roots(state: State<AppState>) -> CmdResult<Vec<crate::library::Root>> {
+    state.app.library.roots()
+}
+
+/// Lets the user pick a folder and indexes it; None when the picker was closed.
+#[tauri::command]
+async fn add_library_root(handle: AppHandle, state: State<'_, AppState>) -> CmdResult<Option<Value>> {
+    let picked = handle.dialog().file().set_title("Add a folder of templates").blocking_pick_folder();
+    let Some(folder) = picked.and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let id = app.library.add_root(&folder)?;
+        app.audit("user", "add_library_root", &id.to_string());
+        let report = app.library.scan_root(id)?;
+        Ok(Some(json!({"id": id, "report": report})))
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+fn remove_library_root(state: State<AppState>, id: i64) -> CmdResult<()> {
+    state.app.library.remove_root(id)?;
+    state.app.audit("user", "remove_library_root", &id.to_string());
+    Ok(())
+}
+
+/// Files of the library folders that no template was made from yet.
+#[tauri::command]
+fn library_files(state: State<AppState>) -> CmdResult<Vec<crate::library::LibraryFile>> {
+    let used: Vec<String> = state.app.templates.all().into_iter().filter_map(|t| t.origin.map(|o| o.file)).collect();
+    Ok(state.app.library.files()?.into_iter().filter(|f| !used.contains(&f.source())).collect())
+}
+
+#[tauri::command]
+async fn rescan_library(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || app.sync_library(std::time::Duration::ZERO)).await.map_err(err)
+}
+
+#[tauri::command]
+async fn library_preview(state: State<'_, AppState>, id: i64) -> CmdResult<Preview> {
+    let file = state.app.library.file(id)?;
+    tauri::async_runtime::spawn_blocking(move || preview::file_preview(&file.path, &file.kind)).await.map_err(err)
+}
+
+/// Opens the user's own file in its default app; edits there are picked up by the next scan.
+#[tauri::command]
+fn open_library_file(state: State<AppState>, id: i64) -> CmdResult<()> {
+    open::that_detached(state.app.library.path(&format!("lib:{id}"))?).map_err(err)
+}
+
+#[tauri::command]
+fn show_library_file(state: State<AppState>, id: i64) -> CmdResult<()> {
+    platform::reveal(&state.app.library.file(id)?.path)
 }
 
 // -- documents -----------------------------------------------------------------
@@ -1075,6 +1140,14 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         template_preview,
         delete_template,
         show_template_folder,
+        library_roots,
+        add_library_root,
+        remove_library_root,
+        library_files,
+        rescan_library,
+        show_library_file,
+        open_library_file,
+        library_preview,
         list_documents,
         open_documents,
         export_document,
