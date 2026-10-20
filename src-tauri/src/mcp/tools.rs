@@ -1577,11 +1577,8 @@ pub mod tests {
         ]);
 
         let preview = std::fs::read(app.config.previews_dir().join("t-example.pdf")).unwrap();
-        let audit: Vec<String> = {
-            let vault = app.vault();
-            let mut stmt = vault.conn().prepare("SELECT action || target FROM audit").unwrap();
-            stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
-        };
+        let audit: Vec<String> =
+            app.vault().audit_log().into_iter().map(|(action, target)| format!("{action}{target}")).collect();
         let all = [outputs.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join("\n"), audit.join("\n")].join("\n")
             + &String::from_utf8_lossy(&preview);
         for secret in [SENTINEL_NAME, SENTINEL_EGN, "Sentinel", "Hiddenwell", "sentinel@"] {

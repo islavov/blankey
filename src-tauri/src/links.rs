@@ -715,11 +715,7 @@ pub(crate) mod tests {
         assert_eq!(late, None);
         assert!(!app.inbox_dir().join("sub-late.bin").exists());
         assert!(app.vault().get_submission("sub-late").is_err());
-        let audited: i64 = app
-            .vault()
-            .conn()
-            .query_row("SELECT count(*) FROM audit WHERE action = 'submission_revoked'", [], |r| r.get(0))
-            .unwrap();
+        let audited = app.vault().audit_log().into_iter().filter(|(action, _)| action == "submission_revoked").count();
         assert_eq!(audited, 1);
     }
 
