@@ -72,6 +72,9 @@ listen("relay-status", () => {
 listen("library-changed", () => {
   if (state.page === "templates") reload();
 });
+listen("update-status", () => {
+  if (state.page === "connections") reload();
+});
 listen("show-page", ({ payload }) => update({ page: payload, search: "" }));
 
 (async () => {

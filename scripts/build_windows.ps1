@@ -1,4 +1,5 @@
 # Release build on Windows x86-64: NSIS (.exe) and MSI installers with pdfium.dll next to Blankey.exe, copied to dist\.
+# With TAURI_SIGNING_PRIVATE_KEY set, also their .sig files for the updater (scripts/updater-manifest.sh).
 # Needs: rustup (x86_64-pc-windows-msvc), Visual Studio Build Tools, WebView2 (preinstalled on Windows 10/11),
 # cargo install tauri-cli --version "^2", cargo install cargo-about, and Git for Windows (bash for licenses.sh and stage-ui.sh).
 $ErrorActionPreference = "Stop"
@@ -28,7 +29,9 @@ bash scripts/stage-ui.sh
 if ($LASTEXITCODE -ne 0) { throw "stage-ui.sh failed" }
 
 Set-Location (Join-Path $Root "src-tauri")
-cargo tauri build --target x86_64-pc-windows-msvc --config tauri.release.conf.json @args
+$Updater = @()
+if ($env:TAURI_SIGNING_PRIVATE_KEY) { $Updater = @("--config", '{"bundle":{"createUpdaterArtifacts":true}}') }
+cargo tauri build --target x86_64-pc-windows-msvc --config tauri.release.conf.json @Updater @args
 if ($LASTEXITCODE -ne 0) { throw "cargo tauri build failed" }
 
 $Dist = Join-Path $Root "dist"
@@ -36,5 +39,9 @@ New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 $Bundle = "target\x86_64-pc-windows-msvc\release\bundle"
 Copy-Item "$Bundle\nsis\*.exe" $Dist
 Copy-Item "$Bundle\msi\*.msi" $Dist
+if ($env:TAURI_SIGNING_PRIVATE_KEY) {
+    Copy-Item "$Bundle\nsis\*.exe.sig" $Dist
+    Copy-Item "$Bundle\msi\*.msi.sig" $Dist
+}
 Copy-Item "THIRD_PARTY_LICENSES.html" $Dist
 Get-ChildItem $Dist

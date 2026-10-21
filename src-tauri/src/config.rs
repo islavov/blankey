@@ -27,6 +27,8 @@ pub struct Config {
     pub telemetry_id: String,
     /// Where the statistics go instead of the official relay; for development and tests.
     pub telemetry_url: Option<String>,
+    /// Look for new versions and download them (src/app/updates.rs); off by the user on the Connections page.
+    pub auto_update: bool,
 }
 
 impl Default for Config {
@@ -40,6 +42,7 @@ impl Default for Config {
             telemetry: true,
             telemetry_id: String::new(),
             telemetry_url: None,
+            auto_update: true,
         }
     }
 }
@@ -176,7 +179,7 @@ mod tests {
     fn telemetry_id_is_made_once() {
         let dir = tempfile::tempdir().unwrap();
         let config = Config::load_from(dir.path().join("data")).unwrap();
-        assert!(config.telemetry && config.telemetry_url.is_none());
+        assert!(config.telemetry && config.telemetry_url.is_none() && config.auto_update);
         assert_eq!(config.telemetry_id.len(), 34, "{}", config.telemetry_id);
         assert!(config.telemetry_id.starts_with("i-"));
         let again = Config::load_from(dir.path().join("data")).unwrap();

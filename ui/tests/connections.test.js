@@ -28,6 +28,24 @@ test("anonymous statistics are on until the user turns them off", async () => {
   assert.equal($("#telemetry").checked, false);
 });
 
+test("check now downloads a new version and offers to restart into it", async () => {
+  assert.equal(text("#app-version"), "0.2.5");
+  assert.equal(text("#update-state"), "");
+  await click(byText(".relay button", "Check now"));
+  await settle();
+  assert.equal(text("#update-state"), "0.3.0 is ready");
+  await click(byText(".relay button", "Restart to update"));
+  assert.equal(backend.called("update_install").length, 1);
+});
+
+test("automatic updates are on until the user turns them off", async () => {
+  assert.equal($("#auto-update").checked, true);
+  await check($("#auto-update"), false);
+  assert.deepEqual(backend.called("update_auto_set"), [{ enabled: false }]);
+  await settle();
+  assert.equal($("#auto-update").checked, false);
+});
+
 test("the account link opens the relay's account page", async () => {
   await click(byText(".relay button", "Account and billing"));
   assert.equal(backend.called("relay_open_account").length, 1);

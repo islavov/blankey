@@ -6,6 +6,7 @@ pub mod icons;
 mod online;
 mod platform;
 mod tray;
+mod updates;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -214,6 +215,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             app: app.clone(),
             mcp_running: AtomicBool::new(false),
@@ -249,6 +251,9 @@ pub fn run() {
             let telemetry = Arc::new(crate::telemetry::Telemetry::new(app.clone(), online));
             telemetry.start(&tauri::async_runtime::handle().inner().clone());
             handle.manage(telemetry);
+            let updates = Arc::new(updates::Updates::new(handle.clone(), app.config.auto_update));
+            updates.start();
+            handle.manage(updates);
             start_auto_lock(&handle);
             let library_handle = handle.clone();
             app.set_library_hook(move || {
