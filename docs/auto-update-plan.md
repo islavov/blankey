@@ -15,10 +15,10 @@ and MSI, and deb/rpm per distro, all uploaded to the GitHub release for tag `vX.
 - Generate an updater keypair once with `cargo tauri signer generate`. Store the private key and its password as the
   GitHub secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The public key goes in the
   config. This is a manual step for the user; the key must never be committed.
-- `src-tauri/tauri.conf.json`: add `plugins.updater` with `pubkey`, `endpoints:
-  ["https://github.com/islavov/blankey/releases/latest/download/latest.json"]` and `windows.installMode: "passive"`.
-- `src-tauri/tauri.release.conf.json`: `bundle.createUpdaterArtifacts: true`, so only release builds sign updater
-  artifacts and dev builds don't need the key.
+- `src-tauri/tauri.conf.json`: add `plugins.updater` with `pubkey`, `requireSignedVersion: true` and
+  `windows.installMode: "passive"`. The endpoint lives in code (`updates.rs`), so `BLANKEY_UPDATE_URL` can override it.
+- `bundle.createUpdaterArtifacts` is passed by `build_mac.sh` and `build_windows.ps1` only when
+  `TAURI_SIGNING_PRIVATE_KEY` is set, so local release builds and the deb/rpm jobs don't need the key.
 - `src-tauri/Cargo.toml`: add `tauri-plugin-updater = "2"` and `semver = "1"` (already in Cargo.lock through tauri).
   The JS side calls our own commands, so no JS updater permissions are needed in `capabilities/default.json`.
 
@@ -49,8 +49,8 @@ and MSI, and deb/rpm per distro, all uploaded to the GitHub release for tag `vX.
   (`.../releases/tag/vX.Y.Z`) and notify once.
 - Config (`src-tauri/src/config.rs`): `auto_update: bool`, default true, with an opt-out toggle like `telemetry`.
   When it's off, nothing runs automatically, but "Check now" still works.
-- Register the plugin in `app/mod.rs` next to the others (`.plugin(tauri_plugin_updater::Builder::new().build())`;
-  skip it on Linux).
+- Register the plugin in `app/mod.rs` next to the others (`.plugin(tauri_plugin_updater::Builder::new().build())`).
+  It's registered on Linux too, where it's simply unused.
 
 ### 4. Tray and UI
 - `src-tauri/src/app/tray.rs` `menu()`: when the status is `Ready`, add "Restart to update to {version}" above Quit.
