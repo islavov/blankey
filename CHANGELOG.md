@@ -8,6 +8,11 @@
   Connections page (Updates); Check now works either way.
 - On macOS the first launch after an update may ask for keychain access again before Touch ID unlock works, as after a
   manual reinstall: the app is signed ad hoc, so each build has a new signature.
+- check_bindings checks real values only for plain `{{ role.key }}` bindings and never evaluates computed expressions
+  on vault data; it no longer reports fit ratios or missing glyphs.
+- Agents on Blankey Online (claude.ai) ask before reading a file from your template folders: `request_file` with
+  `source: "lib:<id>"` shows the file, and you allow it. Local agents read them directly as before.
+- The fill window's preview no longer shows large boxes over blanks that have no value yet.
 
 ## 0.2.5
 
