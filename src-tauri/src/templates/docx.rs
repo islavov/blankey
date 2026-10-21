@@ -519,7 +519,7 @@ fn chip(var: &str, labels: &IndexMap<String, String>, values: Option<&IndexMap<S
     } else {
         labels.get(var).map(String::as_str).filter(|l| !l.is_empty()).unwrap_or(var)
     };
-    let empty = if value.is_empty() && values.is_some() { " empty" } else { "" };
+    let empty = if value.is_empty() && values.is_some() { " is-empty" } else { "" };
     format!(
         "<span class=\"blank b-{var}{empty}\" data-var=\"{var}\" id=\"blank-{var}\">&nbsp;{}&nbsp;</span>",
         html_escape(shown)
@@ -704,6 +704,6 @@ mod tests {
         assert!(html.contains("<table>"));
         let values: IndexMap<String, String> = [("amount".to_string(), "1 000".to_string())].into_iter().collect();
         let filled = to_html(&target, &labels, Some(&values)).unwrap();
-        assert!(filled.contains("&nbsp;1 000&nbsp;") && filled.contains("b-manager_name empty"));
+        assert!(filled.contains("&nbsp;1 000&nbsp;") && filled.contains("b-manager_name is-empty"));
     }
 }
