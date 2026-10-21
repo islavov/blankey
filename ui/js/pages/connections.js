@@ -24,11 +24,25 @@ export async function relaySignIn() {
   reload();
 }
 
+function updateLabel(update) {
+  const labels = {
+    checking: t("Checking for updates…"),
+    up_to_date: t("Up to date"),
+    available: t("{version} is out", { version: update.version }),
+    downloading: t("Downloading {version}…", { version: update.version }),
+    ready: t("{version} is ready", { version: update.version }),
+    failed: t("Could not check for updates"),
+  };
+  return labels[update.state] || "";
+}
+
 /** Web agents (claude.ai) reaching Blankey through a relay. */
 export function Connections() {
   const info = useLoad(() => call("relay_status"), []);
   const telemetry = useLoad(() => call("telemetry_status"), []);
-  if (!info || telemetry === null) return null;
+  const update = useLoad(() => call("update_status"), []);
+  if (!info || telemetry === null || !update) return null;
+  const busy = update.state === "checking" || update.state === "downloading";
 
   const state = info.signed_in || info.state === "signing_in" ? info.state : "signed_out";
   const signOut = async () => {
@@ -103,6 +117,23 @@ export function Connections() {
             ${t("Share anonymous usage statistics")}
           </label>
           <span class="muted small">${t("How many documents, templates, fill sets and profiles Blankey makes each month, its version and platform, under a random id. Never names or contents.")}</span>
+        </div>
+        <div class="relay-row">
+          <span class="muted">${t("Version")}</span>
+          <span class="mono selectable" id="app-version">${update.current}</span>
+          <span id="update-state">${updateLabel(update)}</span>
+          ${update.state === "failed" && html`<span class="muted small">${update.message}</span>`}
+          <span class="spacer"></span>
+          ${update.state === "ready" && html`<button class="primary" onClick=${() => call("update_install")}>${t("Restart to update")}</button>`}
+          ${update.state === "available" && html`<button class="primary" onClick=${() => call("update_install")}>${t("Download")}</button>`}
+          <button disabled=${busy} onClick=${() => call("update_check").then(reload, reload)}>${t("Check now")}</button>
+        </div>
+        <div class="relay-row">
+          <span class="muted">${t("Updates")}</span>
+          <label class="check small">
+            <input type="checkbox" id="auto-update" checked=${update.auto} onChange=${(e) => call("update_auto_set", { enabled: e.target.checked }).then(reload, reload)} />
+            ${t("Check for new versions automatically")}
+          </label>
         </div>
       </div>
       ${rows.length

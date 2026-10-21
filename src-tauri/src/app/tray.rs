@@ -2,13 +2,16 @@
 
 use std::sync::atomic::Ordering;
 
+use std::sync::Arc;
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Wry};
+
+use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
+use super::updates::{Status as UpdateStatus, Updates};
 use super::{icons, online, platform, state};
 use crate::i18n::{mark, t, tf};
 use crate::keychain;
@@ -81,7 +84,18 @@ fn menu(handle: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let autostart =
         CheckMenuItem::with_id(handle, "autostart", t(&lang, "Start at login"), true, autostart_on, None::<&str>)?;
     let quit = item("quit", mark("Quit"), true)?;
-    Menu::with_items(
+    let update = match handle.try_state::<Arc<Updates>>().map(|updates| updates.status()) {
+        Some(UpdateStatus::Ready { version }) => {
+            let label = tf(&lang, "Restart to update to {version}", &[("version", &version)]);
+            Some(MenuItem::with_id(handle, "update_install", label, true, None::<&str>)?)
+        }
+        Some(UpdateStatus::Available { version, .. }) => {
+            let label = tf(&lang, "Download Blankey {version}…", &[("version", &version)]);
+            Some(MenuItem::with_id(handle, "update_install", label, true, None::<&str>)?)
+        }
+        _ => None,
+    };
+    let menu = Menu::with_items(
         handle,
         &[
             &status,
@@ -98,7 +112,12 @@ fn menu(handle: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &separator()?,
             &quit,
         ],
-    )
+    )?;
+    if let Some(update) = update {
+        menu.insert(&update, menu.items()?.len() - 1)?;
+        menu.insert(&separator()?, menu.items()?.len() - 1)?;
+    }
+    Ok(menu)
 }
 
 fn copy(handle: &AppHandle, text: &str, message: &str) {
@@ -159,6 +178,17 @@ fn on_menu(handle: &AppHandle, id: &str) {
             (None, _) => {}
         },
         "relay_agents" => online::show_connections(handle),
+        "update_install" => {
+            if let Some(updates) = handle.try_state::<Arc<Updates>>() {
+                let (handle, updates) = (handle.clone(), updates.inner().clone());
+                // unpacking the new app takes a moment; Windows exits from here
+                std::thread::spawn(move || {
+                    if let Err(e) = updates.install() {
+                        super::alert(&handle, &e);
+                    }
+                });
+            }
+        }
         "quit" => super::quit(handle),
         _ => {}
     }

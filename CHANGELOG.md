@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.6
+
+- Automatic updates: Blankey looks for a new version shortly after launch and every six hours. On macOS and Windows it
+  downloads the update in the background and offers "Restart to update" in the menu and on the Connections page; the
+  restart locks the vault. Linux packages say a new version is out and link to its release. Turn the checks off on the
+  Connections page (Updates); Check now works either way.
+- On macOS the first launch after an update may ask for keychain access again before Touch ID unlock works, as after a
+  manual reinstall: the app is signed ad hoc, so each build has a new signature.
+
 ## 0.2.5
 
 - Template bindings written as plain text (`buyer.name` instead of `{{ buyer.name }}`) are refused when a template is

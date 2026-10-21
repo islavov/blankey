@@ -74,6 +74,7 @@ export function seed() {
     submissions: {},
     previewDelay: 0,
     telemetry: true,
+    update: { current: "0.2.5", auto: true, state: "idle" },
     relay: {
       url: "https://relay.blankey.io",
       official: true,
@@ -373,6 +374,15 @@ export function createBackend(db = seed()) {
     telemetry_status: () => db.telemetry,
     telemetry_set: ({ enabled }) => {
       db.telemetry = enabled;
+    },
+    update_status: () => db.update,
+    update_check: () => {
+      db.update = { ...db.update, state: "ready", version: "0.3.0" };
+      return db.update;
+    },
+    update_install: () => null,
+    update_auto_set: ({ enabled }) => {
+      db.update.auto = enabled;
     },
     relay_status: () => db.relay,
     relay_summary: () => ({ signed_in: db.relay.signed_in, state: db.relay.state, account: db.relay.account }),

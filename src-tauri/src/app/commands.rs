@@ -1073,6 +1073,29 @@ async fn telemetry_set(telemetry: TelemetryState<'_>, enabled: bool) -> CmdResul
     telemetry.set_enabled(enabled).await
 }
 
+type UpdatesState<'a> = State<'a, std::sync::Arc<super::updates::Updates>>;
+
+#[tauri::command]
+fn update_status(updates: UpdatesState) -> super::updates::Info {
+    updates.info()
+}
+
+#[tauri::command]
+async fn update_check(updates: UpdatesState<'_>) -> CmdResult<super::updates::Info> {
+    updates.check().await;
+    Ok(updates.info())
+}
+
+#[tauri::command]
+fn update_install(updates: UpdatesState) -> CmdResult<()> {
+    updates.install()
+}
+
+#[tauri::command]
+fn update_auto_set(updates: UpdatesState, enabled: bool) -> CmdResult<()> {
+    updates.set_auto(enabled)
+}
+
 #[tauri::command]
 async fn relay_status(relay: RelayState<'_>) -> CmdResult<crate::relay::Info> {
     Ok(relay.info().await)
@@ -1204,5 +1227,9 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         relay_open_account,
         telemetry_status,
         telemetry_set,
+        update_status,
+        update_check,
+        update_install,
+        update_auto_set,
     ]
 }

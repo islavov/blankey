@@ -60,6 +60,8 @@ jobs:
       - run: scripts/build_mac.sh
         env:
           BLANKEY_TELEMETRY_KEY: ${{ secrets.BLANKEY_TELEMETRY_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: blankey-macos-aarch64
@@ -88,6 +90,8 @@ jobs:
         run: ./scripts/build_windows.ps1
         env:
           BLANKEY_TELEMETRY_KEY: ${{ secrets.BLANKEY_TELEMETRY_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: blankey-windows-x86_64
@@ -171,10 +175,17 @@ jobs:
     needs: [test, macos, windows, deb, rpm]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.sha }}
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      # what installed apps check for updates; only when both platforms that update themselves were built
+      - name: Updater manifest
+        if: needs.macos.result == 'success' && needs.windows.result == 'success'
+        run: scripts/updater-manifest.sh "$TAG" "$GITHUB_REPOSITORY"
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
