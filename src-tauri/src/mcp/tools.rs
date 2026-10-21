@@ -19,6 +19,7 @@ use crate::fieldtypes;
 use crate::library::{self, LibraryFile};
 use crate::links::{link_state, LinkDraft, SpecField, COLLECTION_LINK, DEFAULT_MAX_FILES, LINK_SUBMISSION};
 use crate::mcp::{find, remote, Remote};
+use crate::pii;
 use crate::render::{pdf_form, preview};
 use crate::templates::bindings::example_context;
 use crate::templates::engine::{self, dump};
@@ -173,6 +174,9 @@ fn wait_timeout(requested: Option<i64>, remote: bool) -> u64 {
 fn string(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
+
+/// Printed lines per page shown for a flat PDF.
+const PDF_LINES: usize = 300;
 
 fn dpi(value: Option<i64>) -> f32 {
     value.unwrap_or(80).clamp(30, 300) as f32
@@ -716,7 +720,8 @@ impl Tools {
                     .files()?
                     .into_iter()
                     .filter(|f| {
-                        let mut attrs = vec![f.rel_path.as_str(), f.title.as_str(), f.kind.as_str()];
+                        let title = pii::redact_line(&f.title);
+                        let mut attrs = vec![f.rel_path.as_str(), title.as_str(), f.kind.as_str()];
                         attrs.extend(f.category.as_deref());
                         attrs.extend(f.tags.iter().map(String::as_str));
                         !templatized.contains(f.source().as_str())
@@ -737,9 +742,11 @@ impl Tools {
                 Found::Template(t) => json!({"id": t.id, "name": t.name, "kind": t.kind.as_str(),
                        "status": template_status(t), "roles": t.roles.keys().collect::<Vec<_>>(),
                        "vars": t.fields.len(), "description": find::clip(&t.description, 120)}),
-                Found::File(f) => json!({"source": f.source(), "status": "candidate", "name": f.name(),
+                Found::File(f) => {
+                    json!({"source": f.source(), "status": "candidate", "name": pii::redact_line(f.name()),
                        "kind": f.kind, "path": f.rel_path, "category": f.category, "tags": f.tags,
-                       "readiness": f.readiness, "fields": f.fields, "blanks": f.blanks, "pages": f.pages}),
+                       "readiness": f.readiness, "fields": f.fields, "blanks": f.blanks, "pages": f.pages})
+                }
             }))
         })
         .await
@@ -757,7 +764,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Read a PDF to make a template from it. A form (has AcroForm fields): its fields (name, type, page,\nrect in PDF points, comb length, button states), plus the given pages with every field outlined; next\nsave_template. A flat or scanned PDF: per page its size and printed text lines with [x0, y0, x1, y1] boxes\n(PDF points, origin bottom-left), and each page as an image with a coordinate grid (lines every 50 pt,\nlabels every 100 pt; default all pages); next save_pdf_overlay_template."
+        description = "Read a PDF to make a template from it. A form (has AcroForm fields): its fields (name, type, page,\nrect in PDF points, comb length, button states), plus the given pages with every field outlined; next\nsave_template. A flat or scanned PDF: per page its size and printed text lines with [x0, y0, x1, y1] boxes\n(PDF points, origin bottom-left), and each page as an image with a coordinate grid (lines every 50 pt,\nlabels every 100 pt; default all pages); next save_pdf_overlay_template. Personal values are placeholders in the\nlines and blacked out on the images; pii lists them with their places."
     )]
     async fn inspect_pdf(&self, Parameters(a): Parameters<InspectPdfArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
@@ -784,22 +791,24 @@ impl Tools {
             if selected.is_empty() {
                 selected = (1..=sizes.len()).collect();
             }
-            let round = |v: f32| ((v as f64) * 10.0).round() / 10.0;
+            let doc = pii::Document::pdf(&pdf)?;
+            let all = if app.config.pii_redaction { doc.redacted_pages() } else { doc.pages() };
             let pages: Vec<Value> = selected
                 .iter()
                 .map(|&page| {
-                    let (width, height) = sizes[page - 1];
-                    Ok(json!({
-                        "page": page,
-                        "width": round(width),
-                        "height": round(height),
-                        "lines": preview::layout_lines(&pdf, page, 300)?,
-                    }))
+                    let mut p = all[page - 1].clone();
+                    p.lines.truncate(PDF_LINES);
+                    json!(p)
                 })
-                .collect::<Result<_, String>>()?;
-            let mut out = vec![ContentBlock::text(dump(&json!({"kind": "flat", "pages": pages})))];
+                .collect();
+            let pii = if app.config.pii_redaction { doc.entities() } else { Vec::new() };
+            let mut out = vec![ContentBlock::text(dump(&json!({"kind": "flat", "pages": pages, "pii": pii})))];
             for page in selected {
-                out.push(png(preview::grid_page(&pdf, page, dpi(a.dpi))?));
+                let image = preview::grid_page(&pdf, page, dpi(a.dpi))?;
+                out.push(png(match app.config.pii_redaction {
+                    true => pii::mask_png(&image, sizes[page - 1].1, &doc.masks(page), dpi(a.dpi))?,
+                    false => image,
+                }));
             }
             ok(out)
         })
@@ -902,11 +911,19 @@ impl Tools {
     }
 
     #[tool(
-        description = "Paragraphs of a local .docx (body and table cells) with their run texts and existing {{ }} tags.\nUse the run texts to pick spans for save_docx_template: a span cannot cross a run boundary."
+        description = "Paragraphs of a local .docx (body and table cells) with their run texts and existing {{ }} tags.\nUse the run texts to pick spans for save_docx_template: a span cannot cross a run boundary. Values that look\npersonal appear as placeholders like \u{27e6}egn:1\u{27e7}; pii lists each with its kind, role, length and a suggested\nvar and binding. Pass a placeholder as find in save_docx_template (alone: every occurrence; with occurrence: the\nn-th) or inside a longer find."
     )]
     async fn inspect_docx(&self, Parameters(a): Parameters<PathArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
-        self.run(move |app| text(&docx::inspect(&source_path(app, remote.as_ref(), &a.path)?)?)).await
+        self.run(move |app| {
+            let path = source_path(app, remote.as_ref(), &a.path)?;
+            if !app.config.pii_redaction {
+                return text(&json!({"paragraphs": docx::inspect(&path)?, "pii": []}));
+            }
+            let doc = pii::Document::docx(&path)?;
+            text(&json!({"paragraphs": doc.redacted_paragraphs(), "pii": doc.entities()}))
+        })
+        .await
     }
 
     #[tool(
@@ -919,29 +936,32 @@ impl Tools {
             let source = source_path(app, remote.as_ref(), &a.source_path)?;
             let scratch = tempfile_path("docx");
             let replacements: Vec<Value> = a.replacements.into_iter().map(Value::Object).collect();
+            let doc = pii::Document::docx(&source)?;
+            let replacements = doc.resolve_finds(replacements)?;
             let origin = origin(app, Some(&a.source_path), replacements.clone(), None)?;
-            let saved = docx::tokenize(&source, &scratch, &replacements).and_then(|report| {
-                let template = app.templates.save(SaveTemplate {
-                    id: &a.template_id,
-                    name: &a.name,
-                    kind: TemplateKind::Docx,
-                    roles: a.roles,
-                    fields: a.fields,
-                    description: &a.description.unwrap_or_default(),
-                    source_file: Some(&scratch),
-                    source_bytes: None,
-                    source_text: None,
-                    labels: a.labels,
-                    boxes: Vec::new(),
-                    origin,
-                })?;
-                Ok((template, report))
-            });
+            let saved =
+                docx::tokenize(&source, &scratch, &replacements).map_err(|e| doc.scrub(&e)).and_then(|report| {
+                    let template = app.templates.save(SaveTemplate {
+                        id: &a.template_id,
+                        name: &a.name,
+                        kind: TemplateKind::Docx,
+                        roles: a.roles,
+                        fields: a.fields,
+                        description: &a.description.unwrap_or_default(),
+                        source_file: Some(&scratch),
+                        source_bytes: None,
+                        source_text: None,
+                        labels: a.labels,
+                        boxes: Vec::new(),
+                        origin,
+                    })?;
+                    Ok((template, report))
+                });
             let _ = std::fs::remove_file(&scratch);
             let (template, report) = saved?;
             app.audit("mcp", "save_template", &a.template_id);
             let mut out = engine::describe_template(&template);
-            out["replaced"] = json!(report);
+            out["replaced"] = json!(report.iter().map(|line| doc.scrub(line)).collect::<Vec<_>>());
             text(&out)
         })
         .await
@@ -1815,7 +1835,8 @@ pub mod tests {
 
         // local agents read library files directly; remote ones only after the user shares the file
         let (inspected, _) = out(t.inspect_docx(args(json!({"path": source})), local()).await);
-        assert!(inspected.contains("John Smith"));
+        assert!(inspected.contains("Loan in the amount") && !inspected.contains("John Smith"), "{inspected}");
+        assert!(inspected.contains("⟦person:1⟧"));
         let refused = t.inspect_docx(args(json!({"path": source})), remote()).await.unwrap_err();
         assert!(refused.contains("request_file"), "{refused}");
         let ask = json!({"reason": "Make a lease template", "source": source});
@@ -1828,13 +1849,13 @@ pub mod tests {
         let shared = app.share_library_file(request_id).unwrap();
         assert_eq!(shared["file_id"], json!(source));
         let (inspected, _) = out(t.inspect_docx(args(json!({"path": source})), remote()).await);
-        assert!(inspected.contains("John Smith"));
+        assert!(inspected.contains("Loan in the amount") && !inspected.contains("John Smith"));
         assert!(t.inspect_docx(args(json!({"path": source})), remote_as("g2")).await.is_err(), "another agent");
         assert!(app.share_library_file(request_id).is_err(), "a request is shared once");
         let bad = t.request_file(args(json!({"reason": "x", "source": "lib:999"})), remote()).await;
         assert!(bad.is_err());
         let save = json!({"template_id": "lease", "name": "Lease", "source_path": source,
-                          "replacements": [{"find": "John Smith", "var": "manager_name"}],
+                          "replacements": [{"find": "⟦person:1⟧", "var": "manager_name"}],
                           "fields": {"manager_name": ""}, "roles": {}});
         out(t.save_docx_template(args(save), remote()).await);
         let template = app.templates.get("lease").unwrap();

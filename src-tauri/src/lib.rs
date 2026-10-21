@@ -8,6 +8,7 @@ pub mod keychain;
 pub mod library;
 pub mod links;
 pub mod mcp;
+pub mod pii;
 pub mod relay;
 pub mod render;
 pub mod telemetry;

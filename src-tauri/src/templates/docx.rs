@@ -23,7 +23,7 @@ pub static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{\s*([A-Za
 static VAR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z_]\w*$").unwrap());
 static ANY_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)\{\{.*?\}\}").unwrap());
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct ParagraphInfo {
     pub index: usize,
     /// "body" or "table T row R cell C"
@@ -31,6 +31,9 @@ pub struct ParagraphInfo {
     pub text: String,
     pub runs: Vec<String>,
     pub tags: Vec<String>,
+    /// Byte range of each run in `text`; hyperlink text between runs is in no range.
+    #[serde(skip)]
+    pub run_spans: Vec<(usize, usize)>,
 }
 
 // -- reading the package -------------------------------------------------------------------------------
@@ -204,7 +207,19 @@ pub fn inspect(path: &Path) -> Result<Vec<ParagraphInfo>, String> {
                 }
                 let tags = TAG_RE.captures_iter(&text).map(|c| c[1].to_string()).collect();
                 let runs = p.runs.iter().map(|&i| body.runs[i].text.clone()).collect();
-                Some(ParagraphInfo { index, location: p.location.clone(), text, runs, tags })
+                let mut run_spans = Vec::new();
+                let mut at = 0;
+                for segment in &p.segments {
+                    let len = match segment {
+                        Segment::Run(i) => body.runs[*i].text.len(),
+                        Segment::Fixed(t) => t.len(),
+                    };
+                    if let Segment::Run(_) = segment {
+                        run_spans.push((at, at + len));
+                    }
+                    at += len;
+                }
+                Some(ParagraphInfo { index, location: p.location.clone(), text, runs, tags, run_spans })
             })
             .collect()
     })

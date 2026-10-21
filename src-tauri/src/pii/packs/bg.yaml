@@ -1,0 +1,53 @@
+# Bulgarian labels. Labels and tokens match case-insensitively on word boundaries; org suffixes are case-sensitive.
+lang: bg
+months: [януари, февруари, март, април, май, юни, юли, август, септември, октомври, ноември, декември]
+anchors:
+  - { kind: egn, labels: [егн, е.г.н.], value: { pattern: egn } }
+  - { kind: lnch, labels: [лнч, л.н.ч.], value: { pattern: lnch } }
+  - { kind: eik, labels: [еик, булстат, еик/булстат, еик по булстат], value: { pattern: eik } }
+  - { kind: vat_id, labels: [ддс №, ин по ддс, идентификационен номер по ддс], value: { pattern: vat_bg } }
+  - { kind: id_card, labels: [л.к. №, л.к., л. к. №, л. к., лична карта №, лична карта, лк №, документ за самоличност №], value: { pattern: id_card } }
+  - { kind: id_issue_date, labels: [издадена на, изд. на, издаден на], value: { pattern: date } }
+  - { kind: id_issuer, labels: [от мвр, от мвр -, от мвр –], value: { grammar: until_delim, max: 40 }, include_label: true }
+  - { kind: passport, labels: [паспорт №, паспорт], value: { pattern: passport } }
+  - { kind: birth_date, labels: [роден на, родена на, дата на раждане], value: { pattern: date } }
+  - kind: address
+    labels: [с постоянен адрес, с настоящ адрес, постоянен адрес, настоящ адрес, с адрес, адрес за кореспонденция,
+             адрес, живущ в, живуща в, живеещ в, живееща в, седалище и адрес на управление, адрес на управление,
+             със седалище]
+    value: { grammar: address }
+  - kind: person
+    labels: [г-н, г-жа, представлявано от, представлявана от, представляван от, чрез управителя, управител,
+             трите имена, име, собственик]
+    value: { grammar: person_name }
+  - { kind: iban, labels: [iban, банкова сметка, с/ка, сметка], value: { pattern: iban } }
+  - { kind: bic, labels: [bic, swift, бик], value: { pattern: bic } }
+  - { kind: phone, labels: [тел., тел, телефон, gsm, мобилен телефон, мобилен], value: { grammar: phone_any } }
+  - { kind: email, labels: [имейл, e-mail, email, ел. поща, електронна поща], value: { pattern: email } }
+  - { kind: postcode, labels: [п.к., пощенски код], value: { regex: '\d{4}' } }
+  - { kind: plate, labels: [рег. №, рег. номер, регистрационен номер], value: { pattern: plate_bg } }
+# A name right before one of these is a person: "Иван Петров Иванов, ЕГН ...".
+person_before: [егн, лнч, л.к., л.к. №, лична карта, роден на, родена на, с егн, с лнч]
+glue: [с, със]
+address_tokens: [гр., град, с., село, обл., област, общ., община, ул., улица, бул., булевард, ж.к., жк, кв., квартал,
+                 бл., блок, вх., вход, ет., етаж, ап., апартамент, №, п.к., пл., площад, м., местност]
+# Tokens that can start an address with no label in front.
+address_starts: [гр., град, ул., улица, бул., булевард, ж.к., кв., бл., пл., площад, обл., област]
+org_suffixes: [ЕООД, ООД, ЕАД, АД, ЕТ, СД, КДА, КД, ДЗЗД, АДСИЦ]
+roles:
+  seller: [продавач]
+  buyer: [купувач]
+  landlord: [наемодател]
+  tenant: [наемател]
+  employer: [работодател]
+  employee: [служител, работник]
+  principal: [упълномощител, упълномощителка]
+  agent: [пълномощник]
+  client: [възложител]
+  contractor: [изпълнител]
+  lender: [заемодател]
+  borrower: [заемател, кредитополучател]
+  donor: [дарител]
+  donee: [дарен, надарен]
+  guarantor: [поръчител]
+defined_term: 'наричан[аоия]?\s+(?:по-долу|за\s+краткост)(?:\s+за\s+краткост)?'
