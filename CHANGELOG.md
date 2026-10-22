@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.7
+
+- Personal data stays out of the assistant's view: when it reads a Word file or a PDF from your folders or one you
+  share, names, ID numbers (EGN, LNCh, EIK, IBAN and others), addresses, phones and emails come through masked with
+  their shape kept, like `Xxxx Xxxxxx` or `##########`, and are blacked out on page images. The assistant still makes
+  templates from them; the values are filled in only on your computer.
+- Personal data… on a file under Templates, Folders, and the same review when the assistant asks for a file, shows
+  what stays hidden. Select text to hide it too, step through a value's places, make a value visible to the assistant,
+  or remove it from the list as not personal. Your corrections are kept per file, encrypted in the vault.
+- A file you choose for the assistant is shared only after you review it (Choose file…, then Share).
+- The window, the menu bar icon and the MCP server no longer wait for a keychain prompt at startup; the vault unlocks
+  when you allow access.
+
 ## 0.2.6
 
 - Automatic updates: Blankey looks for a new version shortly after launch and every six hours. On macOS and Windows it
