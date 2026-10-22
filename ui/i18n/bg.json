@@ -504,5 +504,9 @@
   "Hidden from the assistant. Click to show it.": "Скрито от асистента. Щракнете, за да го покажете.",
   "Visible to the assistant. Click to hide it.": "Видимо за асистента. Щракнете, за да го скриете.",
   "Hide from the assistant": "Скрий от асистента",
-  "Show to the assistant": "Покажи на асистента"
+  "Show to the assistant": "Покажи на асистента",
+  "Previous place": "Предишно място",
+  "Next place": "Следващо място",
+  "Not personal data. The assistant sees it and the list no longer shows it.": "Не са лични данни. Асистентът ги вижда и списъкът вече не ги показва.",
+  "Not personal data": "Не са лични данни"
 }

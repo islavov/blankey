@@ -219,7 +219,8 @@ impl Relay {
         let inner = Inner {
             url: discovery::normalize(&config.relay_url).unwrap_or_else(|_| OFFICIAL_RELAY.into()),
             enabled: config.relay_enabled,
-            has_token: tokens.get().ok().flatten().is_some(),
+            // read by start(), off the main thread: a keychain prompt must not hold up the app
+            has_token: false,
             endpoints: None,
             access_token: None,
             task: None,
@@ -337,13 +338,20 @@ impl Relay {
     }
 
     /// Connects when the relay is enabled and a refresh token is stored.
+    /// Reads whether a refresh token is stored, then connects when the relay is on and signed in. The keychain read
+    /// runs on a worker thread, so a keychain prompt never holds up the window, the tray or the MCP server.
     pub fn start(self: &Arc<Self>) {
-        if self.inner().enabled && self.signed_in() {
-            let relay = self.clone();
-            self.replace_task(async move { client::run(relay).await });
-        } else {
-            self.set_status(State::SignedOut, "");
-        }
+        let relay = self.clone();
+        self.runtime.spawn_blocking(move || {
+            let has_token = relay.tokens.get().ok().flatten().is_some();
+            relay.inner().has_token = has_token;
+            if relay.inner().enabled && has_token {
+                let task = relay.clone();
+                relay.replace_task(async move { client::run(task).await });
+            } else {
+                relay.set_status(State::SignedOut, "");
+            }
+        });
     }
 
     fn replace_task(&self, task: impl std::future::Future<Output = ()> + Send + 'static) {

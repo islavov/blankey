@@ -4,7 +4,6 @@
 mod corrections;
 mod document;
 mod grammar;
-mod keys;
 mod redact;
 mod resolve;
 mod t1;
@@ -22,8 +21,6 @@ pub use types::{Analysis, Block, Detection, Entity, Kind, Occ};
 
 /// Detections at or above this are redacted.
 pub const REDACT: f32 = 0.4;
-/// Entities at or above this are suggested as template vars.
-pub const SUGGEST: f32 = 0.7;
 
 pub fn detect(text: &str) -> Vec<Detection> {
     let mut hits = t1::scan(text);
@@ -34,10 +31,9 @@ pub fn detect(text: &str) -> Vec<Detection> {
 
 pub fn analyze(blocks: &[Block], corrections: &Corrections) -> Analysis {
     let per_block = blocks.iter().map(|b| corrections.apply(&b.text, detect(&b.text))).collect();
-    let mut a = resolve::group(blocks, per_block, None);
+    let mut a = resolve::group(blocks, per_block);
     resolve::propagate(blocks, &mut a);
-    let roles = resolve::roles(blocks, &a);
-    resolve::group(blocks, a.per_block, Some(&roles))
+    a
 }
 
 /// One line of text with its personal values and checksummed IDs masked, for text that does not come from a
@@ -45,7 +41,7 @@ pub fn analyze(blocks: &[Block], corrections: &Corrections) -> Analysis {
 pub fn redact_line(text: &str) -> String {
     let mut out = text.to_string();
     for d in detect(text).iter().rev().filter(|d| d.kind.personal() && d.score >= REDACT) {
-        let masked = format!("⟦{} {}⟧", d.kind.name(), redact::shape(&text[d.start..d.end]));
+        let masked = format!("⟦{}⟧", redact::shape(&text[d.start..d.end]));
         out.replace_range(d.start..d.end, &masked);
     }
     guard(&out).into_owned()

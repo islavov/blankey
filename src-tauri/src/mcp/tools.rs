@@ -904,7 +904,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Paragraphs of a local .docx (body and table cells) with their run texts and existing {{ }} tags.\nUse the run texts to pick spans for save_docx_template: a span cannot cross a run boundary. Values that look\npersonal are masked by shape, like \u{27e6}egn:1 ##########\u{27e7} or \u{27e6}person:2 Xxxx Xxxxxx\u{27e7} (letters X/x, digits #); pii\nlists each with its kind, role, length and a suggested var and binding. Pass a placeholder (or just \u{27e6}egn:1\u{27e7})\nas find in save_docx_template (alone: every occurrence; with occurrence: the n-th) or inside a longer find."
+        description = "Paragraphs of a local .docx (body and table cells) with their run texts and existing {{ }} tags.\nUse the run texts to pick spans for save_docx_template: a span cannot cross a run boundary. Values that look\npersonal are masked by shape, like \u{27e6}pii:1 ##########\u{27e7} or \u{27e6}pii:2 Xxxx Xxxxxx\u{27e7} (letters X/x,\ndigits #); the text around a value tells what it is and whose. pii lists each with its length and occurrences.\nPass a placeholder (or just \u{27e6}pii:1\u{27e7}) as find in save_docx_template (alone: every occurrence; with\noccurrence: the n-th) or inside a longer find."
     )]
     async fn inspect_docx(&self, Parameters(a): Parameters<PathArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
@@ -1819,7 +1819,7 @@ pub mod tests {
         // local agents read library files directly; remote ones only after the user shares the file
         let (inspected, _) = out(t.inspect_docx(args(json!({"path": source})), local()).await);
         assert!(inspected.contains("Loan in the amount") && !inspected.contains("John Smith"), "{inspected}");
-        assert!(inspected.contains("⟦representative:1 Xxxx Xxxxx⟧"), "{inspected}");
+        assert!(inspected.contains("⟦pii:3 Xxxx Xxxxx⟧"), "{inspected}");
         // the user's corrections for the file decide what the assistant sees
         let path = app.library.path(&source).unwrap();
         let mut corrections = pii::Corrections::default();
@@ -1827,7 +1827,7 @@ pub mod tests {
         corrections.show("John Smith");
         app.set_pii_corrections(&source, &path, &corrections).unwrap();
         let (corrected, _) = out(t.inspect_docx(args(json!({"path": source})), local()).await);
-        assert!(corrected.contains("⟦marked:1 ## ### XXX⟧") && !corrected.contains("34 000"), "{corrected}");
+        assert!(corrected.contains("⟦pii:3 ## ### XXX⟧") && !corrected.contains("34 000"), "{corrected}");
         assert!(corrected.contains("John Smith"));
         app.set_pii_corrections(&source, &path, &pii::Corrections::default()).unwrap();
         let refused = t.inspect_docx(args(json!({"path": source})), remote()).await.unwrap_err();
@@ -1848,7 +1848,7 @@ pub mod tests {
         let bad = t.request_file(args(json!({"reason": "x", "source": "lib:999"})), remote()).await;
         assert!(bad.is_err());
         let save = json!({"template_id": "lease", "name": "Lease", "source_path": source,
-                          "replacements": [{"find": "⟦representative:1⟧", "var": "manager_name"}],
+                          "replacements": [{"find": "⟦pii:3⟧", "var": "manager_name"}],
                           "fields": {"manager_name": ""}, "roles": {}});
         out(t.save_docx_template(args(save), remote()).await);
         let template = app.templates.get("lease").unwrap();

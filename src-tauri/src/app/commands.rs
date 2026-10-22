@@ -365,39 +365,84 @@ fn review(app: &Blankey, source: &str) -> Result<Value, String> {
     let (path, kind) = review_path(app, source)?;
     let corrections = app.pii_corrections(source, &path)?;
     let doc = pii::Document::open(&path, &kind, &corrections)?;
-    let unshown = pii::Corrections { hide: corrections.hide.clone(), show: Vec::new() };
+    // what the user hid themselves can be removed; a value the user shows that detection would hide cannot
+    let added: Vec<String> = corrections.hide.iter().map(|v| review_key(v)).collect();
+    let unshown = pii::Corrections { hide: corrections.hide.clone(), ..Default::default() };
     let detected: Vec<String> = pii::Document::open(&path, &kind, &unshown)?
         .hidden()
         .iter()
-        .filter(|h| h["kind"] != "marked")
-        .filter_map(|h| h["value"].as_str().map(str::to_lowercase))
+        .filter_map(|h| h["value"].as_str().map(review_key))
+        .filter(|key| !added.contains(key))
         .collect();
-    let mut items: Vec<Value> = doc
+    let mut members: Vec<Value> = doc
         .hidden()
         .into_iter()
         .map(|mut h| {
             h["hidden"] = json!(true);
-            h["user"] = json!(h["kind"] == "marked");
+            h["user"] = json!(added.contains(&review_key(h["value"].as_str().unwrap_or_default())));
             h
         })
         .collect();
     for (i, value) in corrections.show.iter().enumerate() {
-        let user = !detected.contains(&value.to_lowercase());
-        items.push(json!({"id": format!("shown:{i}"), "kind": if user { "marked" } else { "shown" }, "value": value,
-                          "occurrences": doc.count(value), "hidden": false, "user": user}));
+        members.push(json!({"id": format!("shown:{i}"), "value": value, "occurrences": doc.count(value),
+                            "hidden": false, "user": !detected.contains(&review_key(value)), "first": doc.first(value)}));
     }
-    let preview = match kind.as_str() {
+    Ok(json!({"preview": review_preview(&doc, &path, &kind, &corrections)?, "items": review_rows(members)}))
+}
+
+/// The form a value is grouped by in the review: case, quotes and spacing aside.
+fn review_key(value: &str) -> String {
+    value
+        .replace(['„', '“', '”', '"', '«', '»'], "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(|c: char| c.is_ascii_punctuation())
+        .to_lowercase()
+}
+
+/// One row per value („ПРИМЕР“ ЕООД with and without quotes, a hidden spelling and a shown one), in document
+/// order, so showing or hiding never moves a row. A row is hidden while any of its members is.
+fn review_rows(members: Vec<Value>) -> Vec<Value> {
+    let place = |m: &Value| m["first"].as_array().map(|f| (f[0].as_u64().unwrap_or(0), f[1].as_u64().unwrap_or(0)));
+    let mut rows: IndexMap<String, Vec<Value>> = IndexMap::new();
+    let mut sorted = members;
+    sorted.sort_by_key(|m| (place(m).is_none(), place(m)));
+    for m in sorted {
+        rows.entry(review_key(m["value"].as_str().unwrap_or_default())).or_default().push(m);
+    }
+    rows.into_iter()
+        .map(|(key, members)| {
+            json!({
+                "key": key,
+                "value": members[0]["value"],
+                "hidden": members.iter().any(|m| m["hidden"] == true),
+                "user": members.iter().any(|m| m["user"] == true),
+                "occurrences": members.iter().filter_map(|m| m["occurrences"].as_u64()).sum::<u64>(),
+                "ids": members.iter().map(|m| m["id"].clone()).collect::<Vec<_>>(),
+                "members": members,
+            })
+        })
+        .collect()
+}
+
+fn review_preview(
+    doc: &pii::Document,
+    path: &std::path::Path,
+    kind: &str,
+    corrections: &pii::Corrections,
+) -> Result<Preview, String> {
+    Ok(match kind {
         "docx" => Preview::Html { html: doc.html(&corrections.show)?, names: Vec::new() },
         _ => {
-            let bytes = std::fs::read(&path).map_err(err)?;
+            let bytes = std::fs::read(path).map_err(err)?;
             let mut boxes = doc.places();
             let needles: IndexMap<String, String> =
                 corrections.show.iter().enumerate().map(|(i, v)| (format!("shown:{i}"), v.clone())).collect();
             boxes.extend(crate::render::preview::find_text(&bytes, &needles)?);
             Preview::Pages { pages: preview::pages(&bytes, &boxes, preview::FILE_PAGES)?, names: Vec::new() }
         }
-    };
-    Ok(json!({"preview": preview, "items": items}))
+    })
 }
 
 #[tauri::command]
@@ -406,13 +451,16 @@ async fn pii_review(state: State<'_, AppState>, source: String) -> CmdResult<Val
     tauri::async_runtime::spawn_blocking(move || review(&app, &source)).await.map_err(err)?
 }
 
-/// A change to what the assistant sees of a file. `action`: hide, show or forget. The value is `text`, a hidden
-/// `entity`, or a selection in the docx preview (UTF-16 offsets `start`..`end` in `block`).
+/// A change to what the assistant sees of a file. `action`: hide, show, forget (a value the user added), dismiss
+/// (a detected value that is not personal) or remove (whichever of the two applies). The values are `texts`, every
+/// spelling of hidden `entities`, or a selection in the docx preview (UTF-16 offsets `start`..`end` in `block`).
 #[derive(Deserialize)]
 struct Correction {
     action: String,
-    text: Option<String>,
-    entity: Option<String>,
+    #[serde(default)]
+    texts: Vec<String>,
+    #[serde(default)]
+    entities: Vec<String>,
     block: Option<usize>,
     start: Option<usize>,
     end: Option<usize>,
@@ -426,13 +474,12 @@ async fn pii_correct(state: State<'_, AppState>, source: String, correction: Cor
         let (path, kind) = review_path(&app, &source)?;
         let mut corrections = app.pii_corrections(&source, &path)?;
         let doc = pii::Document::open(&path, &kind, &corrections)?;
-        let Correction { action, text, entity, block, start, end } = correction;
-        let values = match (text, entity, block, start, end) {
-            (Some(text), ..) => vec![text],
-            (None, Some(entity), ..) => doc.surfaces(&entity),
-            (None, None, Some(block), Some(start), Some(end)) => doc.selection(block, start, end).into_iter().collect(),
-            _ => Vec::new(),
-        };
+        let Correction { action, texts, entities, block, start, end } = correction;
+        let mut values = texts;
+        values.extend(entities.iter().flat_map(|e| doc.surfaces(e)));
+        if let (Some(block), Some(start), Some(end)) = (block, start, end) {
+            values.extend(doc.selection(block, start, end));
+        }
         for value in &values {
             match action.as_str() {
                 "hide" => {
@@ -445,6 +492,8 @@ async fn pii_correct(state: State<'_, AppState>, source: String, correction: Cor
                 }
                 "show" => corrections.show(value),
                 "forget" => corrections.forget(value),
+                "dismiss" => corrections.dismiss(value),
+                "remove" => corrections.remove(value),
                 other => return Err(format!("Unknown action {other}")),
             }
         }

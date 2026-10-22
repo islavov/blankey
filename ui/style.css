@@ -338,14 +338,16 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .fill-preview .preview-area { flex: 1; border-radius: 0; }
 .review .paper { -webkit-user-select: text; user-select: text; cursor: text; }
 .paper mark.pii { background: var(--chip-vault); color: inherit; border-radius: 3px; cursor: pointer; }
-.paper mark.pii.user { background: var(--chip-suggested); }
 .paper mark.pii.shown { background: transparent; outline: 1px dashed var(--muted); outline-offset: 1px; }
-.paper mark.pii.focus, .pdf-page .box.focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-.hidden-row { display: grid; grid-template-columns: auto 1fr auto auto auto; gap: 6px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--line); cursor: default; }
+.paper mark.pii.focus, .pdf-page .box.focus { outline: 1px solid var(--accent); outline-offset: 1px; }
+.paper mark.pii.current, .pdf-page .box.current { outline: 2px solid var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.hidden-row .places { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.hidden-row .places .icon { font-size: 15px; line-height: 1; padding: 0 4px; }
+.hidden-row .places .at { min-width: 30px; text-align: center; font-variant-numeric: tabular-nums; }
+.hidden-row { display: grid; grid-template-columns: 1fr 76px 26px 26px; gap: 6px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--line); cursor: default; }
 .hidden-row.active { background: var(--accent-soft); }
 .hidden-row .value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .hidden-row.shown .value { color: var(--muted); }
-.hidden-row .kind { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; background: var(--chip-default); }
 .hidden-row .icon { border: 0; background: transparent; padding: 2px 4px; color: var(--muted); display: grid; place-items: center; }
 .hidden-row .icon:hover { color: var(--text); background: var(--hover); }
 .hidden-row .icon svg { width: 15px; height: 15px; }
