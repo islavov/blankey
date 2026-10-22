@@ -14,7 +14,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::core::{Blankey, FILE, FILE_KINDS, FILL, LIBRARY_SYNC_AGE, PROFILE_INPUT};
+use crate::core::{Blankey, DocxTemplate, FILE, FILE_KINDS, FILL, LIBRARY_SYNC_AGE, PROFILE_INPUT};
 use crate::fieldtypes;
 use crate::library::{self, LibraryFile};
 use crate::links::{link_state, LinkDraft, SpecField, COLLECTION_LINK, DEFAULT_MAX_FILES, LINK_SUBMISSION};
@@ -108,11 +108,7 @@ fn origin(
     existing: Option<&Template>,
 ) -> Result<Option<Origin>, String> {
     match source {
-        Some(file) if file.starts_with("lib:") => {
-            let sha256 = library::hash_file(&app.library.path(file)?).map_err(string)?;
-            Ok(Some(Origin { file: file.to_string(), sha256, recipe }))
-        }
-        Some(_) => Ok(None),
+        Some(file) => app.library_origin(file, recipe),
         None => Ok(existing.and_then(|t| t.origin.clone())),
     }
 }
@@ -205,10 +201,6 @@ fn request_view(request: &Request) -> Value {
         "created_at": request.created_at,
         "resolved_at": request.resolved_at,
     })
-}
-
-fn tempfile_path(extension: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("blankey-{}.{extension}", uuid::Uuid::new_v4()))
 }
 
 /// Agents send loosely typed JSON: numbers as strings, non-string map values, nulls for absent arguments.
@@ -791,7 +783,8 @@ impl Tools {
             if selected.is_empty() {
                 selected = (1..=sizes.len()).collect();
             }
-            let doc = pii::Document::pdf(&pdf)?;
+            let corrections = app.pii_corrections(&a.path, &source_path(app, remote.as_ref(), &a.path)?)?;
+            let doc = pii::Document::pdf(&pdf, &corrections)?;
             let all = if app.config.pii_redaction { doc.redacted_pages() } else { doc.pages() };
             let pages: Vec<Value> = selected
                 .iter()
@@ -911,7 +904,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Paragraphs of a local .docx (body and table cells) with their run texts and existing {{ }} tags.\nUse the run texts to pick spans for save_docx_template: a span cannot cross a run boundary. Values that look\npersonal appear as placeholders like \u{27e6}egn:1\u{27e7}; pii lists each with its kind, role, length and a suggested\nvar and binding. Pass a placeholder as find in save_docx_template (alone: every occurrence; with occurrence: the\nn-th) or inside a longer find."
+        description = "Paragraphs of a local .docx (body and table cells) with their run texts and existing {{ }} tags.\nUse the run texts to pick spans for save_docx_template: a span cannot cross a run boundary. Values that look\npersonal are masked by shape, like \u{27e6}egn:1 ##########\u{27e7} or \u{27e6}person:2 Xxxx Xxxxxx\u{27e7} (letters X/x, digits #); pii\nlists each with its kind, role, length and a suggested var and binding. Pass a placeholder (or just \u{27e6}egn:1\u{27e7})\nas find in save_docx_template (alone: every occurrence; with occurrence: the n-th) or inside a longer find."
     )]
     async fn inspect_docx(&self, Parameters(a): Parameters<PathArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
@@ -920,7 +913,7 @@ impl Tools {
             if !app.config.pii_redaction {
                 return text(&json!({"paragraphs": docx::inspect(&path)?, "pii": []}));
             }
-            let doc = pii::Document::docx(&path)?;
+            let doc = pii::Document::docx(&path, &app.pii_corrections(&a.path, &path)?)?;
             text(&json!({"paragraphs": doc.redacted_paragraphs(), "pii": doc.entities()}))
         })
         .await
@@ -934,30 +927,20 @@ impl Tools {
         self.run(move |app| {
             check_id(&a.template_id)?;
             let source = source_path(app, remote.as_ref(), &a.source_path)?;
-            let scratch = tempfile_path("docx");
             let replacements: Vec<Value> = a.replacements.into_iter().map(Value::Object).collect();
-            let doc = pii::Document::docx(&source)?;
+            let doc = pii::Document::docx(&source, &app.pii_corrections(&a.source_path, &source)?)?;
             let replacements = doc.resolve_finds(replacements)?;
-            let origin = origin(app, Some(&a.source_path), replacements.clone(), None)?;
-            let saved =
-                docx::tokenize(&source, &scratch, &replacements).map_err(|e| doc.scrub(&e)).and_then(|report| {
-                    let template = app.templates.save(SaveTemplate {
-                        id: &a.template_id,
-                        name: &a.name,
-                        kind: TemplateKind::Docx,
-                        roles: a.roles,
-                        fields: a.fields,
-                        description: &a.description.unwrap_or_default(),
-                        source_file: Some(&scratch),
-                        source_bytes: None,
-                        source_text: None,
-                        labels: a.labels,
-                        boxes: Vec::new(),
-                        origin,
-                    })?;
-                    Ok((template, report))
-                });
-            let _ = std::fs::remove_file(&scratch);
+            let origin = app.library_origin(&a.source_path, replacements.clone())?;
+            let spec = DocxTemplate {
+                id: &a.template_id,
+                name: &a.name,
+                replacements,
+                roles: a.roles,
+                fields: a.fields,
+                labels: a.labels,
+                description: &a.description.unwrap_or_default(),
+            };
+            let saved = app.save_docx_template(&source, origin, spec).map_err(|e| doc.scrub(&e));
             let (template, report) = saved?;
             app.audit("mcp", "save_template", &a.template_id);
             let mut out = engine::describe_template(&template);
@@ -1836,7 +1819,17 @@ pub mod tests {
         // local agents read library files directly; remote ones only after the user shares the file
         let (inspected, _) = out(t.inspect_docx(args(json!({"path": source})), local()).await);
         assert!(inspected.contains("Loan in the amount") && !inspected.contains("John Smith"), "{inspected}");
-        assert!(inspected.contains("⟦person:1⟧"));
+        assert!(inspected.contains("⟦representative:1 Xxxx Xxxxx⟧"), "{inspected}");
+        // the user's corrections for the file decide what the assistant sees
+        let path = app.library.path(&source).unwrap();
+        let mut corrections = pii::Corrections::default();
+        corrections.hide("34 000 EUR", true);
+        corrections.show("John Smith");
+        app.set_pii_corrections(&source, &path, &corrections).unwrap();
+        let (corrected, _) = out(t.inspect_docx(args(json!({"path": source})), local()).await);
+        assert!(corrected.contains("⟦marked:1 ## ### XXX⟧") && !corrected.contains("34 000"), "{corrected}");
+        assert!(corrected.contains("John Smith"));
+        app.set_pii_corrections(&source, &path, &pii::Corrections::default()).unwrap();
         let refused = t.inspect_docx(args(json!({"path": source})), remote()).await.unwrap_err();
         assert!(refused.contains("request_file"), "{refused}");
         let ask = json!({"reason": "Make a lease template", "source": source});
@@ -1855,7 +1848,7 @@ pub mod tests {
         let bad = t.request_file(args(json!({"reason": "x", "source": "lib:999"})), remote()).await;
         assert!(bad.is_err());
         let save = json!({"template_id": "lease", "name": "Lease", "source_path": source,
-                          "replacements": [{"find": "⟦person:1⟧", "var": "manager_name"}],
+                          "replacements": [{"find": "⟦representative:1⟧", "var": "manager_name"}],
                           "fields": {"manager_name": ""}, "roles": {}});
         out(t.save_docx_template(args(save), remote()).await);
         let template = app.templates.get("lease").unwrap();
@@ -2060,7 +2053,15 @@ pub mod tests {
         assert_eq!(request.payload["kind"], "pdf");
 
         assert!(app.store_upload(id, &fixture("filled.docx")).unwrap_err().contains(".pdf"));
+        // corrections made while reviewing the picked file follow it into the upload
+        let mut corrections = pii::Corrections::default();
+        corrections.hide("Example Value", true);
+        let form = fixture("form.pdf");
+        app.set_pii_corrections(&form.display().to_string(), &form, &corrections).unwrap();
         let picked = app.store_upload(id, &fixture("form.pdf")).unwrap();
+        let upload = picked["file_id"].as_str().unwrap();
+        let stored = app.pii_corrections(upload, &app.upload_path(upload, None).unwrap()).unwrap();
+        assert_eq!(stored, corrections);
         assert_eq!(picked["name"], "form.pdf");
         assert_eq!(picked["size"], std::fs::metadata(fixture("form.pdf")).unwrap().len());
         assert!(app.store_upload(id, &fixture("form.pdf")).is_err());

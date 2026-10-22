@@ -8,7 +8,8 @@ anchors:
   - { kind: id_card, labels: [id card no., id no., identity card no., id number], value: { pattern: id_card } }
   - { kind: birth_date, labels: [date of birth, dob, born on], value: { pattern: date } }
   - { kind: address, labels: [residing at, resident at, address, registered office at, registered address, of address], value: { grammar: address } }
-  - { kind: person, labels: [mr., mrs., ms., dr., name, full name, represented by, signed by], value: { grammar: person_name } }
+  - { kind: person, labels: [mr., mrs., ms., dr., name, full name, signed by], value: { grammar: person_name } }
+  - { kind: representative, labels: [represented by, acting through its director, director], value: { grammar: person_name } }
   - { kind: iban, labels: [iban, bank account, account no.], value: { pattern: iban } }
   - { kind: bic, labels: [bic, swift], value: { pattern: bic } }
   - { kind: phone, labels: [tel., tel, phone, telephone, mobile], value: { grammar: phone_any } }

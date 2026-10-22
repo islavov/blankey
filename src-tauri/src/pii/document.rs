@@ -2,17 +2,17 @@
 //! and marks compiled into template replacements.
 
 use std::cmp::Reverse;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use super::marks::{At, Draft, Mark};
 use super::redact::{self, Span, PLACEHOLDER};
 use super::t2::ends_word;
 use super::types::{Analysis, Block, Entity, Occ};
-use super::{analyze, keys, REDACT, SUGGEST};
+use super::{analyze, keys, Corrections, REDACT, SUGGEST};
 use crate::render::preview::{self, Place};
 use crate::templates::docx::{self, ParagraphInfo};
 
@@ -47,7 +47,7 @@ pub struct EntityView {
     pub label: Option<String>,
     pub length: usize,
     pub occurrences: usize,
-    pub score: f32,
+    pub score: f64,
     #[serde(skip_serializing_if = "is_false")]
     pub crosses_runs: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -55,7 +55,7 @@ pub struct EntityView {
 }
 
 enum Source {
-    Docx(Vec<ParagraphInfo>),
+    Docx(Vec<ParagraphInfo>, PathBuf),
     Pdf { pages: Vec<PageText>, places: Vec<Vec<Place>> },
 }
 
@@ -69,28 +69,25 @@ fn round(v: f32) -> f64 {
     ((v as f64) * 10.0).round() / 10.0
 }
 
-fn overlaps(a: &Occ, b: &Occ) -> bool {
-    a.block == b.block && a.start < b.end && b.start < a.end
-}
-
 impl Document {
-    pub fn open(path: &Path, kind: &str) -> Result<Document, String> {
+    pub fn open(path: &Path, kind: &str, corrections: &Corrections) -> Result<Document, String> {
         match kind {
-            "docx" => Document::docx(path),
-            "pdf" => Document::pdf(&std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?),
+            "docx" => Document::docx(path, corrections),
+            "pdf" => Document::pdf(&std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?, corrections),
             other => Err(format!("Cannot read a {other} file for personal data")),
         }
     }
 
-    pub fn docx(path: &Path) -> Result<Document, String> {
+    pub fn docx(path: &Path, corrections: &Corrections) -> Result<Document, String> {
         let paragraphs = docx::inspect(path)?;
         let blocks: Vec<Block> =
             paragraphs.iter().map(|p| Block { text: p.text.clone(), pieces: p.run_spans.clone() }).collect();
-        Ok(Document { analysis: analyze(&blocks), blocks, source: Source::Docx(paragraphs) })
+        let analysis = analyze(&blocks, corrections);
+        Ok(Document { analysis, blocks, source: Source::Docx(paragraphs, path.to_path_buf()) })
     }
 
     /// The text layer, one block per page with its lines joined by newlines. A scan has empty blocks.
-    pub fn pdf(bytes: &[u8]) -> Result<Document, String> {
+    pub fn pdf(bytes: &[u8], corrections: &Corrections) -> Result<Document, String> {
         let (mut blocks, mut pages) = (Vec::new(), Vec::new());
         for (i, (width, height)) in preview::page_sizes(bytes)?.into_iter().enumerate() {
             let lines = preview::layout_lines(bytes, i + 1, PDF_LINES)?;
@@ -107,7 +104,7 @@ impl Document {
             let lines = lines.into_iter().map(|l| LineText { text: l.text, rect: l.rect }).collect();
             pages.push(PageText { page: i + 1, width: round(width), height: round(height), lines });
         }
-        let analysis = analyze(&blocks);
+        let analysis = analyze(&blocks, corrections);
         let places = entity_places(bytes, &analysis.entities)?;
         Ok(Document { blocks, analysis, source: Source::Pdf { pages, places } })
     }
@@ -123,7 +120,7 @@ impl Document {
     /// The read_body index of each block of a docx (inspect skips empty paragraphs).
     pub fn paragraph_index(&self, block: usize) -> Option<usize> {
         match &self.source {
-            Source::Docx(paragraphs) => paragraphs.get(block).map(|p| p.index),
+            Source::Docx(paragraphs, _) => paragraphs.get(block).map(|p| p.index),
             Source::Pdf { .. } => None,
         }
     }
@@ -150,7 +147,7 @@ impl Document {
     pub fn entities(&self) -> Vec<EntityView> {
         let places = match &self.source {
             Source::Pdf { places, .. } => Some(places),
-            Source::Docx(_) => None,
+            Source::Docx(..) => None,
         };
         self.analysis
             .entities
@@ -169,7 +166,7 @@ impl Document {
                     label: e.label.clone(),
                     length: e.surfaces.first().map_or(0, |s| s.chars().count()),
                     occurrences: e.occurrences.len(),
-                    score: (e.score * 100.0).round() / 100.0,
+                    score: (e.score as f64 * 100.0).round() / 100.0,
                     crosses_runs: e.crosses,
                     places: places.map(|p| p[i].clone()).unwrap_or_default(),
                 }
@@ -177,18 +174,8 @@ impl Document {
             .collect()
     }
 
-    /// One mark per suggested entity that has a var.
-    pub fn suggested(&self) -> Vec<Mark> {
-        self.entities()
-            .into_iter()
-            .filter_map(|v| {
-                Some(Mark { at: At::Entity(v.id), var: v.var?, binding: v.binding, label: v.label, all: true })
-            })
-            .collect()
-    }
-
     pub fn redacted_paragraphs(&self) -> Vec<ParagraphInfo> {
-        let Source::Docx(paragraphs) = &self.source else { return Vec::new() };
+        let Source::Docx(paragraphs, _) = &self.source else { return Vec::new() };
         paragraphs
             .iter()
             .enumerate()
@@ -208,7 +195,7 @@ impl Document {
     pub fn pages(&self) -> Vec<PageText> {
         match &self.source {
             Source::Pdf { pages, .. } => pages.clone(),
-            Source::Docx(_) => Vec::new(),
+            Source::Docx(..) => Vec::new(),
         }
     }
 
@@ -240,6 +227,95 @@ impl Document {
         let values: Vec<(String, String)> =
             self.redacted_entities().flat_map(|(_, e)| e.surfaces.iter().map(|s| (s.clone(), e.id.clone()))).collect();
         redact::scrub(text, &values)
+    }
+
+    /// The docx preview with every hidden value highlighted (`data-e` its entity, class `user` for what the user
+    /// hid). Every run is a `<span data-b="block" data-o="utf-16 offset">`, so a selection maps back to the text.
+    pub fn html(&self, shown: &[String]) -> Result<String, String> {
+        let Source::Docx(paragraphs, path) = &self.source else { return Err("Not a .docx".into()) };
+        let marks: Vec<Vec<(usize, usize, String)>> = (0..self.blocks.len())
+            .map(|b| {
+                let mut row: Vec<(usize, usize, String)> = self
+                    .spans(b)
+                    .into_iter()
+                    .map(|(s, e, id)| {
+                        let user = if id.starts_with("marked:") { " user" } else { "" };
+                        (s, e, format!(r#"class="pii{user}" data-e="{id}""#))
+                    })
+                    .collect();
+                for (i, value) in shown.iter().enumerate() {
+                    for (s, e) in self.occurrences_of(b, value) {
+                        if !row.iter().any(|(rs, re, _)| *rs < e && s < *re) {
+                            row.push((s, e, format!(r#"class="pii shown" data-v="{i}""#)));
+                        }
+                    }
+                }
+                row.sort_by_key(|(s, _, _)| *s);
+                row
+            })
+            .collect();
+        let block_of: HashMap<usize, usize> = paragraphs.iter().enumerate().map(|(b, p)| (p.index, b)).collect();
+        let hook = |paragraph: usize, run: usize, raw: &str| -> Option<String> {
+            let &b = block_of.get(&paragraph)?;
+            let &(ps, pe) = self.blocks[b].pieces.get(run)?;
+            let text = &self.blocks[b].text;
+            if &text[ps..pe] != raw {
+                return None;
+            }
+            let mut out = format!(r#"<span data-b="{b}" data-o="{}">"#, text[..ps].encode_utf16().count());
+            let mut at = ps;
+            for (s, e, attrs) in marks[b].iter().filter(|(s, e, _)| *s < pe && ps < *e) {
+                let (s, e) = ((*s).max(ps), (*e).min(pe));
+                out.push_str(&escape(&text[at..s]));
+                out.push_str(&format!("<mark {attrs}>{}</mark>", escape(&text[s..e])));
+                at = e;
+            }
+            out.push_str(&escape(&text[at..pe]));
+            out.push_str("</span>");
+            Some(out)
+        };
+        docx::to_html_with(path, &hook)
+    }
+
+    /// Where a value occurs in a block as a whole word, in any letter case.
+    fn occurrences_of(&self, b: usize, value: &str) -> Vec<(usize, usize)> {
+        let text = &self.blocks[b].text;
+        let pattern = regex::escape(value.trim()).replace(' ', r"\s+");
+        let Ok(re) = regex::Regex::new(&format!("(?i){pattern}")) else { return Vec::new() };
+        re.find_iter(text)
+            .map(|m| (m.start(), m.end()))
+            .filter(|&(s, e)| (s == 0 || ends_word(text, s)) && ends_word(text, e))
+            .collect()
+    }
+
+    /// How often a value occurs in the document.
+    pub fn count(&self, value: &str) -> usize {
+        (0..self.blocks.len()).map(|b| self.occurrences_of(b, value).len()).sum()
+    }
+
+    /// What gets hidden, for the user's own review: id, kind, the value as first written and how often it occurs.
+    pub fn hidden(&self) -> Vec<Value> {
+        self.redacted_entities()
+            .map(|(_, e)| json!({"id": e.id, "kind": e.kind.name(), "value": e.surfaces[0], "occurrences": e.occurrences.len()}))
+            .collect()
+    }
+
+    /// Where each hidden entity is printed in a PDF, by id.
+    pub fn places(&self) -> IndexMap<String, Vec<Place>> {
+        let Source::Pdf { places, .. } = &self.source else { return IndexMap::new() };
+        self.redacted_entities().map(|(i, e)| (e.id.clone(), places[i].clone())).collect()
+    }
+
+    /// Every spelling of an entity, to stop hiding it.
+    pub fn surfaces(&self, id: &str) -> Vec<String> {
+        self.analysis.entity(id).map(|e| e.surfaces.clone()).unwrap_or_default()
+    }
+
+    /// The text of a selection (UTF-16 offsets in one block), widened to whole words and trimmed.
+    pub fn selection(&self, block: usize, start: usize, end: usize) -> Option<String> {
+        let text = &self.blocks.get(block)?.text;
+        let (s, e) = snap(text, utf16_to_byte(text, start), utf16_to_byte(text, end));
+        (s < e).then(|| text[s..e].to_string())
     }
 
     /// Where `find` occurs as tokenize sees it: inside one run, without overlaps, in document order.
@@ -284,11 +360,11 @@ impl Document {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             let occurrence = r.get("occurrence").and_then(Value::as_u64).map(|n| n as usize);
-            if ids.len() > 1 || find != redact::placeholder(&ids[0]) {
-                let mut text = find.to_string();
-                for (id, e) in ids.iter().zip(&entities) {
-                    text = text.replace(&redact::placeholder(id), &e.surfaces[0]);
-                }
+            let alone = PLACEHOLDER.find(find).is_some_and(|m| m.start() == 0 && m.end() == find.len());
+            if !alone {
+                let text = PLACEHOLDER.replace_all(find, |c: &regex::Captures| {
+                    self.analysis.entity(&c[1]).map(|e| e.surfaces[0].clone()).unwrap_or_default()
+                });
                 out.push(with_find(&r, &text, occurrence));
                 continue;
             }
@@ -316,136 +392,10 @@ impl Document {
         }
         Ok(out)
     }
-
-    fn utf16_to_byte(text: &str, unit: usize) -> usize {
-        let mut seen = 0;
-        for (i, c) in text.char_indices() {
-            if seen >= unit {
-                return i;
-            }
-            seen += c.len_utf16();
-        }
-        text.len()
-    }
-
-    /// The occurrences a mark covers, in byte offsets.
-    pub fn expand(&self, mark: &Mark) -> Result<Vec<Occ>, String> {
-        match &mark.at {
-            At::Entity(id) => self
-                .analysis
-                .entity(id)
-                .map(|e| e.occurrences.clone())
-                .ok_or_else(|| format!("{}: unknown {id}", mark.var)),
-            At::Span { block, start, end } => {
-                let text = &self.blocks.get(*block).ok_or_else(|| format!("{}: no block {block}", mark.var))?.text;
-                let (s, e) = snap(text, Self::utf16_to_byte(text, *start), Self::utf16_to_byte(text, *end));
-                if s >= e {
-                    return Err(format!("{}: the selection is empty", mark.var));
-                }
-                let occ = Occ { block: *block, start: s, end: e };
-                if !mark.all {
-                    return Ok(vec![occ]);
-                }
-                if let Some(entity) = self.analysis.entities.iter().find(|en| en.occurrences.contains(&occ)) {
-                    return Ok(entity.occurrences.clone());
-                }
-                Ok(self.word_occurrences(&text[s..e]))
-            }
-            At::Rect { .. } => Ok(Vec::new()),
-        }
-    }
-
-    /// Occurrences of `needle` that do not sit inside a longer word.
-    fn word_occurrences(&self, needle: &str) -> Vec<Occ> {
-        let mut out = Vec::new();
-        for (b, block) in self.blocks.iter().enumerate() {
-            for (i, _) in block.text.match_indices(needle) {
-                let end = i + needle.len();
-                if ends_word(&block.text, i) && ends_word(&block.text, end) {
-                    out.push(Occ { block: b, start: i, end });
-                }
-            }
-        }
-        out
-    }
-
-    /// Marks to a draft: tokenize replacements for a docx, overlay boxes for a PDF.
-    pub fn compile(&self, marks: &[Mark]) -> Result<Draft, String> {
-        match &self.source {
-            Source::Docx(paragraphs) => self.compile_docx(marks, paragraphs),
-            Source::Pdf { .. } => compile_boxes(marks),
-        }
-    }
-
-    /// Replacements that hit exactly the marked occurrences under tokenize's rules: longer finds first, then for
-    /// each find either all of it or its occurrences from last to first, so earlier counts never shift.
-    fn compile_docx(&self, marks: &[Mark], paragraphs: &[ParagraphInfo]) -> Result<Draft, String> {
-        let mut draft = Draft::default();
-        let mut targets: Vec<(Occ, &Mark)> = Vec::new();
-        for mark in marks {
-            draft.add_meta(&mark.var, mark);
-            for occ in self.expand(mark)? {
-                if targets.iter().any(|(t, _)| overlaps(t, &occ)) {
-                    continue;
-                }
-                let block = &self.blocks[occ.block];
-                if !block.pieces.iter().any(|&(ps, pe)| ps <= occ.start && occ.end <= pe) {
-                    return Err(format!(
-                        "{}: the marked text in paragraph {} spans a formatting change; mark it within one run",
-                        mark.var, paragraphs[occ.block].index
-                    ));
-                }
-                targets.push((occ, mark));
-            }
-        }
-        let mut groups: IndexMap<String, Vec<(Occ, &Mark)>> = IndexMap::new();
-        for (occ, mark) in targets {
-            groups.entry(self.surface(&occ).to_string()).or_default().push((occ, mark));
-        }
-        groups.sort_by(|a, _, b, _| b.len().cmp(&a.len()));
-        let mut consumed: Vec<Occ> = Vec::new();
-        for (find, group) in &groups {
-            let live: Vec<Occ> =
-                self.run_occurrences(find).into_iter().filter(|o| !consumed.iter().any(|c| overlaps(c, o))).collect();
-            let mut hits = group
-                .iter()
-                .map(|(occ, mark)| {
-                    live.iter()
-                        .position(|o| o == occ)
-                        .map(|i| (i, *mark))
-                        .ok_or_else(|| format!("{}: the marked text overlaps another mark", mark.var))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            if hits.len() == live.len() && hits.iter().all(|(_, m)| m.var == hits[0].1.var) {
-                draft.replacements.push(json!({"find": find, "var": hits[0].1.var}));
-            } else {
-                hits.sort_by_key(|(i, _)| Reverse(*i));
-                for (i, mark) in hits {
-                    draft.replacements.push(json!({"find": find, "var": mark.var, "occurrence": i + 1}));
-                }
-            }
-            consumed.extend(group.iter().map(|(o, _)| o.clone()));
-        }
-        Ok(draft)
-    }
 }
 
-/// Boxes drawn on a PDF become overlay fields. Values printed on a flat PDF stay printed, so only drawn boxes
-/// (on blank areas) are supported.
-fn compile_boxes(marks: &[Mark]) -> Result<Draft, String> {
-    let mut draft = Draft::default();
-    let mut used: IndexMap<String, usize> = IndexMap::new();
-    for mark in marks {
-        let At::Rect { page, rect } = &mark.at else {
-            return Err(format!("{}: on a PDF, draw a box where the value goes", mark.var));
-        };
-        let n = used.entry(mark.var.clone()).or_default();
-        *n += 1;
-        let name = if *n == 1 { mark.var.clone() } else { format!("{}_{n}", mark.var) };
-        draft.add_meta(&name, mark);
-        draft.boxes.push(json!({"name": name, "page": page, "rect": rect, "type": "text"}));
-    }
-    Ok(draft)
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 fn with_find(r: &Value, find: &str, occurrence: Option<usize>) -> Value {
@@ -460,6 +410,17 @@ fn with_find(r: &Value, find: &str, occurrence: Option<usize>) -> Value {
         }
     }
     r
+}
+
+fn utf16_to_byte(text: &str, unit: usize) -> usize {
+    let mut seen = 0;
+    for (i, c) in text.char_indices() {
+        if seen >= unit {
+            return i;
+        }
+        seen += c.len_utf16();
+    }
+    text.len()
 }
 
 /// A quick selection made clean: widened to whole words, trimmed of surrounding spaces and punctuation.

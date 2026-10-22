@@ -18,6 +18,7 @@ const HEADING_REACH: usize = 3;
 
 fn rank(source: &Source) -> u8 {
     match source {
+        Source::User => 4,
         Source::Anchor(_) => 3,
         Source::Pattern(_) => 2,
         Source::Suffix => 1,
@@ -54,29 +55,30 @@ pub fn normalize(kind: Kind, surface: &str) -> String {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
-            .replace(['„', '“', '”', '«', '»'], "\"")
-            .trim_matches(|c: char| c.is_ascii_punctuation() && c != '"')
+            .replace(['„', '“', '”', '«', '»', '"'], "")
+            .trim_matches(|c: char| c.is_ascii_punctuation())
             .to_lowercase(),
     }
 }
 
 /// One entity per (kind, normalized value), numbered per kind in order of first appearance.
-pub fn group(blocks: &[Block], per_block: Vec<Vec<Detection>>) -> Analysis {
-    let mut by_key: IndexMap<(Kind, String), Entity> = IndexMap::new();
+pub fn group(blocks: &[Block], per_block: Vec<Vec<Detection>>, roles: Option<&[Vec<Option<String>>]>) -> Analysis {
+    let mut by_key: IndexMap<(Kind, String, Option<String>), Entity> = IndexMap::new();
     let mut entity_of = Vec::new();
     for (b, dets) in per_block.iter().enumerate() {
         let mut row = Vec::new();
         for d in dets {
             let surface = &blocks[b].text[d.start..d.end];
-            let entry = by_key.entry((d.kind, normalize(d.kind, surface)));
+            let role = roles.and_then(|r| r[b][row.len()].clone());
+            let entry = by_key.entry((d.kind, normalize(d.kind, surface), role));
             row.push(entry.index());
-            let e = entry.or_insert_with_key(|(kind, norm)| Entity {
+            let e = entry.or_insert_with_key(|(kind, norm, role)| Entity {
                 id: String::new(),
                 kind: *kind,
                 norm: norm.clone(),
                 surfaces: Vec::new(),
                 occurrences: Vec::new(),
-                role: None,
+                role: role.clone(),
                 label: None,
                 score: 0.0,
                 crosses: false,
@@ -259,10 +261,11 @@ fn heading_role(text: &str) -> Option<String> {
     PACKS.iter().find_map(|pack| role_word(pack, t, 0).filter(|(_, end)| *end == t.len()).map(|(role, _)| role))
 }
 
-/// Gives each personal entity the role of the party it belongs to; parties with no role become party_1, party_2.
-pub fn assign_roles(blocks: &[Block], a: &mut Analysis) {
-    let mut roles: Vec<Option<String>> = vec![None; a.entities.len()];
-    let mut orphans: Vec<Vec<usize>> = Vec::new();
+/// The role of the party each personal detection belongs to, per block; parties with no role become party_1,
+/// party_2. A detection outside any party context takes the first role its entity has elsewhere.
+pub fn roles(blocks: &[Block], a: &Analysis) -> Vec<Vec<Option<String>>> {
+    let mut roles: Vec<Vec<Option<String>>> = a.per_block.iter().map(|row| vec![None; row.len()]).collect();
+    let mut orphans: Vec<Vec<(usize, usize)>> = Vec::new();
     let (mut heading, mut reach) = (None::<String>, 0);
     for (b, block) in blocks.iter().enumerate() {
         if let Some(role) = heading_role(&block.text) {
@@ -273,22 +276,20 @@ pub fn assign_roles(blocks: &[Block], a: &mut Analysis) {
             events(&block.text).into_iter().map(|(at, e)| (at, Some(e), None)).collect();
         for (i, d) in a.per_block[b].iter().enumerate() {
             if d.kind.personal() {
-                items.push((d.start, None, Some(a.entity_of[b][i])));
+                items.push((d.start, None, Some(i)));
             }
         }
         items.sort_by_key(|(at, _, _)| *at);
+        let row = &mut roles[b];
         let (mut open, mut pending, mut plain) = (None::<String>, Vec::new(), Vec::<String>::new());
-        let set = |e: usize, role: &str, roles: &mut Vec<Option<String>>| {
-            roles[e].get_or_insert_with(|| role.to_string());
-        };
-        for (_, event, entity) in items {
-            match (event, entity) {
-                (_, Some(e)) => match &open {
-                    Some(role) => set(e, role, &mut roles),
-                    None => pending.push(e),
+        for (_, event, det) in items {
+            match (event, det) {
+                (_, Some(i)) => match &open {
+                    Some(role) => row[i] = Some(role.clone()),
+                    None => pending.push(i),
                 },
                 (Some(Event::Closing(role)), _) => {
-                    pending.drain(..).for_each(|e| set(e, &role, &mut roles));
+                    pending.drain(..).for_each(|i| row[i] = Some(role.clone()));
                     open = None;
                 }
                 (Some(Event::Opening(role)), _) => open = Some(role),
@@ -299,24 +300,38 @@ pub fn assign_roles(blocks: &[Block], a: &mut Analysis) {
         plain.dedup();
         if !pending.is_empty() {
             match (&heading, plain.as_slice()) {
-                (Some(role), _) if reach > 0 => pending.iter().for_each(|&e| set(e, role, &mut roles)),
-                (_, [role]) => pending.iter().for_each(|&e| set(e, role, &mut roles)),
-                _ => orphans.push(pending),
+                (Some(role), _) if reach > 0 => pending.iter().for_each(|&i| row[i] = Some(role.clone())),
+                (_, [role]) => pending.iter().for_each(|&i| row[i] = Some(role.clone())),
+                _ => orphans.push(pending.into_iter().map(|i| (b, i)).collect()),
             }
         }
         reach = reach.saturating_sub(1);
     }
+    let mut first: Vec<Option<String>> = vec![None; a.entities.len()];
+    for (b, row) in roles.iter().enumerate() {
+        for (i, role) in row.iter().enumerate() {
+            if role.is_some() && first[a.entity_of[b][i]].is_none() {
+                first[a.entity_of[b][i]] = role.clone();
+            }
+        }
+    }
     let mut n = 0;
     for group in orphans {
-        let unassigned: Vec<usize> = group.into_iter().filter(|&e| roles[e].is_none()).collect();
+        let unassigned: Vec<(usize, usize)> =
+            group.into_iter().filter(|&(b, i)| first[a.entity_of[b][i]].is_none()).collect();
         if !unassigned.is_empty() {
             n += 1;
-            unassigned.iter().for_each(|&e| roles[e] = Some(format!("party_{n}")));
+            for &(b, i) in &unassigned {
+                first[a.entity_of[b][i]] = Some(format!("party_{n}"));
+            }
         }
     }
-    for (e, role) in a.entities.iter_mut().zip(roles) {
-        if e.kind.personal() {
-            e.role = role;
+    for (b, row) in roles.iter_mut().enumerate() {
+        for (i, role) in row.iter_mut().enumerate() {
+            if role.is_none() && a.per_block[b][i].kind.personal() {
+                *role = first[a.entity_of[b][i]].clone();
+            }
         }
     }
+    roles
 }

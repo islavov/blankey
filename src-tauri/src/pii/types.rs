@@ -5,6 +5,10 @@ use serde::Serialize;
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Person,
+    /// A person acting for a company: its manager or attorney.
+    Representative,
+    /// A value the user marked to hide.
+    Marked,
     Org,
     Address,
     Egn,
@@ -38,6 +42,8 @@ pub enum Class {
 
 pub const KINDS: &[Kind] = &[
     Kind::Person,
+    Kind::Representative,
+    Kind::Marked,
     Kind::Org,
     Kind::Address,
     Kind::Egn,
@@ -65,6 +71,8 @@ impl Kind {
     pub fn name(self) -> &'static str {
         match self {
             Kind::Person => "person",
+            Kind::Representative => "representative",
+            Kind::Marked => "marked",
             Kind::Org => "org",
             Kind::Address => "address",
             Kind::Egn => "egn",
@@ -117,6 +125,8 @@ pub enum Source {
     Chain,
     /// Another occurrence of a value detected elsewhere in the document.
     Echo,
+    /// Marked by the user.
+    User,
 }
 
 /// One hit in one block. Offsets are byte offsets into the block text.

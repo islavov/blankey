@@ -9,12 +9,27 @@ use super::t1;
 use super::types::Kind;
 use crate::render::raster;
 
-pub static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"⟦([a-z_]+:\d+)⟧").unwrap());
+/// `⟦egn:1 ##########⟧`: the entity id, then the value's shape. The shape is optional when the assistant writes one.
+pub static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"⟦([a-z_]+:\d+)(?: [^⟧]*)?⟧").unwrap());
 const GUARDED: &[Kind] = &[Kind::Egn, Kind::Iban, Kind::VatId];
 const MASK_PAD: f64 = 1.5;
 
-pub fn placeholder(id: &str) -> String {
-    format!("⟦{id}⟧")
+/// The value's shape: letters as X or x, digits as #, everything else kept ("Иван Петров" -> "Xxxx Xxxxxx").
+pub fn shape(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| match c {
+            c if c.is_ascii_digit() => '#',
+            c if c.is_uppercase() => 'X',
+            c if c.is_alphabetic() => 'x',
+            '\n' => ' ',
+            c => c,
+        })
+        .collect()
+}
+
+pub fn placeholder(id: &str, value: &str) -> String {
+    format!("⟦{id} {}⟧", shape(value))
 }
 
 /// A redacted span of a block: byte range and entity id. Spans are sorted and do not overlap.
@@ -24,7 +39,7 @@ pub fn redact_text(text: &str, spans: &[Span]) -> String {
     let (mut out, mut at) = (String::new(), 0);
     for &(s, e, id) in spans {
         out.push_str(&text[at..s]);
-        out.push_str(&placeholder(id));
+        out.push_str(&placeholder(id, &text[s..e]));
         at = e;
     }
     out.push_str(&text[at..]);
@@ -41,7 +56,7 @@ pub fn redact_pieces(text: &str, pieces: &[(usize, usize)], spans: &[Span]) -> V
             for &(s, e, id) in spans.iter().filter(|(s, e, _)| *s < pe && ps < *e) {
                 if s >= ps {
                     out.push_str(&text[at..s]);
-                    out.push_str(&placeholder(id));
+                    out.push_str(&placeholder(id, &text[s..e]));
                 }
                 at = e.min(pe);
             }
@@ -55,7 +70,7 @@ pub fn redact_pieces(text: &str, pieces: &[(usize, usize)], spans: &[Span]) -> V
 pub fn scrub(text: &str, values: &[(String, String)]) -> String {
     let mut sorted: Vec<&(String, String)> = values.iter().filter(|(v, _)| !v.is_empty()).collect();
     sorted.sort_by_key(|(v, _)| std::cmp::Reverse(v.len()));
-    sorted.iter().fold(text.to_string(), |acc, (value, id)| acc.replace(value.as_str(), &placeholder(id)))
+    sorted.iter().fold(text.to_string(), |acc, (value, id)| acc.replace(value.as_str(), &placeholder(id, value)))
 }
 
 /// Masks identifiers that validate themselves (EGN, IBAN, VAT) in any text: a safety net for output that did not
@@ -77,7 +92,7 @@ pub fn guard(text: &str) -> Cow<'_, str> {
             continue;
         }
         out.push_str(&text[at..s]);
-        out.push_str("⟦redacted⟧");
+        out.push_str(&format!("⟦{}⟧", shape(&text[s..e])));
         at = e;
     }
     out.push_str(&text[at..]);

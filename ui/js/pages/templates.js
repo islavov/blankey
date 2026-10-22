@@ -4,6 +4,7 @@ import { openFill } from "../fill/form.js";
 import { t, tn } from "../i18n.js";
 import { html, KIND_NAMES, matches, reload, state, useLoad, useRemembered, useStore } from "../lib.js";
 import { decodePreview, Preview } from "../preview.js";
+import { openReview } from "../review.js";
 import { confirmDialog, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
 import { keepText, useSelection } from "../ui/table.js";
@@ -268,6 +269,7 @@ function FileDetail({ file, onReveal }) {
         <h3>${fileName(f)}</h3>
         <div class="muted small"><span class="mono selectable">${f.rel_path}</span>${info.map((part) => ` \u00a0·\u00a0 ${part}`)}</div>
       </div>
+      <button class="check-pii" onClick=${() => openReview(f)}>${t("Personal data…")}</button>
       <button onClick=${() => call("open_library_file", { id: f.id })}>${t("Open")}</button>
       <button onClick=${onReveal}>${t("Show in Finder")}</button>
     </div>

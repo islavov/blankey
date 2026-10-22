@@ -16,6 +16,14 @@ export const htmlPreview = {
   html: '<p>Between <span class="blank" data-var="who">who</span> and the bank: <span class="blank empty" data-var="amount">amount</span></p>',
 };
 
+export const reviewText = "Tenant Jane Example, card 77-ABC, rent 30 days";
+const reviewHtml = (state) => {
+  let html = reviewText;
+  for (const h of state.hidden) html = html.replace(h.value, `<mark class="pii" data-e="${h.id}">${h.value}</mark>`);
+  state.shown.forEach((v, i) => (html = html.replace(v.value, `<mark class="pii shown" data-v="${i}">${v.value}</mark>`)));
+  return `<p><span data-b="0" data-o="0">${html}</span></p>`;
+};
+
 export function seed() {
   return {
     initialized: true,
@@ -308,6 +316,26 @@ export function createBackend(db = seed()) {
     show_library_file: () => null,
     open_library_file: () => null,
     library_preview: ({ id }) => (id === 5 ? pagesPreview : htmlPreview),
+    pii_review: ({ source }) => review(db, source),
+    pii_correct: ({ source, correction }) => {
+      const state = piiState(db, source);
+      const { action, text, entity, start, end } = correction;
+      if (action === "show") {
+        const found = state.hidden.find((h) => h.id === entity);
+        state.hidden = state.hidden.filter((h) => h.id !== entity);
+        state.shown.push({ value: found.value, user: found.user });
+      } else if (action === "hide") {
+        const value = text ?? reviewText.slice(start, end);
+        const shown = state.shown.find((v) => v.value === value);
+        state.shown = state.shown.filter((v) => v.value !== value);
+        const user = shown ? shown.user : true;
+        state.hidden.push({ id: user ? `marked:${state.hidden.length + 1}` : "person:1", kind: user ? "marked" : "person", value, occurrences: 1, user });
+      } else if (action === "forget") {
+        state.hidden = state.hidden.filter((h) => h.value !== text);
+        state.shown = state.shown.filter((v) => v.value !== text);
+      }
+      return review(db, source);
+    },
     show_template_folder: () => null,
     delete_template: ({ id }) => {
       db.templates = db.templates.filter((t) => t.id !== id);
@@ -349,10 +377,14 @@ export function createBackend(db = seed()) {
       removeRequest(id);
       return [];
     },
-    resolve_file_request: ({ id }) => {
+    pick_request_file: () => {
       if (db.pickedFile === null) return null;
+      const name = db.pickedFile || "form.pdf";
+      return { path: `/Users/test/${name}`, name };
+    },
+    share_upload: ({ id }) => {
       removeRequest(id);
-      return { outcome: "uploaded", file_id: "file:0f8fad5b-d9cb-469f-a165-70867728950e", name: db.pickedFile || "form.pdf", size: 1024 };
+      return { outcome: "uploaded", file_id: "file:0f8fad5b-d9cb-469f-a165-70867728950e", kind: "pdf", size: 1024 };
     },
     share_library_request: ({ id }) => {
       removeRequest(id);
@@ -423,3 +455,18 @@ export function createBackend(db = seed()) {
 }
 
 const delayed = (ms, value) => (ms ? new Promise((resolve) => setTimeout(() => resolve(value), ms)) : value);
+
+function piiState(db, source) {
+  db.pii ??= {};
+  db.pii[source] ??= { hidden: [{ id: "person:1", kind: "person", value: "Jane Example", occurrences: 1, user: false }], shown: [] };
+  return db.pii[source];
+}
+
+function review(db, source) {
+  const state = piiState(db, source);
+  const items = [
+    ...state.hidden.map((h) => ({ ...h, hidden: true })),
+    ...state.shown.map((v, i) => ({ id: `shown:${i}`, kind: v.user ? "marked" : "shown", value: v.value, occurrences: 1, hidden: false, user: v.user })),
+  ];
+  return { preview: { type: "html", names: [], html: reviewHtml(state) }, items };
+}

@@ -5,6 +5,7 @@ use super::types::Kind;
 pub fn profile_key(kind: Kind) -> Option<&'static str> {
     Some(match kind {
         Kind::Person => "full_name",
+        Kind::Representative => "representative",
         Kind::Org => "name",
         Kind::Address => "address",
         Kind::Egn => "egn",
@@ -24,7 +25,7 @@ pub fn profile_key(kind: Kind) -> Option<&'static str> {
         Kind::Plate => "vehicle.plate",
         Kind::Ssn => "ssn",
         Kind::Nino => "nino",
-        Kind::Date | Kind::Money => return None,
+        Kind::Marked | Kind::Date | Kind::Money => return None,
     })
 }
 

@@ -545,9 +545,24 @@ fn on(node: Option<Node>) -> bool {
     node.is_some_and(|n| !matches!(attr(&n, "val").as_deref(), Some("0" | "false" | "off" | "none")))
 }
 
-fn run_html(run: Node, labels: &IndexMap<String, String>, values: Option<&IndexMap<String, String>>) -> String {
-    let escaped = html_escape(&run_text(run));
-    let mut text = TAG_RE.replace_all(&escaped, |c: &regex::Captures| chip(&c[1], labels, values)).into_owned();
+/// Renders the text of one run instead of the default: (paragraph index as `inspect` numbers it, run index within
+/// the paragraph, run text) -> HTML, or None for the default.
+pub type RunHook<'a> = &'a dyn Fn(usize, usize, &str) -> Option<String>;
+
+struct HtmlContext<'a> {
+    labels: &'a IndexMap<String, String>,
+    values: Option<&'a IndexMap<String, String>>,
+    hook: Option<RunHook<'a>>,
+}
+
+fn run_html(run: Node, ctx: &HtmlContext, at: (usize, usize)) -> String {
+    let raw = run_text(run);
+    let mut text = match ctx.hook.and_then(|hook| hook(at.0, at.1, &raw)) {
+        Some(html) => html,
+        None => TAG_RE
+            .replace_all(&html_escape(&raw), |c: &regex::Captures| chip(&c[1], ctx.labels, ctx.values))
+            .into_owned(),
+    };
     let props = children(run, "rPr").next();
     let prop = |name: &'static str| props.and_then(|p| children(p, name).next());
     if on(prop("b")) {
@@ -565,8 +580,8 @@ fn run_html(run: Node, labels: &IndexMap<String, String>, values: Option<&IndexM
     text
 }
 
-fn paragraph_html(p: Node, labels: &IndexMap<String, String>, values: Option<&IndexMap<String, String>>) -> String {
-    let mut body: String = children(p, "r").map(|r| run_html(r, labels, values)).collect();
+fn paragraph_html(p: Node, ctx: &HtmlContext, index: usize) -> String {
+    let mut body: String = children(p, "r").enumerate().map(|(r, run)| run_html(run, ctx, (index, r))).collect();
     if body.is_empty() {
         body = "&nbsp;".into();
     }
@@ -594,26 +609,40 @@ pub fn to_html(
     labels: &IndexMap<String, String>,
     values: Option<&IndexMap<String, String>>,
 ) -> Result<String, String> {
+    body_html(path, &HtmlContext { labels, values, hook: None })
+}
+
+/// The preview with each run's text rendered by `hook`.
+pub fn to_html_with(path: &Path, hook: RunHook) -> Result<String, String> {
+    body_html(path, &HtmlContext { labels: &IndexMap::new(), values: None, hook: Some(hook) })
+}
+
+/// In document order, with each paragraph numbered as `read_body` numbers it: body paragraphs first, then the
+/// paragraphs of tables.
+fn body_html(path: &Path, ctx: &HtmlContext) -> Result<String, String> {
     let xml = read_part(path, BODY_PART)?;
     let doc = parse(&xml)?;
     let Some(body) = doc.root_element().children().find(|c| is_w(c, "body")) else { return Ok(String::new()) };
+    let (mut in_body, mut in_tables) = (0, children(body, "p").count());
     let mut parts = Vec::new();
     for child in body.children() {
         if is_w(&child, "p") {
-            parts.push(paragraph_html(child, labels, values));
+            parts.push(paragraph_html(child, ctx, in_body));
+            in_body += 1;
         } else if is_w(&child, "tbl") {
-            let rows: String = children(child, "tr")
-                .map(|row| {
-                    let cells: String = children(row, "tc")
-                        .map(|cell| {
-                            let inner: String =
-                                children(cell, "p").map(|p| paragraph_html(p, labels, values)).collect();
-                            format!("<td>{inner}</td>")
-                        })
-                        .collect();
-                    format!("<tr>{cells}</tr>")
-                })
-                .collect();
+            let mut rows = String::new();
+            for row in children(child, "tr") {
+                let mut cells = String::new();
+                for cell in children(row, "tc") {
+                    let mut inner = String::new();
+                    for p in children(cell, "p") {
+                        inner.push_str(&paragraph_html(p, ctx, in_tables));
+                        in_tables += 1;
+                    }
+                    cells.push_str(&format!("<td>{inner}</td>"));
+                }
+                rows.push_str(&format!("<tr>{cells}</tr>"));
+            }
             parts.push(format!("<table>{rows}</table>"));
         }
     }

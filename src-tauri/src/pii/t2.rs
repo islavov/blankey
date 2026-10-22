@@ -198,7 +198,13 @@ pub static PACKS: LazyLock<Vec<Pack>> = LazyLock::new(|| {
 
 fn skip_separators(text: &str, from: usize) -> usize {
     from + text[from..].len()
-        - text[from..].trim_start_matches(|c: char| c.is_whitespace() || ":-–—№.,(".contains(c)).len()
+        - text[from..].trim_start_matches(|c: char| c.is_whitespace() || ":-–—№.(".contains(c)).len()
+}
+
+/// The label is followed by a fill-in blank ("ЕГН ..........."): nothing to claim.
+fn blank_after(text: &str, from: usize) -> bool {
+    let rest = text[from..].trim_start_matches(|c: char| c.is_whitespace() || ":-–—№".contains(c));
+    rest.starts_with("...") || rest.starts_with('…') || rest.starts_with("___")
 }
 
 /// Something ID-like right after a label that no recognizer validated, so redaction still covers it.
@@ -244,6 +250,9 @@ pub fn scan(text: &str, t1: &mut Vec<Detection>) -> Vec<Detection> {
             let label = &text[ls..le];
             let Some(&i) = pack.anchor_of.get(&key(label)) else { continue };
             let anchor = &pack.anchors[i];
+            if blank_after(text, le) {
+                continue;
+            }
             let from = skip_separators(text, le);
             let source = Source::Anchor(label.to_string());
             match &anchor.value {
