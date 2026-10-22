@@ -40,7 +40,7 @@ pub fn parse_date(value: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(value.trim(), "%d.%m.%Y").ok()
 }
 
-fn valid_email(value: &str) -> bool {
+pub fn valid_email(value: &str) -> bool {
     let Some((local, domain)) = value.split_once('@') else { return false };
     let clean = |s: &str| !s.is_empty() && !s.contains(char::is_whitespace) && !s.contains('@');
     clean(local) && clean(domain) && domain.split_once('.').is_some_and(|(a, b)| !a.is_empty() && !b.is_empty())

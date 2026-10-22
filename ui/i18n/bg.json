@@ -487,5 +487,22 @@
   "Agreements": "Споразумения и анекси",
   "Contracts": "Договори",
   "Your AI assistant asks to read a file from your folders": "AI асистентът иска да прочете файл от вашите папки",
-  "The assistant will read the text and pages of this file, nothing else in your folders.": "Асистентът ще прочете текста и страниците на този файл и нищо друго от вашите папки."
+  "Personal data…": "Лични данни…",
+  "The assistant will read this file with the marked values hidden. Select text to hide it too.": "Асистентът ще прочете файла с отбелязаните стойности скрити. Маркирайте текст, за да скриете и него.",
+  "Choose another…": "Друг файл…",
+  "Share": "Сподели",
+  "Personal data in {name}": "Лични данни в {name}",
+  "Done": "Готово",
+  "Hide": "Скрий",
+  "Text to hide…": "Текст за скриване…",
+  "{n} value hidden": {
+    "one": "{n} скрита стойност",
+    "other": "{n} скрити стойности"
+  },
+  "Your AI assistant sees hidden values masked, like Xxxx Xxxxxx.": "Вашият AI асистент вижда скритите стойности маскирани, например Xxxx Xxxxxx.",
+  "Select text to hide it too. Click a marked value to change it.": "Маркирайте текст, за да го скриете. Щракнете върху отбелязана стойност, за да я промените.",
+  "Hidden from the assistant. Click to show it.": "Скрито от асистента. Щракнете, за да го покажете.",
+  "Visible to the assistant. Click to hide it.": "Видимо за асистента. Щракнете, за да го скриете.",
+  "Hide from the assistant": "Скрий от асистента",
+  "Show to the assistant": "Покажи на асистента"
 }

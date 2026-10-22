@@ -6,6 +6,7 @@ import { html, placeholder, reload, update } from "./lib.js";
 import { openLinkSheet } from "./pages/links.js";
 import { openSubmission } from "./submission.js";
 import { toast } from "./ui/feedback.js";
+import { PiiReview } from "./review.js";
 import { openSheet, SheetHead } from "./ui/sheet.js";
 
 let processing = false;
@@ -161,6 +162,7 @@ function ProfileInput({ request, profile_name, existing, close }) {
  * or, with `source`, one from the user's folders that the assistant may read once allowed. */
 function FileRequest({ request, close }) {
   const { kind = "", reason, source, path } = request.payload;
+  const [picked, setPicked] = useState(null);
 
   const cancel = async () => {
     await invoke("cancel_request", { id: request.id });
@@ -168,9 +170,14 @@ function FileRequest({ request, close }) {
   };
 
   const choose = async () => {
-    const file = await call("resolve_file_request", { id: request.id }).catch(() => null);
-    if (!file) return;
-    toast(t("Shared {name}", { name: file.name }));
+    const file = await call("pick_request_file", { id: request.id }).catch(() => null);
+    if (file) setPicked(file);
+  };
+
+  const share = async () => {
+    const shared = await call("share_upload", { id: request.id, path: picked.path }).catch(() => null);
+    if (!shared) return;
+    toast(t("Shared {name}", { name: picked.name }));
     close();
   };
 
@@ -186,9 +193,10 @@ function FileRequest({ request, close }) {
       <div class="sheet-head">
         <${SheetHead} icon="doc" title=${t("Your AI assistant asks to read a file from your folders")} reason=${reason} />
       </div>
-      <div class="sheet-body"><p class="mono selectable shared-path">${path}</p></div>
+      <div class="sheet-summary mono selectable shared-path">${path}</div>
+      <div class="sheet-body"><${PiiReview} source=${source} /></div>
       <div class="sheet-foot">
-        <span class="note">${t("The assistant will read the text and pages of this file, nothing else in your folders.")}</span>
+        <span class="note">${t("The assistant will read this file with the marked values hidden. Select text to hide it too.")}</span>
         <button onClick=${cancel}>${t("Cancel")}</button>
         <button class="primary" onClick=${allow}>${t("Allow")}</button>
       </div>`;
@@ -198,10 +206,14 @@ function FileRequest({ request, close }) {
     <div class="sheet-head">
       <${SheetHead} icon="doc" title=${t("Your AI assistant asks for a {kind} file", { kind: kind.toUpperCase() })} reason=${reason} />
     </div>
-    <div class="sheet-body"></div>
+    ${picked && html`<div class="sheet-summary mono selectable shared-path">${picked.path}</div>`}
+    <div class="sheet-body">${picked && html`<${PiiReview} source=${picked.path} />`}</div>
     <div class="sheet-foot">
-      <span class="note">${t("Blankey keeps a copy of the file you choose. The assistant can read that file, nothing else on this computer.")}</span>
+      <span class="note">${picked
+        ? t("The assistant will read this file with the marked values hidden. Select text to hide it too.")
+        : t("Blankey keeps a copy of the file you choose. The assistant can read that file, nothing else on this computer.")}</span>
       <button onClick=${cancel}>${t("Cancel")}</button>
-      <button class="primary" onClick=${choose}>${t("Choose file…")}</button>
+      <button class=${picked ? "" : "primary"} onClick=${choose}>${picked ? t("Choose another…") : t("Choose file…")}</button>
+      ${picked && html`<button class="primary" onClick=${share}>${t("Share")}</button>`}
     </div>`;
 }

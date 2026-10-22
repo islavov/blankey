@@ -29,6 +29,8 @@ pub struct Config {
     pub telemetry_url: Option<String>,
     /// Look for new versions and download them (src/app/updates.rs); off by the user on the Connections page.
     pub auto_update: bool,
+    /// Values that look personal reach the assistant as placeholders (src/pii); a user setting only.
+    pub pii_redaction: bool,
 }
 
 impl Default for Config {
@@ -43,6 +45,7 @@ impl Default for Config {
             telemetry_id: String::new(),
             telemetry_url: None,
             auto_update: true,
+            pii_redaction: true,
         }
     }
 }

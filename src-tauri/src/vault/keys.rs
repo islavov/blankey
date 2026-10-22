@@ -136,6 +136,15 @@ impl Vault {
         self.repo.set_meta(&encrypt::secret_key(name), &blob)
     }
 
+    /// The user's corrections to personal-data detection for one file; encrypted, because they hold values.
+    pub fn pii_corrections(&self, file: &str) -> Result<Option<Vec<u8>>> {
+        self.get_secret(&format!("pii:{file}"))
+    }
+
+    pub fn set_pii_corrections(&self, file: &str, json: &[u8]) -> Result<()> {
+        self.put_secret(&format!("pii:{file}"), json)
+    }
+
     pub(super) fn request_public_key(&self) -> Result<Vec<u8>> {
         self.repo.meta(REQUEST_PUBLIC_KEY)?.ok_or(VaultError::NoRequestKey)
     }

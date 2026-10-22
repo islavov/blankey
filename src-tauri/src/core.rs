@@ -13,10 +13,13 @@ use crate::config::Config;
 use crate::fieldtypes;
 use crate::keychain::SecretStore;
 use crate::library::{self, Library};
+use crate::pii;
 use crate::render::pdf_form;
 use crate::render::preview;
 use crate::templates::engine::{self, BindingReport, Rendered};
-use crate::templates::{bindings, docx, fill, yaml_dump, Origin, Template, TemplateKind, TemplateStore};
+use crate::templates::{
+    bindings, docx, fill, yaml_dump, Origin, SaveTemplate, StrMap, Template, TemplateKind, TemplateStore,
+};
 use crate::vault::{Bindings, FieldInfo, FieldInput, Profiles, Vault};
 
 pub const PROFILE_INPUT: &str = "profile_input";
@@ -29,6 +32,17 @@ const UPLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
 pub const LIBRARY_SYNC_AGE: Duration = Duration::from_secs(10);
 /// Rescan interval for what the file watcher misses (network shares, sync clients).
 pub const LIBRARY_POLL: Duration = Duration::from_secs(60);
+
+/// A docx template apart from its source: what to replace and how to bind it.
+pub struct DocxTemplate<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub replacements: Vec<Value>,
+    pub roles: StrMap,
+    pub fields: StrMap,
+    pub labels: StrMap,
+    pub description: &'a str,
+}
 
 /// Something wrong with a typed value: the field's own label (empty for the form as a whole) and an English
 /// message the window translates.
@@ -250,6 +264,69 @@ impl Blankey {
         let _ = vault.audit("user", "upload", &format!("request={request_id} file={uuid}"));
         result["name"] = json!(source.file_name().and_then(|n| n.to_str()).unwrap_or_default());
         Ok(result)
+    }
+
+    /// The key a file's PII corrections are kept under: a library file keeps its own while it changes, any other
+    /// file (an upload, a picked path) goes by its content, so the corrections follow it into the upload.
+    fn pii_key(source: &str, path: &Path) -> Result<String, String> {
+        if source.starts_with("lib:") {
+            return Ok(source.to_string());
+        }
+        Ok(format!("sha:{}", library::hash_file(path).map_err(|e| e.to_string())?))
+    }
+
+    pub fn pii_corrections(&self, source: &str, path: &Path) -> Result<pii::Corrections, String> {
+        let key = Self::pii_key(source, path)?;
+        let stored = self.vault().pii_corrections(&key).map_err(|e| e.to_string())?;
+        Ok(stored.and_then(|json| serde_json::from_slice(&json).ok()).unwrap_or_default())
+    }
+
+    pub fn set_pii_corrections(&self, source: &str, path: &Path, corrections: &pii::Corrections) -> Result<(), String> {
+        let key = Self::pii_key(source, path)?;
+        let json = serde_json::to_vec(corrections).map_err(|e| e.to_string())?;
+        self.vault().set_pii_corrections(&key, &json).map_err(|e| e.to_string())?;
+        self.audit("user", "pii_corrections", &key);
+        Ok(())
+    }
+
+    /// The origin of a template made from `source`: a library file (lib:<id>) with its current hash, so the
+    /// template follows the file; none for any other source.
+    pub fn library_origin(&self, source: &str, recipe: Vec<Value>) -> Result<Option<Origin>, String> {
+        if !source.starts_with("lib:") {
+            return Ok(None);
+        }
+        let sha256 = library::hash_file(&self.library.path(source)?).map_err(|e| e.to_string())?;
+        Ok(Some(Origin { file: source.to_string(), sha256, recipe }))
+    }
+
+    /// Tokenizes `source` with the replacements into a scratch copy and saves that as the template. Returns it with
+    /// tokenize's report.
+    pub fn save_docx_template(
+        &self,
+        source: &Path,
+        origin: Option<Origin>,
+        spec: DocxTemplate,
+    ) -> Result<(Template, Vec<String>), String> {
+        let scratch = std::env::temp_dir().join(format!("blankey-{}.docx", uuid::Uuid::new_v4()));
+        let saved = docx::tokenize(source, &scratch, &spec.replacements).and_then(|report| {
+            let template = self.templates.save(SaveTemplate {
+                id: spec.id,
+                name: spec.name,
+                kind: TemplateKind::Docx,
+                roles: spec.roles,
+                fields: spec.fields,
+                description: spec.description,
+                source_file: Some(&scratch),
+                source_bytes: None,
+                source_text: None,
+                labels: spec.labels,
+                boxes: Vec::new(),
+                origin,
+            })?;
+            Ok((template, report))
+        });
+        let _ = std::fs::remove_file(&scratch);
+        saved
     }
 
     /// The upload behind an exact `file:<uuid>` id. A remote agent (grant) only finds files it asked for; local

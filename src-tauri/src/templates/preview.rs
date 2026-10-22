@@ -14,7 +14,7 @@ use crate::render::preview::{self as pdf, Place};
 
 pub const DPI: f32 = 110.0;
 /// Pages shown for a library file; enough to recognise the document.
-const FILE_PAGES: usize = 10;
+pub const FILE_PAGES: usize = 10;
 
 #[derive(Serialize)]
 pub struct PagePreview {
@@ -72,7 +72,8 @@ fn docx_preview(template: &Template, values: Option<&Values>) -> Result<Preview,
     Ok(Preview::Html { html: docx::to_html(&path, &template.labels, shown.as_ref())?, names: docx::variables(&path)? })
 }
 
-fn pages(pdf_bytes: &[u8], boxes: &IndexMap<String, Vec<Place>>, limit: usize) -> Result<Vec<PagePreview>, String> {
+/// The first `limit` pages as images with the given boxes.
+pub fn pages(pdf_bytes: &[u8], boxes: &IndexMap<String, Vec<Place>>, limit: usize) -> Result<Vec<PagePreview>, String> {
     let sizes = pdf::page_sizes(pdf_bytes)?;
     let shown: Vec<usize> = (1..=sizes.len().min(limit)).collect();
     let images = pdf::render_pages(pdf_bytes, &shown, DPI)?;

@@ -43,7 +43,7 @@ test("a request that arrives while the app is open is shown; Escape cancels it",
   assert.equal(backend.db.requests.length, 0);
 });
 
-test("file request: the user picks the file; closing the picker keeps the request open", async () => {
+test("file request: the user picks the file, checks its personal data, then shares it", async () => {
   backend.db.requests.push(fileRequest(10));
   backend.emit("request-created", 10);
   await settle(300);
@@ -57,7 +57,12 @@ test("file request: the user picks the file; closing the picker keeps the reques
 
   backend.db.pickedFile = "nzok.pdf";
   await click(byText(".sheet-foot button", "Choose file…"));
-  assert.deepEqual(backend.called("resolve_file_request").at(-1), { id: 10 });
+  assert.equal(backend.db.requests.length, 1, "picking does not share yet");
+  assert.equal(text(".sheet .shared-path"), "/Users/test/nzok.pdf");
+  assert.deepEqual(backend.called("pii_review").at(-1), { source: "/Users/test/nzok.pdf" });
+  assert.ok($(".sheet .hidden-row"), "the review shows what stays hidden");
+  await click(byText(".sheet-foot button", "Share"));
+  assert.deepEqual(backend.called("share_upload").at(-1), { id: 10, path: "/Users/test/nzok.pdf" });
   assert.equal(text("#toast"), "Shared nzok.pdf");
   assert.equal($(".sheet"), null);
   assert.equal(backend.db.requests.length, 0);
@@ -78,6 +83,7 @@ test("file request for a library file: shows the file and shares it on Allow", a
   await settle(300);
   assert.equal(text(".sheet h2"), "Your AI assistant asks to read a file from your folders");
   assert.equal(text(".sheet .shared-path"), "Leases/Lease agreement.docx");
+  assert.deepEqual(backend.called("pii_review").at(-1), { source: "lib:4" });
   assert.ok(!$$(".sheet-foot button").some((b) => b.textContent.trim() === "Choose file…"));
   await click(byText(".sheet-foot button", "Allow"));
   assert.deepEqual(backend.called("share_library_request").at(-1), { id: 13 });

@@ -1,5 +1,6 @@
 //! Commands the window calls. Real values only ever go to this window, never through MCP.
 
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use indexmap::IndexMap;
@@ -10,11 +11,12 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::DialogExt;
 
 use super::{fill, platform, tray, AppState};
-use crate::core::{Problem, ProfileSave, Target, FILE, FILL, PROFILE_INPUT};
+use crate::core::{Blankey, Problem, ProfileSave, Target, FILE, FILL, PROFILE_INPUT};
 use crate::fieldtypes;
 use crate::i18n::{t, tf, tn};
 use crate::keychain;
 use crate::links::{link_state, LinkDraft, Submission, COLLECTION_LINK, LINK_SUBMISSION};
+use crate::pii;
 use crate::templates::preview::{self, Preview};
 use crate::templates::{docx, TemplateKind};
 use crate::vault::{CollectedFile, FieldInput, Link, Request, SubmissionInfo};
@@ -348,6 +350,111 @@ async fn rescan_library(state: State<'_, AppState>) -> CmdResult<()> {
 async fn library_preview(state: State<'_, AppState>, id: i64) -> CmdResult<Preview> {
     let file = state.app.library.file(id)?;
     tauri::async_runtime::spawn_blocking(move || preview::file_preview(&file.path, &file.kind)).await.map_err(err)
+}
+
+/// The file a PII review is about: a library file (lib:<id>) or a file picked for a request, by path.
+fn review_path(app: &Blankey, source: &str) -> Result<(PathBuf, String), String> {
+    let path = if source.starts_with("lib:") { app.library.path(source)? } else { PathBuf::from(source) };
+    let kind = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_lowercase();
+    Ok((path, kind))
+}
+
+/// The file as the assistant will read it: the preview with hidden values (and those the user let through)
+/// highlighted, and one list of both. `user`: added by the user, so it can be removed.
+fn review(app: &Blankey, source: &str) -> Result<Value, String> {
+    let (path, kind) = review_path(app, source)?;
+    let corrections = app.pii_corrections(source, &path)?;
+    let doc = pii::Document::open(&path, &kind, &corrections)?;
+    let unshown = pii::Corrections { hide: corrections.hide.clone(), show: Vec::new() };
+    let detected: Vec<String> = pii::Document::open(&path, &kind, &unshown)?
+        .hidden()
+        .iter()
+        .filter(|h| h["kind"] != "marked")
+        .filter_map(|h| h["value"].as_str().map(str::to_lowercase))
+        .collect();
+    let mut items: Vec<Value> = doc
+        .hidden()
+        .into_iter()
+        .map(|mut h| {
+            h["hidden"] = json!(true);
+            h["user"] = json!(h["kind"] == "marked");
+            h
+        })
+        .collect();
+    for (i, value) in corrections.show.iter().enumerate() {
+        let user = !detected.contains(&value.to_lowercase());
+        items.push(json!({"id": format!("shown:{i}"), "kind": if user { "marked" } else { "shown" }, "value": value,
+                          "occurrences": doc.count(value), "hidden": false, "user": user}));
+    }
+    let preview = match kind.as_str() {
+        "docx" => Preview::Html { html: doc.html(&corrections.show)?, names: Vec::new() },
+        _ => {
+            let bytes = std::fs::read(&path).map_err(err)?;
+            let mut boxes = doc.places();
+            let needles: IndexMap<String, String> =
+                corrections.show.iter().enumerate().map(|(i, v)| (format!("shown:{i}"), v.clone())).collect();
+            boxes.extend(crate::render::preview::find_text(&bytes, &needles)?);
+            Preview::Pages { pages: preview::pages(&bytes, &boxes, preview::FILE_PAGES)?, names: Vec::new() }
+        }
+    };
+    Ok(json!({"preview": preview, "items": items}))
+}
+
+#[tauri::command]
+async fn pii_review(state: State<'_, AppState>, source: String) -> CmdResult<Value> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || review(&app, &source)).await.map_err(err)?
+}
+
+/// A change to what the assistant sees of a file. `action`: hide, show or forget. The value is `text`, a hidden
+/// `entity`, or a selection in the docx preview (UTF-16 offsets `start`..`end` in `block`).
+#[derive(Deserialize)]
+struct Correction {
+    action: String,
+    text: Option<String>,
+    entity: Option<String>,
+    block: Option<usize>,
+    start: Option<usize>,
+    end: Option<usize>,
+}
+
+/// Applies a correction and returns the new review.
+#[tauri::command]
+async fn pii_correct(state: State<'_, AppState>, source: String, correction: Correction) -> CmdResult<Value> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (path, kind) = review_path(&app, &source)?;
+        let mut corrections = app.pii_corrections(&source, &path)?;
+        let doc = pii::Document::open(&path, &kind, &corrections)?;
+        let Correction { action, text, entity, block, start, end } = correction;
+        let values = match (text, entity, block, start, end) {
+            (Some(text), ..) => vec![text],
+            (None, Some(entity), ..) => doc.surfaces(&entity),
+            (None, None, Some(block), Some(start), Some(end)) => doc.selection(block, start, end).into_iter().collect(),
+            _ => Vec::new(),
+        };
+        for value in &values {
+            match action.as_str() {
+                "hide" => {
+                    corrections.hide(value, false);
+                    let still_shown = pii::Document::open(&path, &kind, &corrections)?
+                        .hidden()
+                        .iter()
+                        .all(|h| h["value"].as_str().map(str::to_lowercase) != Some(value.to_lowercase()));
+                    corrections.hide(value, still_shown);
+                }
+                "show" => corrections.show(value),
+                "forget" => corrections.forget(value),
+                other => return Err(format!("Unknown action {other}")),
+            }
+        }
+        if !values.is_empty() {
+            app.set_pii_corrections(&source, &path, &corrections)?;
+        }
+        review(&app, &source)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Opens the user's own file in its default app; edits there are picked up by the next scan.
@@ -786,9 +893,9 @@ fn resolve_profile_input(
     Ok(Vec::new())
 }
 
-/// Lets the user pick the file a `file` request asks for; None when the picker was closed.
+/// Picks the file for a `file` request without sharing it yet, so the user can check its personal data first.
 #[tauri::command]
-async fn resolve_file_request(handle: AppHandle, state: State<'_, AppState>, id: i64) -> CmdResult<Option<Value>> {
+async fn pick_request_file(handle: AppHandle, state: State<'_, AppState>, id: i64) -> CmdResult<Option<Value>> {
     let request = state.app.vault().get_request(id).map_err(err)?;
     let kind = request.payload.get("kind").and_then(Value::as_str).unwrap_or_default().to_string();
     let picked = handle
@@ -797,11 +904,18 @@ async fn resolve_file_request(handle: AppHandle, state: State<'_, AppState>, id:
         .set_title("Choose a file for your AI assistant")
         .add_filter(kind.to_uppercase(), &[kind.as_str()])
         .blocking_pick_file();
-    let Some(source) = picked.and_then(|p| p.into_path().ok()) else { return Ok(None) };
-    let result = state.app.store_upload(id, &source)?;
+    let Some(path) = picked.and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+    Ok(Some(json!({"path": path, "name": name})))
+}
+
+/// Shares the picked file with the agent: Blankey keeps a copy, and the corrections made for it go along.
+#[tauri::command]
+fn share_upload(handle: AppHandle, state: State<AppState>, id: i64, path: PathBuf) -> CmdResult<Value> {
+    let result = state.app.store_upload(id, &path)?;
     tray::refresh(&handle);
     let _ = handle.emit("requests-changed", ());
-    Ok(Some(result))
+    Ok(result)
 }
 
 /// The user lets the agent read the library file a `file` request names.
@@ -1180,6 +1294,8 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         show_library_file,
         open_library_file,
         library_preview,
+        pii_review,
+        pii_correct,
         list_documents,
         open_documents,
         export_document,
@@ -1197,7 +1313,8 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         next_request,
         cancel_request,
         resolve_profile_input,
-        resolve_file_request,
+        pick_request_file,
+        share_upload,
         share_library_request,
         list_links,
         create_link,
