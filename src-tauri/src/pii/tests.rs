@@ -4,7 +4,6 @@ use super::validate::*;
 use super::*;
 
 const EGN: &str = "8503151235";
-const EGN2: &str = "0101014569";
 const LNCH: &str = "1001001001";
 /// Valid both as an EGN and as an LNCh.
 const BOTH: &str = "8503150075";
@@ -70,7 +69,7 @@ fn people_and_orgs() {
     let text = format!("1. Иван Петров Иванов, ЕГН {EGN}, наричан по-долу ПРОДАВАЧ");
     has(&text, Kind::Person, "Иван Петров Иванов");
     has(&format!("ИВАН ПЕТРОВ ИВАНОВ, с ЕГН {EGN}"), Kind::Person, "ИВАН ПЕТРОВ ИВАНОВ");
-    has("представлявано от Мария Георгиева Димитрова, в качеството", Kind::Representative, "Мария Георгиева Димитрова");
+    has("представлявано от Мария Георгиева Димитрова, в качеството", Kind::Person, "Мария Георгиева Димитрова");
     has("„Пример Консулт“ ЕООД, ЕИК", Kind::Org, "„Пример Консулт“ ЕООД");
     has("ЕТ „Пример – Иван Петров“ със", Kind::Org, "ЕТ „Пример – Иван Петров“");
     has("Example Trading Ltd. agrees", Kind::Org, "Example Trading Ltd.");
@@ -87,7 +86,7 @@ fn labels_beat_bare_patterns() {
     let d = detect(&format!("ЕГН {EGN}"));
     assert!(d[0].kind == Kind::Egn && d[0].score > 0.95);
     let d = detect("ЕГН 85031512X9");
-    assert!(d.iter().any(|d| d.kind == Kind::Egn && d.score >= REDACT && d.score < SUGGEST), "unchecked: {d:?}");
+    assert!(d.iter().any(|d| d.kind == Kind::Egn && d.score >= REDACT && d.score < 0.7), "unchecked: {d:?}");
 }
 
 fn analyze_plain(blocks: &[Block]) -> Analysis {
@@ -98,25 +97,24 @@ fn blocks(texts: &[&str]) -> Vec<Block> {
     texts.iter().map(|t| Block::plain(t)).collect()
 }
 
-fn role(a: &Analysis, kind: Kind) -> Vec<Option<&str>> {
-    a.entities.iter().filter(|e| e.kind == kind).map(|e| e.role.as_deref()).collect()
-}
-
 #[test]
-fn one_person_in_two_roles() {
+fn one_value_is_one_entity() {
     let a = analyze_plain(&blocks(&[
         "1. „Пример Инвест“ ЕООД, ЕИК 121212121, със седалище и адрес на управление: гр. София, район Лозенец, ул. „Примерна“ № 5, представлявано от управителя Иван Петров Иванов, наричано по-долу „ЗАЕМОДАТЕЛ“,",
         "2. Иван Петров Иванов, ЕГН .........., л.к. № .........., издадена на .......... от МВР – .........., в качеството си на физическо лице, наричан по-долу „ЗАЕМАТЕЛ“,",
         "ПРИМЕР ИНВЕСТ ЕООД",
+        "ИВАН ПЕТРОВ ИВАНОВ",
     ]));
-    let view: Vec<(Kind, Option<&str>)> = a.entities.iter().map(|e| (e.kind, e.role.as_deref())).collect();
-    assert!(view.contains(&(Kind::Representative, Some("lender"))), "{view:?}");
-    assert!(view.contains(&(Kind::Person, Some("borrower"))), "{view:?}");
+    let named: Vec<_> = a.entities.iter().filter(|e| e.norm == "иван петров иванов").collect();
+    assert_eq!(named.len(), 1, "manager, borrower and signature are one value: {named:?}");
+    assert_eq!(named[0].occurrences.len(), 3);
     let address: Vec<_> = a.entities.iter().filter(|e| e.kind == Kind::Address).collect();
     assert_eq!(address.len(), 1, "район keeps the address whole: {address:?}");
     assert!(address[0].surfaces[0].ends_with("№ 5"));
     assert!(!a.entities.iter().any(|e| e.kind == Kind::IdIssuer), "a blank after the label is no value");
     assert_eq!(a.entities.iter().filter(|e| e.kind == Kind::Org).count(), 1, "quotes and case do not split a company");
+    let ids: Vec<&str> = a.entities.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids[..2], ["pii:1", "pii:2"], "numbered by first appearance: {ids:?}");
 }
 
 #[test]
@@ -129,28 +127,9 @@ fn entities_merge_spellings() {
     ]));
     let egn: Vec<_> = a.entities.iter().filter(|e| e.kind == Kind::Egn).collect();
     assert_eq!(egn.len(), 1);
-    assert_eq!(egn[0].id, "egn:1");
+    assert_eq!(egn[0].id, "pii:1");
     assert_eq!(egn[0].occurrences.len(), 3);
     assert_eq!(egn[0].surfaces, [EGN, "850315 1235"]);
-}
-
-#[test]
-fn roles_before_after_and_fallback() {
-    let a = analyze_plain(&blocks(&[
-        &format!("1. Иван Петров Иванов, ЕГН {EGN}, наричан по-долу ПРОДАВАЧ, и"),
-        &format!("2. Мария Георгиева Димитрова, ЕГН {EGN2}, наричана по-долу „КУПУВАЧ“"),
-    ]));
-    assert_eq!(role(&a, Kind::Person), [Some("seller"), Some("buyer")]);
-    assert_eq!(role(&a, Kind::Egn), [Some("seller"), Some("buyer")]);
-
-    let a = analyze_plain(&blocks(&["НАЕМОДАТЕЛ:", &format!("Иван Петров Иванов, ЕГН {EGN}")]));
-    assert_eq!(role(&a, Kind::Egn), [Some("landlord")]);
-
-    let a = analyze_plain(&blocks(&[&format!("ЕГН {EGN}"), &format!("ЕГН {EGN2}")]));
-    assert_eq!(role(&a, Kind::Egn), [Some("party_1"), Some("party_2")]);
-
-    let a = analyze_plain(&blocks(&[&format!("Иван Петров Иванов, ЕГН {EGN}, наричан по-долу Довереник")]));
-    assert_eq!(role(&a, Kind::Egn), [Some("doverenik")]);
 }
 
 // -- Document ----------------------------------------------------------------------------------------------
@@ -216,10 +195,12 @@ fn redacted_paragraphs_hide_values() {
         assert!(!out.contains(value), "{value} leaked: {out}");
     }
     let paragraphs = doc.redacted_paragraphs();
-    assert!(paragraphs[0].text.contains("ЕГН ⟦egn:1 ##########⟧"), "{}", paragraphs[0].text);
-    assert_eq!(paragraphs[1].runs, ["ПРОДАВАЧ: ", "⟦person:1 Xxxx Xxxxxx Xxxxxx⟧"], "the shape of the value stays");
-    let egn = doc.entities().into_iter().find(|e| e.id == "egn:1").unwrap();
-    assert_eq!((egn.var.as_deref(), egn.binding.as_deref(), egn.length), (Some("seller_egn"), Some("seller.egn"), 10));
+    assert!(paragraphs[0].text.contains("ЕГН ⟦pii:2 ##########⟧"), "{}", paragraphs[0].text);
+    assert_eq!(paragraphs[1].runs, ["ПРОДАВАЧ: ", "⟦pii:1 Xxxx Xxxxxx Xxxxxx⟧"], "the shape of the value stays");
+    let egn = doc.entities().into_iter().find(|e| e.id == "pii:2").unwrap();
+    assert_eq!((egn.length, egn.occurrences), (10, 1));
+    let out = serde_json::to_string(&doc.entities()).unwrap();
+    assert!(!out.contains("kind") && !out.contains("role"), "only the assistant names what a value is: {out}");
 }
 
 #[test]
@@ -230,15 +211,15 @@ fn placeholders_resolve_to_tokenize_finds() {
     let doc = Document::docx(&path, &Corrections::default()).unwrap();
     let finds = doc
         .resolve_finds(vec![
-            json!({"find": "⟦person:1 Xxxx Xxxxxx Xxxxxx⟧", "var": "seller_name"}),
-            json!({"find": "ЕГН ⟦egn:1⟧", "var": "seller_egn_line"}),
+            json!({"find": "⟦pii:1 Xxxx Xxxxxx Xxxxxx⟧", "var": "seller_name"}),
+            json!({"find": "ЕГН ⟦pii:2⟧", "var": "seller_egn_line"}),
             json!({"find": "ПРОДАВАЧ", "var": "role", "occurrence": 2}),
         ])
         .unwrap();
     assert_eq!(finds[0], json!({"find": "Иван Петров Иванов", "var": "seller_name"}));
     assert_eq!(finds[1], json!({"find": format!("ЕГН {EGN}"), "var": "seller_egn_line"}));
     assert_eq!(finds[2], json!({"find": "ПРОДАВАЧ", "var": "role", "occurrence": 2}), "plain finds pass unchanged");
-    assert!(doc.resolve_finds(vec![json!({"find": "⟦egn:9⟧", "var": "x"})]).is_err());
+    assert!(doc.resolve_finds(vec![json!({"find": "⟦pii:9⟧", "var": "x"})]).is_err());
     let target = dir.path().join("t.docx");
     docx_file::tokenize(&path, &target, &finds).unwrap();
     assert!(!all_text(&target).contains(EGN));
@@ -250,7 +231,13 @@ fn values_across_runs_are_redacted_in_the_first_run() {
     let path = docx_with(dir.path(), &[&["ЕГН 8503", "151235"]]);
     let doc = Document::docx(&path, &Corrections::default()).unwrap();
     assert!(doc.entities()[0].crosses_runs);
-    assert_eq!(doc.redacted_paragraphs()[0].runs, ["ЕГН ⟦egn:1 ##########⟧", ""]);
+    assert_eq!(doc.redacted_paragraphs()[0].runs, ["ЕГН ⟦pii:1 ##########⟧", ""]);
+    let html = doc.html(&[]).unwrap();
+    assert_eq!(
+        html.matches(r#"data-e="pii:1" data-n="0""#).count(),
+        2,
+        "one place over two runs keeps one number: {html}"
+    );
 }
 
 #[test]
@@ -263,7 +250,7 @@ fn snap_and_guard() {
     assert_eq!(&text[a..b], "Иван");
     assert_eq!(guard(&format!("id {EGN} and {IBAN}")), "id ⟦##########⟧ and ⟦XX## XXXX #### #### #### ##⟧");
     assert_eq!(guard("ticket 1730000000"), "ticket 1730000000");
-    assert_eq!(redact_line(&format!("Договор с ЕГН {EGN}")), "Договор с ЕГН ⟦egn ##########⟧");
+    assert_eq!(redact_line(&format!("Договор с ЕГН {EGN}")), "Договор с ЕГН ⟦##########⟧");
 }
 
 fn pdf_with(dir: &Path, lines: &[&str]) -> Vec<u8> {
@@ -279,7 +266,7 @@ fn pdf_pages_redact_lines_and_place_masks() {
     let doc = Document::pdf(&pdf, &Corrections::default()).unwrap();
     let pages = serde_json::to_string(&doc.redacted_pages()).unwrap();
     assert!(!pages.contains(EGN) && !pages.contains("Иван") && pages.contains("Срок"), "{pages}");
-    let egn = doc.entities().into_iter().find(|e| e.kind == "egn").unwrap();
+    let egn = doc.entities().into_iter().find(|e| e.id == "pii:2").unwrap();
     assert_eq!(egn.places.len(), 1);
     assert_eq!(doc.masks(1).len(), 2, "the name and the EGN");
     let png = crate::render::preview::grid_page(&pdf, 1, 80.0).unwrap();
@@ -298,7 +285,7 @@ fn html_maps_runs_back_to_blocks() {
     assert_eq!(doc.blocks()[2].text, format!("ЕГН {EGN}"));
     let html = doc.html(&[]).unwrap();
     let table_at = html.find("<table>").unwrap();
-    let mark_at = html.find(r#"<mark class="pii" data-e="egn:1">"#).unwrap();
+    let mark_at = html.find(r#"<mark class="pii" data-e="pii:2" data-n="0">"#).unwrap();
     assert!(mark_at > table_at, "the table paragraph renders in document order: {html}");
     assert!(html.contains(r#"<span data-b="2" data-o="4">"#), "the run after \"ЕГН \" starts at 4: {html}");
     assert!(html.contains(r#"<span data-b="1" data-o="0">Край</span>"#), "{html}");
@@ -338,7 +325,73 @@ fn review_selection_and_hidden_list() {
     let mut c = Corrections::default();
     c.hide("НК-4471", true);
     let doc = Document::docx(&path, &c).unwrap();
-    assert_eq!(doc.hidden()[0]["id"], "marked:1");
-    assert_eq!(doc.redacted_paragraphs()[0].runs, ["Членска карта: ", "⟦marked:1 XX-####⟧", " от 2020 г."]);
-    assert!(doc.html(&[]).unwrap().contains(r#"<mark class="pii user" data-e="marked:1">НК-4471</mark>"#));
+    assert_eq!(doc.hidden()[0]["id"], "pii:1");
+    assert_eq!(doc.redacted_paragraphs()[0].runs, ["Членска карта: ", "⟦pii:1 XX-####⟧", " от 2020 г."]);
+    assert!(doc.html(&[]).unwrap().contains(r#"<mark class="pii" data-e="pii:1" data-n="0">НК-4471</mark>"#));
+}
+
+#[test]
+fn review_places_are_numbered_and_located() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = docx_with(
+        dir.path(),
+        &[&[&format!("ЕГН {EGN}")], &["Стая 12, карта 77-ABC"], &[&format!("отново {EGN}, карта 77-ABC")]],
+    );
+    let mut c = Corrections::default();
+    c.show("77-ABC");
+    let doc = Document::docx(&path, &c).unwrap();
+    let html = doc.html(&c.show).unwrap();
+    assert!(html.contains(r#"data-e="pii:1" data-n="1""#), "{html}");
+    assert!(html.contains(r#"class="pii shown" data-v="0" data-n="1""#), "{html}");
+    assert_eq!(doc.hidden()[0]["first"], json!([0, 7]));
+    assert_eq!(doc.first("77-ABC"), Some((1, "Стая 12, карта ".len())));
+}
+
+#[test]
+fn corrections_ignore_quotes() {
+    let texts = ["1. „ПРИМЕР ИНВЕСТ“ ЕООД, ЕИК 121212121", "ПРИМЕР ИНВЕСТ ЕООД"];
+    // a selection that left out the opening quote still hides every spelling
+    let mut c = Corrections::default();
+    c.hide("ПРИМЕР ИНВЕСТ“ ЕООД", true);
+    let a = analyze(&blocks(&texts), &c);
+    let company: Vec<_> = a.entities.iter().filter(|e| e.norm == "пример инвест еоод").collect();
+    assert_eq!(company.len(), 1, "{company:?}");
+    assert_eq!(company[0].occurrences.len(), 2);
+    assert!(
+        company[0].surfaces.contains(&"„ПРИМЕР ИНВЕСТ“ ЕООД".to_string()),
+        "the quotes are hidden too: {company:?}"
+    );
+    // showing one spelling shows them all
+    let mut c = Corrections::default();
+    c.show("ПРИМЕР ИНВЕСТ ЕООД");
+    let a = analyze(&blocks(&texts), &c);
+    assert!(!a.entities.iter().any(|e| e.norm == "пример инвест еоод"), "{:?}", a.entities);
+    // and the two are one correction
+    c.hide("„ПРИМЕР ИНВЕСТ“ ЕООД", false);
+    assert!(c.is_empty());
+}
+
+#[test]
+fn removing_values() {
+    let text = format!("Наемател: Иван Петров, ЕГН {EGN}");
+    let mut c = Corrections::default();
+    c.hide("стая 12", true);
+    c.remove("СТАЯ 12");
+    assert!(c.is_empty(), "an added value is forgotten");
+    c.remove("Иван Петров");
+    assert_eq!(c.ignore, ["Иван Петров"], "a detected value is dismissed");
+    let a = analyze(&blocks(&[&text]), &c);
+    assert!(!a.entities.iter().any(|e| e.norm == "иван петров"));
+    c.hide("Иван Петров", false);
+    assert!(c.is_empty(), "hiding it again undoes the dismissal");
+}
+
+#[test]
+fn capitals_are_names_only_from_three_letters() {
+    assert!(
+        found("решение на ЕДНОЛИЧНИЯ СОБСТВЕНИК НА КАПИТАЛА от днес").is_empty(),
+        "{:?}",
+        found("решение на ЕДНОЛИЧНИЯ СОБСТВЕНИК НА КАПИТАЛА от днес")
+    );
+    has("Собственик: ИВАН ПЕТРОВ", Kind::Person, "ИВАН ПЕТРОВ");
 }

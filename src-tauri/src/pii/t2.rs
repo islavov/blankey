@@ -34,8 +34,8 @@ struct PackFile {
     address_tokens: Vec<String>,
     address_starts: Vec<String>,
     org_suffixes: Vec<String>,
+    /// Party words ("продавач", "landlord"): they end a name or an address, and "ПРОДАВАЧ: <name>" is a person.
     roles: IndexMap<String, Vec<String>>,
-    defined_term: String,
 }
 
 #[derive(Deserialize)]
@@ -79,10 +79,8 @@ pub struct Pack {
     address_starts: Regex,
     orgs: Vec<(Regex, f32)>,
     dates: Option<Regex>,
-    pub roles: Vec<(String, Regex)>,
     pub role_any: Regex,
     role_at: Regex,
-    pub defined_term: Regex,
 }
 
 /// Lowercase with single spaces, the form labels are looked up in.
@@ -149,13 +147,6 @@ impl Pack {
         ];
         let dates = (!file.months.is_empty())
             .then(|| Regex::new(&format!(r"(?i)\b\d{{1,2}}\s+(?:{})\s+\d{{4}}\b", alternation(&file.months))).unwrap());
-        let roles: Vec<(String, Regex)> = file
-            .roles
-            .iter()
-            .map(|(id, stems)| {
-                (id.clone(), Regex::new(&format!(r"(?i)(?:^|[^\p{{L}}])(({})\p{{L}}*)", alternation(stems))).unwrap())
-            })
-            .collect();
         let all_stems: Vec<String> = file.roles.values().flatten().cloned().collect();
         Pack {
             labels_at: Regex::new(&format!("(?i)^(?:{})", alternation(&labels))).unwrap(),
@@ -169,10 +160,8 @@ impl Pack {
             address_starts: words_re(&file.address_starts),
             orgs,
             dates,
-            roles,
             role_any: Regex::new(&format!(r"(?i)(?:^|[^\p{{L}}])(({})\p{{L}}*)", alternation(&all_stems))).unwrap(),
             role_at: Regex::new(&format!(r"(?i)^(?:{})\p{{L}}*", alternation(&all_stems))).unwrap(),
-            defined_term: Regex::new(&format!("(?i){}", file.defined_term)).unwrap(),
         }
     }
 
@@ -180,11 +169,6 @@ impl Pack {
     pub fn stops_at(&self, text: &str, at: usize) -> bool {
         let rest = &text[at..];
         [&self.labels_at, &self.role_at].iter().any(|re| re.find(rest).is_some_and(|m| ends_word(rest, m.end())))
-    }
-
-    /// The role id of a word ("Продавачът" -> seller).
-    pub fn role_of(&self, word: &str) -> Option<&str> {
-        self.roles.iter().find(|(_, re)| re.is_match(word)).map(|(id, _)| id.as_str())
     }
 
     pub fn is_suffix(&self, word: &str) -> bool {

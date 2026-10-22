@@ -2,6 +2,10 @@
 
 Status: proposal. Builds on docs/pii-detection-rfc.md (the `pii` module, placeholders, user corrections).
 
+Update: the `pii` module no longer exposes kinds or roles. Placeholders are `⟦pii:n <shape>⟧`, and the `pii` list
+has no kind, role or suggested var. Where this RFC relies on detector parties and kinds (sections 3.3 and 3.5), the
+assistant groups values into parties itself from the text around them. Section 3.3 now only adds the `match` lookup.
+
 ## 1. Idea
 
 The user's folders are full of filled documents: signed contracts, powers of attorney, invoices. Each one holds the
@@ -107,33 +111,20 @@ unchanged file always resolves to the same values.
 The value only prefills the form. `save_profile_values` still validates it, so a wrong pick shows up as an ordinary
 problem in the sheet.
 
-### 3.3 Parties in the inspect output
+### 3.3 Matching existing profiles
 
-The assistant can group entities by `role` today, but the grouping should come from the detector, which knows the
-clusters. `inspect_docx` and `inspect_pdf` gain a `parties` list next to `pii`:
+The assistant groups placeholders into parties itself, from the text around them ("ЕГН ⟦pii:2⟧, наричан по-долу
+ПРОДАВАЧ"). What it cannot see is whether a party already has a profile. `inspect_docx` and `inspect_pdf` gain a
+`matches` list:
 
 ```json
-"parties": [
-  { "role": "seller", "kind": "person",
-    "entities": ["person:1", "egn:1", "id_card:1", "address:1"],
-    "match": { "profile_id": 7, "on": "egn" } },
-  { "role": "buyer", "kind": "company",
-    "entities": ["org:1", "eik:1", "address:2", "representative:1"] }
-]
+"matches": [ { "id": "pii:2", "profile_id": 7, "key": "egn" } ]
 ```
 
-- `kind` is `company` when the cluster has an Org or an EIK, otherwise `person`. These are the profile kinds the
-  vault already uses.
-- `Representative` stays a field of the company (`representative`, from `keys.rs`), not a profile of its own. The
-  assistant can still propose one.
-- `match` is a local lookup: a party matches a profile when one of its strong identifiers (EGN, LNCh, EIK, IBAN,
-  email) equals that profile's value after normalization. Name equality alone never matches. This tells the
-  assistant "extend profile 7" instead of "create a duplicate", and it is the linkage the assistant needs for the
-  fill anyway. It reveals no value. The query cannot be steered, because the assistant chooses the file but not the
-  value that is compared.
-
-The suggested keys stay the ones `keys.rs` gives (`full_name`, `egn`, `id_card.number`, ...), so a profile made from
-a document binds to templates made from the same kind of document without any mapping.
+A hidden value matches a profile when it equals one of that profile's strong identifiers (EGN, LNCh, EIK, IBAN,
+email) after normalization. Name equality alone never matches. This tells the assistant "extend profile 7" instead of
+"create a duplicate", and it reveals no value. The query cannot be steered, because the assistant chooses the file
+but not the value that is compared.
 
 ### 3.4 The sheet
 
@@ -150,8 +141,7 @@ Several parties mean several requests, and `processRequests` already opens them 
 ### 3.5 What the assistant is told
 
 The tool descriptions change in two places:
-- `inspect_docx` / `inspect_pdf`: "`parties` groups the placeholders by party; `match` is an existing profile that
-  holds the same ID."
+- `inspect_docx` / `inspect_pdf`: "`matches` lists hidden values that equal an ID in an existing profile."
 - `request_profile_input`: "With source, suggested and new_profile_name may be placeholders from that file
   (⟦egn:1⟧). Blankey fills them in for the user. To save a document's parties as profiles, send one request per
   party: profile_id for a match, otherwise new_profile_name."
@@ -186,10 +176,9 @@ reviewed file: request_profile_input with source and placeholders."
 
 | where | change |
 |---|---|
-| `pii/document.rs` | `value(id, field_type)`, `parties()`; `pii::placeholder(&str)` parser shared with `resolve_finds` |
-| `pii/resolve.rs` | expose the clusters that `roles` already builds, so `parties()` reuses them |
+| `pii/document.rs` | `value(id, field_type)`; `pii::placeholder(&str)` parser shared with `resolve_finds` |
 | `core.rs` | `pii_document(source)`: path, corrections and kind in one place (inspect tools, save tools, `next_request`); `match_party` against `vault.field_index` and values |
-| `mcp/tools.rs` | `source` on `request_profile_input`, placeholder validation, hash in the payload; `parties` in the inspect outputs; descriptions |
+| `mcp/tools.rs` | `source` on `request_profile_input`, placeholder validation, hash in the payload; `matches` in the inspect outputs; descriptions |
 | `app/commands.rs` | `next_request` resolves placeholders for `PROFILE_INPUT` with a source |
 | `ui/js/requests.js` | source line, "From the document" title, link to the review |
 | server instructions | one line (section 3.5) |
@@ -199,9 +188,7 @@ reviewed file: request_profile_input with source and placeholders."
 Fast unit tests with invented values only:
 - `value`: EGN with spaces gives digits; an IBAN in groups; `12.03.1980 г.` as a date; a name in capitals gets title
   case; `„Пример“ ЕООД` keeps its suffix.
-- `parties`: a seller cluster and a buyer company with a representative give two parties with the right kinds and
-  entity lists.
-- `match`: a profile with the same EGN matches; a profile with the same name only does not.
+- `matches`: a hidden value equal to a profile's EGN matches it; a profile with the same name only does not.
 - `request_profile_input`: an unknown placeholder is refused without echoing a value; the stored payload holds no
   surface of any entity.
 - `next_request`: placeholders resolve on an unchanged file; a changed hash gives no suggestions.

@@ -5,8 +5,6 @@ use serde::Serialize;
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Person,
-    /// A person acting for a company: its manager or attorney.
-    Representative,
     /// A value the user marked to hide.
     Marked,
     Org,
@@ -42,7 +40,6 @@ pub enum Class {
 
 pub const KINDS: &[Kind] = &[
     Kind::Person,
-    Kind::Representative,
     Kind::Marked,
     Kind::Org,
     Kind::Address,
@@ -71,7 +68,6 @@ impl Kind {
     pub fn name(self) -> &'static str {
         match self {
             Kind::Person => "person",
-            Kind::Representative => "representative",
             Kind::Marked => "marked",
             Kind::Org => "org",
             Kind::Address => "address",
@@ -185,14 +181,12 @@ pub struct Occ {
 /// A distinct value across the document: every detection whose normalized value is equal.
 #[derive(Clone, Debug)]
 pub struct Entity {
-    /// "egn:1": the kind and a 1-based ordinal by first appearance
+    /// "pii:1": numbered by first appearance
     pub id: String,
     pub kind: Kind,
     pub norm: String,
     pub surfaces: Vec<String>,
     pub occurrences: Vec<Occ>,
-    pub role: Option<String>,
-    pub label: Option<String>,
     pub score: f32,
     pub crosses: bool,
 }

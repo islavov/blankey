@@ -33,6 +33,7 @@ test("the user reviews what the assistant will not see in a library file", async
   assert.deepEqual(backend.called("pii_review").at(-1), { source: "lib:4" });
   assert.ok(row("Jane Example") && !row("Jane Example").classList.contains("shown"));
 
+  assert.equal($(".hidden-row .kind"), null, "values are not categorized; the assistant reads them in context");
   // a selection offers to hide it; Cancel closes the menu and changes nothing
   await selectText("77-ABC");
   assert.ok($(".review-menu .hide-selection"));
@@ -46,34 +47,57 @@ test("the user reviews what the assistant will not see in a library file", async
   const start = "Tenant Jane Example, card ".length;
   assert.deepEqual(corrected(), { action: "hide", block: 0, start, end: start + 6 });
   assert.ok(row("77-ABC").querySelector(".remove"), "an added value can be removed");
-  assert.equal(row("Jane Example").querySelector(".remove"), null, "a detected one cannot");
 
-  // a row highlights its places in the preview
-  await click(row("77-ABC"));
-  assert.ok($(".sheet mark[data-e='marked:2']").classList.contains("focus"));
-  assert.ok(!$(".sheet mark[data-e='person:1']").classList.contains("focus"));
+  // rows follow the document, one per value
+  const order = () => $$(".hidden-row .value").map((el) => el.textContent);
+  assert.deepEqual(order(), ["Jane Example", "77-ABC"]);
 
-  // clicking a mark asks what to do instead of acting
-  await click($(".sheet mark[data-e='person:1']"));
+  // a row outlines its places and steps through them; a place is current in turn
+  await click(row("Jane Example"));
+  const current = () => $$(".sheet mark.current").map((el) => el.dataset.n);
+  assert.equal($$(".sheet mark[data-e='pii:1'].focus").length, 2);
+  assert.deepEqual(current(), ["0"]);
+  assert.equal(text(".hidden-row.active .at"), "1/2");
+  await click($(".hidden-row.active .next"));
+  assert.deepEqual(current(), ["1"]);
+  assert.equal(text(".hidden-row.active .at"), "2/2");
+  await click($(".hidden-row.active .next"));
+  assert.deepEqual(current(), ["0"], "wraps around");
+  await click($(".hidden-row.active .prev"));
+  assert.equal(text(".hidden-row.active .at"), "2/2");
+  assert.equal($(".hidden-row:not(.active) .at"), null, "only the selected row steps");
+
+  // clicking a mark asks what to do instead of acting, and makes that place current
+  await click($(".sheet mark[data-e='pii:1'][data-n='0']"));
   assert.equal(backend.called("pii_correct").length, 1);
   assert.equal(text(".review-menu .menu-title"), "Jane Example");
+  assert.deepEqual(current(), ["0"]);
   await click($(".review-menu .menu-show"));
-  assert.deepEqual(corrected(), { action: "show", entity: "person:1" });
-  assert.ok(row("Jane Example").classList.contains("shown"));
+  assert.deepEqual(corrected(), { action: "show", entities: ["pii:1"] });
+
+  // showing or hiding keeps the row where it is, selected
+  assert.deepEqual(order(), ["Jane Example", "77-ABC"]);
+  assert.ok(row("Jane Example").classList.contains("shown") && row("Jane Example").classList.contains("active"));
   assert.ok($(".sheet mark.shown[data-v='0']"), "a value shown to the assistant stays marked");
+  assert.equal(text(".hidden-row.active .at"), "1/2");
 
-  // the eye toggles it back
   await click(row("Jane Example").querySelector(".toggle"));
-  assert.deepEqual(corrected(), { action: "hide", text: "Jane Example" });
+  assert.deepEqual(corrected(), { action: "hide", texts: ["Jane Example"] });
   assert.ok(!row("Jane Example").classList.contains("shown"));
+  assert.deepEqual(order(), ["Jane Example", "77-ABC"]);
 
+  // removing: an added value is forgotten, a detected one is not personal and leaves the list
   await click(row("77-ABC").querySelector(".remove"));
-  assert.deepEqual(corrected(), { action: "forget", text: "77-ABC" });
+  assert.deepEqual(corrected(), { action: "remove", texts: ["77-ABC"] });
   assert.equal(row("77-ABC"), undefined);
+  await click(row("Jane Example").querySelector(".remove"));
+  assert.deepEqual(corrected(), { action: "remove", texts: ["Jane Example"] });
+  assert.equal(row("Jane Example"), undefined);
+  assert.equal($(".sheet mark"), null, "nothing left marked");
 
   await type($(".hide-text"), "30 days");
   await submit($(".hide-typed"));
-  assert.deepEqual(corrected(), { action: "hide", text: "30 days" });
+  assert.deepEqual(corrected(), { action: "hide", texts: ["30 days"] });
 
   await click(byText(".sheet-foot button", "Done"));
   assert.equal($(".sheet"), null);

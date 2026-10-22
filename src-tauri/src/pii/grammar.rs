@@ -8,8 +8,10 @@ use super::t2::{find_words, key, Pack};
 use super::types::{Detection, Kind, Source};
 use super::validate::phone_digits;
 
+/// A name part: "Иван", "Петрова-Иванова", or in capitals "ИВАН" (at least three letters, so "НА" in
+/// "СОБСТВЕНИК НА КАПИТАЛА" is no name).
 static NAME: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:\p{Lu}\p{Ll}+(?:-\p{Lu}\p{Ll}+)?|\p{Lu}{2,}(?:-\p{Lu}{2,})?)$").unwrap());
+    LazyLock::new(|| Regex::new(r"^(?:\p{Lu}\p{Ll}+(?:-\p{Lu}\p{Ll}+)?|\p{Lu}{3,}(?:-\p{Lu}{2,})?)$").unwrap());
 static INITIAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\p{Lu}\.$").unwrap());
 static PHONE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[+\d][\d \-()/]{4,18}\d").unwrap());
 

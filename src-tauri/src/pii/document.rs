@@ -10,9 +10,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::redact::{self, Span, PLACEHOLDER};
-use super::t2::ends_word;
 use super::types::{Analysis, Block, Entity, Occ};
-use super::{analyze, keys, Corrections, REDACT, SUGGEST};
+use super::{analyze, Corrections, REDACT};
 use crate::render::preview::{self, Place};
 use crate::templates::docx::{self, ParagraphInfo};
 
@@ -36,18 +35,13 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-/// What the assistant and the UI see of an entity: never its value, only its length.
+/// What the assistant sees of a hidden value: never the value, only its length and where it is. What the value is
+/// and whose it is the assistant reads from the text around it.
 #[derive(Serialize, Debug)]
 pub struct EntityView {
     pub id: String,
-    pub kind: &'static str,
-    pub role: Option<String>,
-    pub var: Option<String>,
-    pub binding: Option<String>,
-    pub label: Option<String>,
     pub length: usize,
     pub occurrences: usize,
-    pub score: f64,
     #[serde(skip_serializing_if = "is_false")]
     pub crosses_runs: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -144,32 +138,19 @@ impl Document {
         self.analysis.entities.iter().enumerate().filter(|(_, e)| e.kind.personal() && e.score >= REDACT)
     }
 
+    /// The hidden values, in order of first appearance.
     pub fn entities(&self) -> Vec<EntityView> {
         let places = match &self.source {
             Source::Pdf { places, .. } => Some(places),
             Source::Docx(..) => None,
         };
-        self.analysis
-            .entities
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| e.score >= SUGGEST)
-            .map(|(i, e)| {
-                let key = keys::profile_key(e.kind);
-                let named = e.role.as_deref().zip(key);
-                EntityView {
-                    id: e.id.clone(),
-                    kind: e.kind.name(),
-                    role: e.role.clone(),
-                    var: named.map(|(r, k)| keys::var(r, k)),
-                    binding: named.map(|(r, k)| keys::binding(r, k)),
-                    label: e.label.clone(),
-                    length: e.surfaces.first().map_or(0, |s| s.chars().count()),
-                    occurrences: e.occurrences.len(),
-                    score: (e.score as f64 * 100.0).round() / 100.0,
-                    crosses_runs: e.crosses,
-                    places: places.map(|p| p[i].clone()).unwrap_or_default(),
-                }
+        self.redacted_entities()
+            .map(|(i, e)| EntityView {
+                id: e.id.clone(),
+                length: e.surfaces.first().map_or(0, |s| s.chars().count()),
+                occurrences: e.occurrences.len(),
+                crosses_runs: e.crosses,
+                places: places.map(|p| p[i].clone()).unwrap_or_default(),
             })
             .collect()
     }
@@ -233,25 +214,37 @@ impl Document {
     /// hid). Every run is a `<span data-b="block" data-o="utf-16 offset">`, so a selection maps back to the text.
     pub fn html(&self, shown: &[String]) -> Result<String, String> {
         let Source::Docx(paragraphs, path) = &self.source else { return Err("Not a .docx".into()) };
+        // (start, end, item id, class) per block, then numbered per item in document order as data-n, so the
+        // review can step through an item's places even when one place spans several runs
+        let mut counts: HashMap<String, usize> = HashMap::new();
         let marks: Vec<Vec<(usize, usize, String)>> = (0..self.blocks.len())
             .map(|b| {
-                let mut row: Vec<(usize, usize, String)> = self
+                let mut row: Vec<(usize, usize, String, &str)> = self
                     .spans(b)
                     .into_iter()
                     .map(|(s, e, id)| {
-                        let user = if id.starts_with("marked:") { " user" } else { "" };
-                        (s, e, format!(r#"class="pii{user}" data-e="{id}""#))
+                        (s, e, id.to_string(), if id.starts_with("marked:") { "pii user" } else { "pii" })
                     })
                     .collect();
                 for (i, value) in shown.iter().enumerate() {
                     for (s, e) in self.occurrences_of(b, value) {
-                        if !row.iter().any(|(rs, re, _)| *rs < e && s < *re) {
-                            row.push((s, e, format!(r#"class="pii shown" data-v="{i}""#)));
+                        if !row.iter().any(|(rs, re, _, _)| *rs < e && s < *re) {
+                            row.push((s, e, format!("shown:{i}"), "pii shown"));
                         }
                     }
                 }
-                row.sort_by_key(|(s, _, _)| *s);
-                row
+                row.sort_by_key(|(s, _, _, _)| *s);
+                row.into_iter()
+                    .map(|(s, e, id, class)| {
+                        let n = counts.entry(id.clone()).or_default();
+                        *n += 1;
+                        let attr = match id.strip_prefix("shown:") {
+                            Some(i) => format!(r#"data-v="{i}""#),
+                            None => format!(r#"data-e="{id}""#),
+                        };
+                        (s, e, format!(r#"class="{class}" {attr} data-n="{}""#, *n - 1))
+                    })
+                    .collect()
             })
             .collect();
         let block_of: HashMap<usize, usize> = paragraphs.iter().enumerate().map(|(b, p)| (p.index, b)).collect();
@@ -277,15 +270,9 @@ impl Document {
         docx::to_html_with(path, &hook)
     }
 
-    /// Where a value occurs in a block as a whole word, in any letter case.
+    /// Where a value occurs in a block as whole words, in any letter case and with or without quotes.
     fn occurrences_of(&self, b: usize, value: &str) -> Vec<(usize, usize)> {
-        let text = &self.blocks[b].text;
-        let pattern = regex::escape(value.trim()).replace(' ', r"\s+");
-        let Ok(re) = regex::Regex::new(&format!("(?i){pattern}")) else { return Vec::new() };
-        re.find_iter(text)
-            .map(|m| (m.start(), m.end()))
-            .filter(|&(s, e)| (s == 0 || ends_word(text, s)) && ends_word(text, e))
-            .collect()
+        super::corrections::find_value(&self.blocks[b].text, value)
     }
 
     /// How often a value occurs in the document.
@@ -294,10 +281,19 @@ impl Document {
     }
 
     /// What gets hidden, for the user's own review: id, kind, the value as first written and how often it occurs.
+    /// `first`: where the value first occurs, [block, byte offset], to keep the review list in document order.
     pub fn hidden(&self) -> Vec<Value> {
         self.redacted_entities()
-            .map(|(_, e)| json!({"id": e.id, "kind": e.kind.name(), "value": e.surfaces[0], "occurrences": e.occurrences.len()}))
+            .map(|(_, e)| {
+                let first = e.occurrences.iter().map(|o| (o.block, o.start)).min();
+                json!({"id": e.id, "value": e.surfaces[0], "occurrences": e.occurrences.len(), "first": first})
+            })
             .collect()
+    }
+
+    /// Where a value first occurs as a whole word, [block, byte offset].
+    pub fn first(&self, value: &str) -> Option<(usize, usize)> {
+        (0..self.blocks.len()).find_map(|b| self.occurrences_of(b, value).first().map(|&(s, _)| (b, s)))
     }
 
     /// Where each hidden entity is printed in a PDF, by id.

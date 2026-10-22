@@ -16,13 +16,9 @@ export const htmlPreview = {
   html: '<p>Between <span class="blank" data-var="who">who</span> and the bank: <span class="blank empty" data-var="amount">amount</span></p>',
 };
 
-export const reviewText = "Tenant Jane Example, card 77-ABC, rent 30 days";
-const reviewHtml = (state) => {
-  let html = reviewText;
-  for (const h of state.hidden) html = html.replace(h.value, `<mark class="pii" data-e="${h.id}">${h.value}</mark>`);
-  state.shown.forEach((v, i) => (html = html.replace(v.value, `<mark class="pii shown" data-v="${i}">${v.value}</mark>`)));
-  return `<p><span data-b="0" data-o="0">${html}</span></p>`;
-};
+export const reviewText = "Tenant Jane Example, card 77-ABC, rent 30 days. Signed: Jane Example";
+// what detection finds: one name, at both its places
+const detected = [{ id: "pii:1", value: "Jane Example" }];
 
 export function seed() {
   return {
@@ -319,20 +315,23 @@ export function createBackend(db = seed()) {
     pii_review: ({ source }) => review(db, source),
     pii_correct: ({ source, correction }) => {
       const state = piiState(db, source);
-      const { action, text, entity, start, end } = correction;
-      if (action === "show") {
-        const found = state.hidden.find((h) => h.id === entity);
-        state.hidden = state.hidden.filter((h) => h.id !== entity);
-        state.shown.push({ value: found.value, user: found.user });
-      } else if (action === "hide") {
-        const value = text ?? reviewText.slice(start, end);
-        const shown = state.shown.find((v) => v.value === value);
-        state.shown = state.shown.filter((v) => v.value !== value);
-        const user = shown ? shown.user : true;
-        state.hidden.push({ id: user ? `marked:${state.hidden.length + 1}` : "person:1", kind: user ? "marked" : "person", value, occurrences: 1, user });
-      } else if (action === "forget") {
-        state.hidden = state.hidden.filter((h) => h.value !== text);
-        state.shown = state.shown.filter((v) => v.value !== text);
+      const { action, texts = [], entities = [], start, end } = correction;
+      const values = [...texts, ...entities.map((id) => [...detected, ...userHidden(state)].find((m) => m.id === id).value)];
+      if (start !== undefined) values.push(reviewText.slice(start, end));
+      for (const value of values) {
+        if (action === "show") {
+          state.hide = state.hide.filter((v) => v !== value);
+          if (!state.show.includes(value)) state.show.push(value);
+        } else if (action === "hide") {
+          state.show = state.show.filter((v) => v !== value);
+          state.ignore = state.ignore.filter((v) => v !== value);
+          if (!detected.some((d) => d.value === value) && !state.hide.includes(value)) state.hide.push(value);
+        } else if (action === "forget" || action === "remove") {
+          const added = state.hide.includes(value);
+          state.hide = state.hide.filter((v) => v !== value);
+          state.show = state.show.filter((v) => v !== value);
+          if (action === "remove" && !added) state.ignore.push(value);
+        }
       }
       return review(db, source);
     },
@@ -456,17 +455,61 @@ export function createBackend(db = seed()) {
 
 const delayed = (ms, value) => (ms ? new Promise((resolve) => setTimeout(() => resolve(value), ms)) : value);
 
+const count = (value) => reviewText.split(value).length - 1;
+const userHidden = (state) => state.hide.map((value, i) => ({ id: `pii:${i + 2}`, value }));
+
 function piiState(db, source) {
   db.pii ??= {};
-  db.pii[source] ??= { hidden: [{ id: "person:1", kind: "person", value: "Jane Example", occurrences: 1, user: false }], shown: [] };
+  db.pii[source] ??= { hide: [], show: [], ignore: [] };
   return db.pii[source];
 }
 
+/** Marks every place of the members in the text, numbered per member, as the backend renders the preview. */
+function reviewHtml(members) {
+  const marks = [];
+  for (const m of members) {
+    const at = [];
+    for (let i = reviewText.indexOf(m.value); i >= 0; i = reviewText.indexOf(m.value, i + 1)) at.push(i);
+    at.forEach((start, n) => {
+      if (marks.some((x) => x.start === start)) return;
+      const attrs = m.id.startsWith("shown:") ? `class="pii shown" data-v="${m.id.slice(6)}"` : `class="pii" data-e="${m.id}"`;
+      marks.push({ start, end: start + m.value.length, html: `<mark ${attrs} data-n="${n}">${m.value}</mark>` });
+    });
+  }
+  marks.sort((a, b) => a.start - b.start);
+  let html = "";
+  let at = 0;
+  for (const m of marks) {
+    html += reviewText.slice(at, m.start) + m.html;
+    at = m.end;
+  }
+  return `<p><span data-b="0" data-o="0">${html + reviewText.slice(at)}</span></p>`;
+}
+
+/** One row per value in document order, with its members, as the backend sends them. */
 function review(db, source) {
   const state = piiState(db, source);
-  const items = [
-    ...state.hidden.map((h) => ({ ...h, hidden: true })),
-    ...state.shown.map((v, i) => ({ id: `shown:${i}`, kind: v.user ? "marked" : "shown", value: v.value, occurrences: 1, hidden: false, user: v.user })),
+  const members = [
+    ...detected.filter((d) => !state.show.includes(d.value) && !state.ignore.includes(d.value)).map((d) => ({ ...d, occurrences: count(d.value), hidden: true, user: false })),
+    ...userHidden(state).map((m) => ({ ...m, occurrences: count(m.value), hidden: true, user: true })),
+    ...state.show.map((value, i) => {
+      const found = detected.find((d) => d.value === value);
+      return { id: `shown:${i}`, value, occurrences: count(value), hidden: false, user: !found };
+    }),
   ];
-  return { preview: { type: "html", names: [], html: reviewHtml(state) }, items };
+  const rows = new Map();
+  for (const m of [...members].sort((a, b) => reviewText.indexOf(a.value) - reviewText.indexOf(b.value))) {
+    const key = m.value.toLowerCase();
+    rows.set(key, [...(rows.get(key) || []), m]);
+  }
+  const items = [...rows].map(([key, ms]) => ({
+    key,
+    value: ms[0].value,
+    hidden: ms.some((m) => m.hidden),
+    user: ms.some((m) => m.user),
+    occurrences: ms.reduce((n, m) => n + m.occurrences, 0),
+    ids: ms.map((m) => m.id),
+    members: ms,
+  }));
+  return { preview: { type: "html", names: [], html: reviewHtml(members) }, items };
 }

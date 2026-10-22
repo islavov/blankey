@@ -21,7 +21,7 @@ export function selectionSpan(root) {
   const start = point(range.startContainer, range.startOffset);
   const end = point(range.endContainer, range.endOffset);
   if (!start || !end || start.block !== end.block || end.offset <= start.offset) return null;
-  return { block: start.block, start: start.offset, end: end.offset, rect: range.getBoundingClientRect() };
+  return { block: start.block, start: start.offset, end: end.offset, range: range.cloneRange() };
 }
 
 /** Opens the review of a library file in its own sheet. */
@@ -46,39 +46,83 @@ function itemOf(el) {
 
 const MARKS = "mark[data-e], mark[data-v], [data-var]";
 
+/** Under its text, wherever the preview has scrolled; hidden while the text is scrolled out of the preview. */
+function menuPlace(anchor, root) {
+  const rect = anchor.getBoundingClientRect();
+  const view = root?.querySelector(".preview-area")?.getBoundingClientRect();
+  const out = view && (rect.bottom < view.top || rect.top > view.bottom);
+  return { left: `${Math.max(8, rect.left)}px`, top: `${rect.bottom + 6}px`, visibility: out ? "hidden" : "visible" };
+}
+
 /**
- * What the assistant does not see in a file: the preview with marked values and their list. Selecting text hides
- * it everywhere in the file; a marked value can be shown to the assistant, hidden again, or removed when the user
- * added it. Corrections are kept for the file.
+ * The places of a row in the preview, in document order: the elements of each place of any of its ids (a docx
+ * place split over runs is several marks with one data-n; a PDF box is one place).
+ */
+function placesOf(root, ids) {
+  const places = new Map();
+  [...(root?.querySelectorAll(MARKS) || [])]
+    .filter((el) => ids.includes(itemOf(el)))
+    .forEach((el, i) => {
+      const n = `${itemOf(el)}#${el.dataset.n ?? i}`;
+      places.set(n, [...(places.get(n) || []), el]);
+    });
+  return [...places.values()];
+}
+
+/**
+ * What the assistant does not see in a file: the preview with marked values and their list, one row per value in
+ * document order. Selecting text hides it everywhere in the file; a value can be shown to the assistant, hidden
+ * again, or removed when the user added it, and its places stepped through. Corrections are kept for the file.
  */
 export function PiiReview({ source }) {
   const [review, setReview] = useState(null);
   const [menu, setMenu] = useState(null);
+  // the selected row by its value (ids change when a value is shown or hidden) and its current place
   const [focus, setFocus] = useState(null);
   const [typed, setTyped] = useState("");
+  const [, setScrolled] = useState(0);
   const area = useRef();
+  const scrolled = useRef(0);
 
   useEffect(() => {
     setReview(null);
     call("pii_review", { source }).then(setReview).catch(() => {});
   }, [source]);
 
-  // the focused item is highlighted in the preview, its first place scrolled into view once
+  // how many places the selected value has in the preview, measured after each render (the preview changes when
+  // a value is shown or hidden)
+  const [count, setCount] = useState(0);
+  const focused = review?.items.find((i) => i.key === focus?.key);
+  const current = count ? Math.min(focus.place, count - 1) : 0;
+
+  // the selected value's places are outlined, its current place stands out and comes into view when stepped to
   useEffect(() => {
-    const marks = [...(area.current?.querySelectorAll(MARKS) || [])];
-    marks.forEach((el) => el.classList.toggle("focus", itemOf(el) === focus?.id));
-    if (focus?.scroll) marks.find((el) => itemOf(el) === focus.id)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    area.current?.querySelectorAll(MARKS).forEach((el) => el.classList.remove("focus", "current"));
+    const all = focused ? placesOf(area.current, focused.ids) : [];
+    if (all.length !== count) setCount(all.length);
+    if (!focused) return;
+    all.flat().forEach((el) => el.classList.add("focus"));
+    const at = all[Math.min(focus.place, all.length - 1)] || [];
+    at.forEach((el) => el.classList.add("current"));
+    if (focus.seq !== scrolled.current) {
+      scrolled.current = focus.seq;
+      at[0]?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
   });
 
+  // the menu follows its text when the preview scrolls; Escape or a click elsewhere closes it
   useEffect(() => {
     if (!menu) return;
     const key = (e) => e.key === "Escape" && closeMenu();
     const outside = (e) => !e.target.closest(".review-menu") && closeMenu();
+    const scroll = () => setScrolled((n) => n + 1);
     document.addEventListener("keydown", key);
     document.addEventListener("mousedown", outside);
+    document.addEventListener("scroll", scroll, true);
     return () => {
       document.removeEventListener("keydown", key);
       document.removeEventListener("mousedown", outside);
+      document.removeEventListener("scroll", scroll, true);
     };
   }, [menu]);
 
@@ -92,24 +136,39 @@ export function PiiReview({ source }) {
     closeMenu();
     setReview(await call("pii_correct", { source, correction }));
   };
-  const toggle = (item) => correct(item.hidden ? { action: "show", entity: item.id } : { action: "hide", text: item.value });
-  const remove = (item) => correct({ action: "forget", text: item.value });
+  // a row acts on all its members: showing shows every hidden one, hiding hides every spelling
+  const toggle = (row) =>
+    correct(
+      row.hidden
+        ? { action: "show", entities: row.members.filter((m) => m.hidden).map((m) => m.id) }
+        : { action: "hide", texts: row.members.map((m) => m.value) }
+    );
+  // off the list: what the user added is forgotten, a detected value counts as not personal and stays visible
+  const remove = (row) => correct({ action: "remove", texts: row.members.map((m) => m.value) });
+  const rowOf = (id) => review.items.find((row) => row.ids.includes(id));
+
+  const go = (item, place, scroll = true) =>
+    setFocus({ key: item.key, place, seq: scroll ? (focus?.seq || 0) + 1 : focus?.seq || 0 });
+  const step = (e, delta) => {
+    e.stopPropagation();
+    go(focused, (current + delta + count) % count);
+  };
 
   const click = (e) => {
     const el = e.target.closest(MARKS);
-    const item = el && review.items.find((i) => i.id === itemOf(el));
+    const item = el && rowOf(itemOf(el));
     if (!item) return;
-    setFocus({ id: item.id });
-    const rect = el.getBoundingClientRect();
-    setMenu({ item, left: rect.left, top: rect.bottom + 6 });
+    const at = placesOf(area.current, item.ids).findIndex((place) => place.includes(el));
+    go(item, Math.max(0, at), false);
+    setMenu({ item, anchor: el });
   };
   const select = () => {
     const span = selectionSpan(area.current);
-    if (span) setMenu({ span, left: span.rect.left, top: span.rect.bottom + 6 });
+    if (span) setMenu({ span, anchor: span.range });
   };
   const addTyped = (e) => {
     e.preventDefault();
-    if (typed.trim()) correct({ action: "hide", text: typed.trim() }).then(() => setTyped(""));
+    if (typed.trim()) correct({ action: "hide", texts: [typed.trim()] }).then(() => setTyped(""));
   };
 
   const hiddenCount = review.items.filter((i) => i.hidden).length;
@@ -117,18 +176,26 @@ export function PiiReview({ source }) {
     <div class="fill-split review">
       <div class="fill-rows">
         <div class="list-note muted small">${tn(hiddenCount, "{n} value hidden", "{n} values hidden")}</div>
-        ${review.items.map((item) => html`
-          <div key=${item.id} class=${`hidden-row ${item.hidden ? "" : "shown"} ${focus?.id === item.id ? "active" : ""}`}
-            onClick=${() => setFocus({ id: item.id, scroll: true })}>
-            <span class="chip kind">${item.kind}</span>
+        ${review.items.map((item) => {
+          const active = item.key === focused?.key;
+          return html`
+          <div key=${item.key} class=${`hidden-row ${item.hidden ? "" : "shown"} ${active ? "active" : ""}`}
+            onClick=${() => go(item, active ? current : 0)}>
             <span class="value selectable" title=${item.value}>${item.value}</span>
-            <span class="muted small">×${item.occurrences}</span>
+            <span class="places">
+              ${active && count > 1
+                ? html`
+                    <button class="icon prev" title=${t("Previous place")} onClick=${(e) => step(e, -1)}>‹</button>
+                    <span class="small at">${current + 1}/${count}</span>
+                    <button class="icon next" title=${t("Next place")} onClick=${(e) => step(e, 1)}>›</button>`
+                : html`<span class="muted small">×${item.occurrences}</span>`}
+            </span>
             <button class="icon toggle" title=${item.hidden ? t("Hidden from the assistant. Click to show it.") : t("Visible to the assistant. Click to hide it.")}
               onClick=${(e) => (e.stopPropagation(), toggle(item))}><${Icon} name=${item.hidden ? "eye-off" : "eye"} /></button>
-            ${item.user
-              ? html`<button class="icon remove" title=${t("Remove")} onClick=${(e) => (e.stopPropagation(), remove(item))}><${Icon} name="trash" /></button>`
-              : html`<span></span>`}
-          </div>`)}
+            <button class="icon remove" title=${item.user ? t("Remove") : t("Not personal data. The assistant sees it and the list no longer shows it.")}
+              onClick=${(e) => (e.stopPropagation(), remove(item))}><${Icon} name="trash" /></button>
+          </div>`;
+        })}
         <form class="hide-typed" onSubmit=${addTyped}>
           <input type="text" class="hide-text" value=${typed} spellcheck="false" placeholder=${t("Text to hide…")}
             onInput=${(e) => setTyped(e.target.value)} />
@@ -140,7 +207,7 @@ export function PiiReview({ source }) {
       </div>
     </div>
     ${menu && html`
-      <div class="review-menu" style=${{ left: `${Math.max(8, menu.left)}px`, top: `${menu.top}px` }}>
+      <div class="review-menu" style=${menuPlace(menu.anchor, area.current)}>
         ${menu.span
           ? html`<button class="primary hide-selection" onClick=${() => correct({ action: "hide", block: menu.span.block, start: menu.span.start, end: menu.span.end })}>${t("Hide from the assistant")}</button>`
           : html`
@@ -148,7 +215,7 @@ export function PiiReview({ source }) {
               <button class=${`primary ${menu.item.hidden ? "menu-show" : "menu-hide"}`} onClick=${() => toggle(menu.item)}>
                 ${menu.item.hidden ? t("Show to the assistant") : t("Hide from the assistant")}
               </button>
-              ${menu.item.user && html`<button class="menu-remove" onClick=${() => remove(menu.item)}>${t("Remove")}</button>`}`}
+              <button class="menu-remove" onClick=${() => remove(menu.item)}>${menu.item.user ? t("Remove") : t("Not personal data")}</button>`}
         <button class="menu-cancel" onClick=${closeMenu}>${t("Cancel")}</button>
       </div>`}`;
 }
