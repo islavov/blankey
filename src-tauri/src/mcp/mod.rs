@@ -71,8 +71,15 @@ mod tests {
     use super::*;
     use serde_json::{json, Value};
 
+    /// No pooled keep-alive connections: reusing one the server has already closed fails the next read
+    /// ("failed to read exact buffer length ... Invalid argument" on macOS runners).
+    fn agent() -> ureq::Agent {
+        ureq::AgentBuilder::new().max_idle_connections(0).build()
+    }
+
     fn post(port: u16, body: Value, origin: Option<&str>) -> (u16, Value) {
-        let mut request = ureq::post(&format!("http://127.0.0.1:{port}/mcp"))
+        let mut request = agent()
+            .post(&format!("http://127.0.0.1:{port}/mcp"))
             .set("Content-Type", "application/json")
             .set("Accept", "application/json, text/event-stream");
         if let Some(origin) = origin {
@@ -93,7 +100,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(serve(app.clone(), listener, std::future::pending()));
         tokio::task::spawn_blocking(move || {
-            let health = ureq::get(&format!("http://127.0.0.1:{port}/health")).call().unwrap().into_string().unwrap();
+            let health = agent().get(&format!("http://127.0.0.1:{port}/health")).call().unwrap().into_string().unwrap();
             assert_eq!(health, "blankey");
             let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
                 "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}});
