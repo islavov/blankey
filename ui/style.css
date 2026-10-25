@@ -78,7 +78,7 @@ button {
   background: var(--input);
   border-radius: 6px;
   padding: 4px 11px;
-  cursor: default;
+  cursor: pointer;
   white-space: nowrap;
 }
 button:hover:not(:disabled) { background: var(--hover); }
@@ -88,7 +88,7 @@ button.danger { color: var(--danger); }
 button.primary.danger { background: var(--danger); border-color: var(--danger); color: var(--danger-text); }
 button.primary.danger:hover:not(:disabled) { background: var(--danger); }
 button.ghost { border-color: transparent; background: transparent; }
-button:disabled { opacity: 0.45; }
+button:disabled { opacity: 0.45; cursor: default; }
 
 input[type=text], input[type=password], input[type=search], select, textarea {
   border: 1px solid var(--line);
@@ -386,4 +386,5 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .relay-row { display: flex; align-items: center; gap: 10px; min-height: 28px; }
 .relay-row > .muted:first-child { width: 110px; flex: none; }
 .relay-row .pill { margin: 0; }
+.relay-row select { width: 160px; flex: none; }
 .relay-head { font-size: 11px; font-weight: 600; color: var(--muted); }
