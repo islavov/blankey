@@ -76,7 +76,9 @@ impl Telemetry {
     /// matters here: a wrong key or no network is logged, the choice stands.
     pub async fn set_enabled(&self, enabled: bool) -> Result<(), String> {
         *self.enabled.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = enabled;
-        let config = Config { telemetry: enabled, ..self.app.config.clone() };
+        // as it is on disk now, so other settings changed since launch stay
+        let mut config = Config::load_from(self.app.config.data_dir.clone()).map_err(|e| e.to_string())?;
+        config.telemetry = enabled;
         config.save().map_err(|e| e.to_string())?;
         self.app.audit("user", if enabled { "telemetry_on" } else { "telemetry_off" }, "");
         if let Err(e) = self.send(!enabled).await {

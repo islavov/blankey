@@ -230,8 +230,8 @@ test("documents: collected files sit with generated ones and use their own comma
 });
 
 test("signed out with no links: the page offers to sign in", async () => {
-  await goTo("Connections");
-  await action("Sign out");
+  await click($("#settings-btn"));
+  await click(byText(".relay button", "Sign out"));
   backend.db.links = [];
   await goTo("Collection links");
   await settle();

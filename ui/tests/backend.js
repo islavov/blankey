@@ -221,7 +221,8 @@ export function createBackend(db = seed()) {
       mcp_url: "http://127.0.0.1:8765/mcp",
       mcp_running: true,
       field_types: ["text", "date", "egn", "email", "bool"],
-      language: db.language || "en",
+      language: db.deviceLanguage || db.language || "en",
+      device_language: db.deviceLanguage ?? null,
       languages: { en: "English", bg: "Български" },
     }),
     setup: ({ password }) => {
@@ -401,6 +402,9 @@ export function createBackend(db = seed()) {
     fill_close: ({ args }) => removeRequest(args.request_id),
     catalog: ({ language }) => (language === "en" ? {} : JSON.parse(readFileSync(new URL(`../i18n/${language}.json`, import.meta.url), "utf8"))),
     focused: () => null,
+    language_set: ({ language }) => {
+      db.deviceLanguage = language;
+    },
     log_error: () => null,
     telemetry_status: () => db.telemetry,
     telemetry_set: ({ enabled }) => {

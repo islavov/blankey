@@ -87,6 +87,8 @@ pub struct Blankey {
     on_library_change: RwLock<LibraryHook>,
     /// the UI language (i18n); MCP output stays English
     language: RwLock<String>,
+    /// the language picked in Settings, which the account's language never overrides
+    device_language: RwLock<Option<String>>,
 }
 
 impl Blankey {
@@ -94,6 +96,7 @@ impl Blankey {
         let vault = Vault::open(&config.db_path(), secrets).map_err(|e| e.to_string())?;
         let templates = TemplateStore::new(config.templates_dir());
         let library = Library::open(&config.library_db_path())?;
+        let device_language = config.language.clone();
         Ok(Self {
             config,
             vault: Mutex::new(vault),
@@ -102,7 +105,8 @@ impl Blankey {
             on_request: RwLock::new(Box::new(|_| {})),
             on_unlock_needed: RwLock::new(Box::new(|_| {})),
             on_library_change: RwLock::new(Box::new(|| {})),
-            language: RwLock::new(crate::i18n::resolve(None)),
+            language: RwLock::new(crate::i18n::resolve(device_language.as_deref(), None)),
+            device_language: RwLock::new(device_language),
         })
     }
 
@@ -123,6 +127,19 @@ impl Blankey {
 
     pub fn set_language(&self, language: &str) {
         *self.language.write().unwrap() = language.to_string();
+    }
+
+    pub fn device_language(&self) -> Option<String> {
+        self.device_language.read().unwrap().clone()
+    }
+
+    pub fn set_device_language(&self, language: Option<String>) {
+        *self.device_language.write().unwrap() = language;
+    }
+
+    /// The UI language for the account's language `profile`: the one picked on this computer wins.
+    pub fn resolve_language(&self, profile: Option<&str>) -> String {
+        crate::i18n::resolve(self.device_language().as_deref(), profile)
     }
 
     pub fn set_request_hook(&self, hook: impl Fn(i64) + Send + Sync + 'static) {

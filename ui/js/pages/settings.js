@@ -1,8 +1,9 @@
-import { call, refreshRelay } from "../api.js";
+import { call, refreshRelay, refreshStatus } from "../api.js";
 import { t } from "../i18n.js";
-import { html, matches, reload, useLoad, when } from "../lib.js";
+import { html, matches, reload, useLoad, useStore, when } from "../lib.js";
 import { confirmDialog, dialog, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
+import { Select } from "../ui/select.js";
 import { Table } from "../ui/table.js";
 
 export function stateLabel(state) {
@@ -36,8 +37,11 @@ function updateLabel(update) {
   return labels[update.state] || "";
 }
 
-/** Web agents (claude.ai) reaching Blankey through a relay. */
-export function Connections() {
+const copy = (text) => call("copy_text", { text }).then(() => toast(t("Copied.")));
+
+/** This computer's settings, the local MCP server, and web agents (claude.ai) reaching Blankey through a relay. */
+export function Settings() {
+  const { status } = useStore();
   const info = useLoad(() => call("relay_status"), []);
   const telemetry = useLoad(() => call("telemetry_status"), []);
   const update = useLoad(() => call("update_status"), []);
@@ -49,6 +53,12 @@ export function Connections() {
     await call("relay_logout");
     await refreshRelay();
     reload();
+  };
+
+  // the window switches when the backend announces the new language
+  const setLanguage = async (code) => {
+    await call("language_set", { language: code || null }).catch(() => {});
+    await refreshStatus();
   };
 
   const useCustom = async () => {
@@ -79,44 +89,14 @@ export function Connections() {
   };
 
   const rows = info.grants.map((g) => ({ ...g, id: g.grant_id })).filter((g) => matches(g.client_name, g.redirect_host));
+  const languages = [["", t("Default")], ...Object.entries(status.languages)];
   return html`
-    <${Page} title=${t("Connections")} subtitle=${t("Web agents such as claude.ai, through Blankey Online")}
-      actions=${[info.signed_in ? [t("Sign out"), signOut] : [t("Sign in"), relaySignIn, "primary"]]}>
+    <${Page} title=${t("Settings")}>
       <div class="relay">
+        <div class="relay-head">${t("General")}</div>
         <div class="relay-row">
-          <span class="muted">${t("Online server")}</span>
-          <span class="mono selectable" id="relay-url">${info.url}</span>
-          ${info.official && html`<span class="pill">${t("official")}</span>`}
-          <span class="spacer"></span>
-          <button onClick=${useCustom}>${t("Another online server…")}</button>
-          ${!info.official && html`<button onClick=${resetOfficial}>${t("Reset to official")}</button>`}
-        </div>
-        ${info.mcp_url && html`
-          <div class="relay-row">
-            <span class="muted">${t("Connector URL")}</span>
-            <span class="mono selectable" id="relay-mcp-url">${info.mcp_url}</span>
-            <button class="link" onClick=${() => call("copy_text", { text: info.mcp_url }).then(() => toast(t("Copied.")))}>${t("Copy")}</button>
-          </div>`}
-        ${info.signed_in && info.account && html`
-          <div class="relay-row">
-            <span class="muted">${t("Account")}</span>
-            <span class="selectable" id="relay-account">${info.account}</span>
-          </div>`}
-        <div class="relay-row">
-          <span class="muted">${t("Status")}</span>
-          <span class=${`dot ${state === "connected" ? "up" : state === "signed_out" ? "" : "down"}`}></span>
-          <span id="relay-state">${stateLabel(state)}</span>
-          ${info.message && html`<span class="muted small">${info.message}</span>`}
-          <span class="spacer"></span>
-          ${info.account_url && html`<button class="link" onClick=${() => call("relay_open_account")}>${t("Account and billing")}</button>`}
-        </div>
-        <div class="relay-row">
-          <span class="muted">${t("Statistics")}</span>
-          <label class="check small">
-            <input type="checkbox" id="telemetry" checked=${telemetry} onChange=${(e) => call("telemetry_set", { enabled: e.target.checked }).then(reload, reload)} />
-            ${t("Share anonymous usage statistics")}
-          </label>
-          <span class="muted small">${t("How many documents, templates, fill sets and profiles Blankey makes each month, its version and platform, under a random id. Never names or contents.")}</span>
+          <span class="muted">${t("Language")}</span>
+          <${Select} id="language" value=${status.device_language ?? ""} options=${languages} onChange=${setLanguage} />
         </div>
         <div class="relay-row">
           <span class="muted">${t("Version")}</span>
@@ -134,6 +114,54 @@ export function Connections() {
             <input type="checkbox" id="auto-update" checked=${update.auto} onChange=${(e) => call("update_auto_set", { enabled: e.target.checked }).then(reload, reload)} />
             ${t("Check for new versions automatically")}
           </label>
+        </div>
+        <div class="relay-row">
+          <span class="muted">${t("Statistics")}</span>
+          <label class="check small">
+            <input type="checkbox" id="telemetry" checked=${telemetry} onChange=${(e) => call("telemetry_set", { enabled: e.target.checked }).then(reload, reload)} />
+            ${t("Share anonymous usage statistics")}
+          </label>
+          <span class="muted small">${t("How many documents, templates, fill sets and profiles Blankey makes each month, its version and platform, under a random id. Never names or contents.")}</span>
+        </div>
+        <div class="relay-row">
+          <span class="muted">${t("MCP server")}</span>
+          <span class=${`dot ${status.mcp_running ? "up" : "down"}`}></span>
+          <span id="mcp-state">${status.mcp_running ? t("MCP on port {port}", { port: new URL(status.mcp_url).port }) : t("MCP is down")}</span>
+          <span class="mono selectable" id="mcp-url">${status.mcp_url}</span>
+          <button class="link" onClick=${() => copy(status.mcp_url)}>${t("Copy")}</button>
+        </div>
+      </div>
+      <div class="relay">
+        <div class="relay-head">${t("Blankey Online")}</div>
+        <div class="relay-row">
+          <span class="muted">${t("Online server")}</span>
+          <span class="mono selectable" id="relay-url">${info.url}</span>
+          ${info.official && html`<span class="pill">${t("official")}</span>`}
+          <span class="spacer"></span>
+          ${info.signed_in
+            ? html`<button onClick=${signOut}>${t("Sign out")}</button>`
+            : html`<button class="primary" onClick=${relaySignIn}>${t("Sign in")}</button>`}
+          <button onClick=${useCustom}>${t("Another online server…")}</button>
+          ${!info.official && html`<button onClick=${resetOfficial}>${t("Reset to official")}</button>`}
+        </div>
+        ${info.mcp_url && html`
+          <div class="relay-row">
+            <span class="muted">${t("Connector URL")}</span>
+            <span class="mono selectable" id="relay-mcp-url">${info.mcp_url}</span>
+            <button class="link" onClick=${() => copy(info.mcp_url)}>${t("Copy")}</button>
+          </div>`}
+        ${info.signed_in && info.account && html`
+          <div class="relay-row">
+            <span class="muted">${t("Account")}</span>
+            <span class="selectable" id="relay-account">${info.account}</span>
+          </div>`}
+        <div class="relay-row">
+          <span class="muted">${t("Status")}</span>
+          <span class=${`dot ${state === "connected" ? "up" : state === "signed_out" ? "" : "down"}`}></span>
+          <span id="relay-state">${stateLabel(state)}</span>
+          ${info.message && html`<span class="muted small">${info.message}</span>`}
+          <span class="spacer"></span>
+          ${info.account_url && html`<button class="link" onClick=${() => call("relay_open_account")}>${t("Account and billing")}</button>`}
         </div>
       </div>
       ${rows.length

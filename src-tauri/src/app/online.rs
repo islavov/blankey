@@ -43,7 +43,7 @@ pub fn init(handle: &AppHandle, app: &Arc<Blankey>) -> Arc<Relay> {
     let approver = Arc::new(DialogApprover(handle.clone()));
     let relay = Arc::new(Relay::new(app.clone(), Box::new(tokens), approver, runtime));
     handle.manage(relay.clone());
-    app.set_language(&i18n::resolve(relay.language().as_deref()));
+    app.set_language(&app.resolve_language(relay.language().as_deref()));
     let mut status = relay.subscribe();
     let status_handle = handle.clone();
     tauri::async_runtime::spawn(async move {
@@ -57,22 +57,28 @@ pub fn init(handle: &AppHandle, app: &Arc<Blankey>) -> Arc<Relay> {
     let (handle, app) = (handle.clone(), app.clone());
     tauri::async_runtime::spawn(async move {
         while language.changed().await.is_ok() {
-            let resolved = i18n::resolve(language.borrow_and_update().as_deref());
-            if resolved != app.language() {
-                app.set_language(&resolved);
-                tray::refresh(&handle);
-                let _ = handle.emit("language-changed", resolved);
-            }
+            let profile = language.borrow_and_update().clone();
+            refresh_language(&handle, &app, profile.as_deref());
         }
     });
     relay
+}
+
+/// Switches the tray and the window when the language for the account's `profile` language is a new one.
+pub fn refresh_language(handle: &AppHandle, app: &Blankey, profile: Option<&str>) {
+    let resolved = app.resolve_language(profile);
+    if resolved != app.language() {
+        app.set_language(&resolved);
+        tray::refresh(handle);
+        let _ = handle.emit("language-changed", resolved);
+    }
 }
 
 pub fn relay(handle: &AppHandle) -> Option<Arc<Relay>> {
     handle.try_state::<Arc<Relay>>().map(|relay| relay.inner().clone())
 }
 
-pub fn show_connections(handle: &AppHandle) {
+pub fn show_settings(handle: &AppHandle) {
     show_main(handle);
-    let _ = handle.emit("show-page", "connections");
+    let _ = handle.emit("show-page", "settings");
 }

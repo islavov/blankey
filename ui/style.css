@@ -139,10 +139,6 @@ input[type=checkbox] { accent-color: var(--accent); }
 .nav-item svg { width: 16px; height: 16px; color: var(--accent); flex: none; }
 .badge { margin-left: auto; font-size: 11px; font-weight: 600; background: var(--selected); border-radius: 9px; padding: 0 7px; }
 .sidebar-foot { padding: 10px 12px 12px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
-.mcp-status {
-  display: flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 8px;
-  background: var(--hover); color: var(--muted); font-size: 11.5px; overflow: hidden; white-space: nowrap;
-}
 .foot-status {
   display: flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 8px; border: 0; min-width: 0;
   background: var(--hover); color: var(--text); font-size: 11.5px; text-align: left; cursor: pointer;
@@ -154,6 +150,8 @@ input[type=checkbox] { accent-color: var(--accent); }
 .foot-actions #lock-btn { flex: 1; padding: 0 10px; }
 .relay-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .foot-actions .icon-btn { width: 32px; padding: 0; flex: none; }
+.foot-actions .icon-btn.active { background: var(--selected); }
+.foot-actions .icon-btn.active svg { color: var(--accent); }
 .foot-actions svg { width: 14px; height: 14px; color: var(--muted); }
 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
 .dot.up { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
@@ -388,3 +386,4 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .relay-row { display: flex; align-items: center; gap: 10px; min-height: 28px; }
 .relay-row > .muted:first-child { width: 110px; flex: none; }
 .relay-row .pill { margin: 0; }
+.relay-head { font-size: 11px; font-weight: 600; color: var(--muted); }
