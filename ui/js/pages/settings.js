@@ -171,8 +171,8 @@ export function Settings() {
               { title: t("Agent"), cell: (g) => g.client_name },
               { title: t("Host"), cell: (g) => html`<span class="mono">${g.redirect_host}</span>` },
               { title: t("Accepted"), cell: (g) => html`<span class="muted">${when(g.accepted_at)}</span>`, cls: "nowrap" },
-              { title: "", cell: (g) => (g.on_relay === false ? html`<span class="muted small">${t("gone from Blankey Online")}</span>` : ""), cls: "nowrap" },
-              { title: "", cell: (g) => html`<button class="danger" onClick=${() => revoke(g)}>${t("Revoke")}</button>`, cls: "nowrap" },
+              { title: "", cell: (g) => (g.on_relay === false ? html`<span class="muted small">${t("gone from Blankey Online")}</span>` : ""), cls: "wide nowrap" },
+              { title: "", cell: (g) => html`<button class="danger" onClick=${() => revoke(g)}>${t("Revoke")}</button>`, cls: "nowrap end" },
             ]} />`
         : html`<${Empty}>${t("No web agents yet.")}<br /><span class="small">${t("Add the connector URL as a custom connector in claude.ai, then allow it when Blankey asks.")}</span></${Empty}>`}
     </${Page}>`;

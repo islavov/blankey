@@ -388,3 +388,5 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .relay-row .pill { margin: 0; }
 .relay-row select { width: 160px; flex: none; }
 .relay-head { font-size: 11px; font-weight: 600; color: var(--muted); }
+/* lines up with the buttons in the rows above */
+.grid td.end { text-align: right; padding-right: 16px; }
