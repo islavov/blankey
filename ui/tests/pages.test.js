@@ -35,8 +35,7 @@ test("documents: cmd-click selects several, delete asks first", async () => {
   await action("Delete");
   await submit($(".modal form"));
   assert.deepEqual(backend.called("delete_documents")[0].ids, [2, 1]);
-  assert.equal(backend.called("delete_collected_files").length, 0);
-  assert.equal(text(".empty"), "No documents yet. Documents are generated from fill sets or collected through links.");
+  assert.equal(text(".empty"), "No documents yet. Documents are generated from fill sets.");
 });
 
 test("search filters the current page and clears on navigation", async () => {

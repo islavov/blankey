@@ -1,6 +1,7 @@
 import { useEffect, useState } from "../vendor/preact-htm.js";
 import { invoke, refreshRelay } from "./api.js";
 import { t } from "./i18n.js";
+import { HelpBox, helpEnabled } from "./help.js";
 import { html, Icon, update, useStore } from "./lib.js";
 import { Activity } from "./pages/activity.js";
 import { Documents } from "./pages/documents.js";
@@ -39,25 +40,26 @@ export function App() {
           <div class="nav-section">${section()}</div>
           ${ids.map((id) => html`<${NavItem} id=${id} active=${id === page} pending=${id === "activity" && status.pending} />`)}`)}
         </nav>
+        ${helpEnabled() && html`<${HelpBox} page=${page} />`}
         <div class="sidebar-foot">
           <${RelayStatus} />
           <div class="foot-actions">
-            <button id="lock-btn" title=${t("Lock the vault")} onClick=${() => invoke("lock")}><${Icon} name="lock" /> ${t("Lock")}</button>
+            <button id="lock-btn" data-help="sidebar.lock" title=${t("Lock the vault")} onClick=${() => invoke("lock")}><${Icon} name="lock" /> ${t("Lock")}</button>
             <${ThemeSwitch} />
-            <button id="settings-btn" class=${`icon-btn ${page === "settings" ? "active" : ""}`} title=${t("Settings")}
+            <button id="settings-btn" data-help="sidebar.settings" class=${`icon-btn ${page === "settings" ? "active" : ""}`} title=${t("Settings")}
               aria-label=${t("Settings")} onClick=${() => update({ page: "settings", search: "" })}>
               <${Icon} name="settings" />
             </button>
           </div>
         </div>
       </aside>
-      <main class="main"><${Current} key=${page} /></main>
+      <main class="main" data-help=${`page.${page}`}><${Current} key=${page} /></main>
     </div>`;
 }
 
 function NavItem({ id, active, pending }) {
   return html`
-    <div class=${`nav-item ${active ? "active" : ""}`} onClick=${() => update({ page: id, search: "" })}>
+    <div class=${`nav-item ${active ? "active" : ""}`} data-help=${`nav.${id}`} onClick=${() => update({ page: id, search: "" })}>
       <${Icon} name=${id} />${PAGES[id].title()}
       ${pending > 0 && html`<span class="badge">${pending}</span>`}
     </div>`;
@@ -71,18 +73,18 @@ function RelayStatus() {
   }, []);
   if (!relay) return null;
   if (relay.state === "signing_in") {
-    return html`<button id="relay-btn" class="foot-status" disabled><${Icon} name="connections" /> ${t("Signing in…")}</button>`;
+    return html`<button id="relay-btn" class="foot-status" data-help="sidebar.relay" disabled><${Icon} name="connections" /> ${t("Signing in…")}</button>`;
   }
   if (!relay.signed_in) {
     return html`
-      <button id="relay-btn" class="foot-status" title=${t("Sign in to Blankey Online so web agents such as claude.ai can reach Blankey")}
+      <button id="relay-btn" class="foot-status" data-help="sidebar.relay" title=${t("Sign in to Blankey Online so web agents such as claude.ai can reach Blankey")}
         onClick=${() => relaySignIn().catch(() => {})}><${Icon} name="connections" /> ${t("Sign in to Blankey Online")}</button>`;
   }
   const account = relay.account ?? t("Signed in");
   const title = t("Blankey Online: {account}, {state}", { account, state: stateLabel(relay.state) });
   const dot = relay.state === "connected" ? "up" : "down";
   return html`
-    <button id="relay-btn" class="foot-status" title=${title} onClick=${() => update({ page: "settings", search: "" })}>
+    <button id="relay-btn" class="foot-status" data-help="sidebar.relay" title=${title} onClick=${() => update({ page: "settings", search: "" })}>
       <span class=${`dot ${dot}`}></span><span class="relay-name">${account}</span>
     </button>`;
 }
@@ -96,7 +98,7 @@ function ThemeSwitch() {
     setThemeState(next);
   };
   return html`
-    <button class="icon-btn" title=${switchLabel} aria-label=${switchLabel} onClick=${toggle}>
+    <button class="icon-btn" data-help="sidebar.theme" title=${switchLabel} aria-label=${switchLabel} onClick=${toggle}>
       <${Icon} name=${theme === "dark" ? "sun" : "moon"} />
     </button>`;
 }

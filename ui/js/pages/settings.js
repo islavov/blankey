@@ -1,4 +1,5 @@
 import { call, refreshRelay, refreshStatus } from "../api.js";
+import { helpEnabled, setHelpEnabled } from "../help.js";
 import { t } from "../i18n.js";
 import { html, matches, reload, useLoad, useStore, when } from "../lib.js";
 import { confirmDialog, dialog, toast } from "../ui/feedback.js";
@@ -94,11 +95,11 @@ export function Settings() {
     <${Page} title=${t("Settings")}>
       <div class="relay">
         <div class="relay-head">${t("General")}</div>
-        <div class="relay-row">
+        <div class="relay-row" data-help="settings.language">
           <span class="muted">${t("Language")}</span>
           <${Select} id="language" value=${status.device_language ?? ""} options=${languages} onChange=${setLanguage} />
         </div>
-        <div class="relay-row">
+        <div class="relay-row" data-help="settings.version">
           <span class="muted">${t("Version")}</span>
           <span class="mono selectable" id="app-version">${update.current}</span>
           <span id="update-state">${updateLabel(update)}</span>
@@ -108,14 +109,14 @@ export function Settings() {
           ${update.state === "available" && html`<button class="primary" onClick=${() => call("update_install")}>${t("Download")}</button>`}
           <button disabled=${busy} onClick=${() => call("update_check").then(reload, reload)}>${t("Check now")}</button>
         </div>
-        <div class="relay-row">
+        <div class="relay-row" data-help="settings.updates">
           <span class="muted">${t("Updates")}</span>
           <label class="check small">
             <input type="checkbox" id="auto-update" checked=${update.auto} onChange=${(e) => call("update_auto_set", { enabled: e.target.checked }).then(reload, reload)} />
             ${t("Check for new versions automatically")}
           </label>
         </div>
-        <div class="relay-row">
+        <div class="relay-row" data-help="settings.statistics">
           <span class="muted">${t("Statistics")}</span>
           <label class="check small">
             <input type="checkbox" id="telemetry" checked=${telemetry} onChange=${(e) => call("telemetry_set", { enabled: e.target.checked }).then(reload, reload)} />
@@ -123,7 +124,14 @@ export function Settings() {
           </label>
           <span class="muted small">${t("How many documents, templates, fill sets and profiles Blankey makes each month, its version and platform, under a random id. Never names or contents.")}</span>
         </div>
-        <div class="relay-row">
+        <div class="relay-row" data-help="settings.help">
+          <span class="muted">${t("Help")}</span>
+          <label class="check small">
+            <input type="checkbox" id="help-box" checked=${helpEnabled()} onChange=${(e) => setHelpEnabled(e.target.checked)} />
+            ${t("Show the help box in the sidebar")}
+          </label>
+        </div>
+        <div class="relay-row" data-help="settings.mcp">
           <span class="muted">${t("MCP server")}</span>
           <span class=${`dot ${status.mcp_running ? "up" : "down"}`}></span>
           <span id="mcp-state">${status.mcp_running ? t("MCP on port {port}", { port: new URL(status.mcp_url).port }) : t("MCP is down")}</span>
@@ -133,7 +141,7 @@ export function Settings() {
       </div>
       <div class="relay">
         <div class="relay-head">${t("Blankey Online")}</div>
-        <div class="relay-row">
+        <div class="relay-row" data-help="settings.relay">
           <span class="muted">${t("Online server")}</span>
           <span class="mono selectable" id="relay-url">${info.url}</span>
           ${info.official && html`<span class="pill">${t("official")}</span>`}
@@ -145,17 +153,17 @@ export function Settings() {
           ${!info.official && html`<button onClick=${resetOfficial}>${t("Reset to official")}</button>`}
         </div>
         ${info.mcp_url && html`
-          <div class="relay-row">
+          <div class="relay-row" data-help="settings.connector">
             <span class="muted">${t("Connector URL")}</span>
             <span class="mono selectable" id="relay-mcp-url">${info.mcp_url}</span>
             <button class="link" onClick=${() => copy(info.mcp_url)}>${t("Copy")}</button>
           </div>`}
         ${info.signed_in && info.account && html`
-          <div class="relay-row">
+          <div class="relay-row" data-help="settings.account">
             <span class="muted">${t("Account")}</span>
             <span class="selectable" id="relay-account">${info.account}</span>
           </div>`}
-        <div class="relay-row">
+        <div class="relay-row" data-help="settings.status">
           <span class="muted">${t("Status")}</span>
           <span class=${`dot ${state === "connected" ? "up" : state === "signed_out" ? "" : "down"}`}></span>
           <span id="relay-state">${stateLabel(state)}</span>
@@ -165,7 +173,7 @@ export function Settings() {
         </div>
       </div>
       ${rows.length
-        ? html`<${Table}
+        ? html`<div data-help="settings.agents"><${Table}
             rows=${rows}
             columns=${[
               { title: t("Agent"), cell: (g) => g.client_name },
@@ -173,7 +181,7 @@ export function Settings() {
               { title: t("Accepted"), cell: (g) => html`<span class="muted">${when(g.accepted_at)}</span>`, cls: "nowrap" },
               { title: "", cell: (g) => (g.on_relay === false ? html`<span class="muted small">${t("gone from Blankey Online")}</span>` : ""), cls: "wide nowrap" },
               { title: "", cell: (g) => html`<button class="danger" onClick=${() => revoke(g)}>${t("Revoke")}</button>`, cls: "nowrap end" },
-            ]} />`
+            ]} /></div>`
         : html`<${Empty}>${t("No web agents yet.")}<br /><span class="small">${t("Add the connector URL as a custom connector in claude.ai, then allow it when Blankey asks.")}</span></${Empty}>`}
     </${Page}>`;
 }

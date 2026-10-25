@@ -1,7 +1,7 @@
 import { t } from "../i18n.js";
 import { html, update, useStore } from "../lib.js";
 
-/** Toolbar (title, subtitle, action buttons, search) above the page content. actions: [label, onClick, class?] */
+/** Toolbar (title, subtitle, action buttons, search) above the page content. actions: [label, onClick, class?, help?] */
 export function Page({ title, subtitle = "", actions = [], children }) {
   const { search } = useStore();
   return html`
@@ -12,9 +12,9 @@ export function Page({ title, subtitle = "", actions = [], children }) {
       </div>
       <div class="toolbar-actions">
         <span id="page-actions">
-          ${actions.map(([label, onClick, cls = ""]) => html`<button class=${cls} onClick=${onClick}>${label}</button>`)}
+          ${actions.map(([label, onClick, cls = "", help]) => html`<button class=${cls} data-help=${help} onClick=${onClick}>${label}</button>`)}
         </span>
-        <input id="search" type="search" placeholder=${t("Search")} spellcheck="false" value=${search}
+        <input id="search" type="search" data-help="search" placeholder=${t("Search")} spellcheck="false" value=${search}
           onInput=${(e) => update({ search: e.target.value })} />
       </div>
     </header>

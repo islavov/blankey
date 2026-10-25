@@ -46,7 +46,7 @@ const CATEGORIES = {
 export function Templates() {
   const [view, setView] = useRemembered("templates-view", "templates");
   const switcher = html`
-    <div class="filters">
+    <div class="filters" data-help="templates.view">
       ${[["templates", t("Templates")], ["folders", t("Folders")]].map(([id, label]) => html`
         <button class=${`chip ${view === id ? "active" : ""}`} onClick=${() => setView(id)}>${label}</button>`)}
     </div>`;
@@ -84,15 +84,15 @@ function TemplateList({ switcher }) {
 
   return html`
     <${Page} title=${t("Templates")} subtitle=${tn(templates.length, "{n} template", "{n} templates")} actions=${[
-      [t("Fill"), needAll((ids) => openFill({ templates: ids }))],
-      [t("Copy ID"), need(copyId)],
-      [t("Delete"), needAll(remove), "danger"],
+      [t("Fill"), needAll((ids) => openFill({ templates: ids })), "", "templates.fill"],
+      [t("Copy ID"), need(copyId), "", "templates.copyid"],
+      [t("Delete"), needAll(remove), "danger", "templates.delete"],
     ]}>
       ${switcher}
       ${templates.length
         ? html`
             <div class="split">
-              <div class="list">
+              <div class="list" data-help="templates.list">
                 ${visible.map(
                   (tpl) => html`<${Card} key=${tpl.id} tpl=${tpl} active=${selected.includes(tpl.id)} onSelect=${(e) => pick(e, tpl.id, order, selected)} />`
                 )}
@@ -144,12 +144,12 @@ function TemplateDetail({ template }) {
         <h3>${tpl.name}</h3>
         <div class="muted small"><span class="mono selectable">${tpl.id}</span>${info.map((part) => ` \u00a0·\u00a0 ${part}`)}</div>
       </div>
-      <button onClick=${() => copyId(tpl.id)}>${t("Copy ID")}</button>
-      <button onClick=${() => call("show_template_folder", { id: tpl.id })}>${t("Show in Finder")}</button>
+      <button data-help="templates.copyid" onClick=${() => copyId(tpl.id)}>${t("Copy ID")}</button>
+      <button data-help="templates.folder" onClick=${() => call("show_template_folder", { id: tpl.id })}>${t("Show in Finder")}</button>
     </div>
-    <${Preview} key=${tpl.id} preview=${data.preview} interactive=${false} style="margin-top:12px" />
-    <h4>${t("Bindings")}</h4>
-    <table class="kv selectable">
+    <${Preview} key=${tpl.id} preview=${data.preview} interactive=${false} style="margin-top:12px" help="templates.preview" />
+    <h4 data-help="templates.bindings">${t("Bindings")}</h4>
+    <table class="kv selectable" data-help="templates.bindings">
       <tbody>
         ${Object.entries(data.fields).map(
           ([name, expr]) => html`
@@ -198,17 +198,17 @@ function Folders({ switcher }) {
 
   return html`
     <${Page} title=${t("Templates")} subtitle=${tn(roots.length, "{n} folder", "{n} folders")} actions=${[
-      [t("Add folder…"), add, "primary"],
-      [t("Rescan"), rescan],
+      [t("Add folder…"), add, "primary", "folders.add"],
+      [t("Rescan"), rescan, "", "folders.rescan"],
     ]}>
       ${switcher}
       ${roots.length
         ? html`
             <div class="split">
-              <div class="list">
+              <div class="list" data-help="folders.files">
                 <div class="roots">
                   ${roots.map((root) => html`
-                    <div class="root" key=${root.id}>
+                    <div class="root" key=${root.id} data-help="folders.root">
                       <div class="root-path" title=${root.path}>
                         <div class="title">${root.path.split(/[\\/]/).filter(Boolean).pop()}</div>
                         <div class="muted small">${tn(root.files, "{n} file", "{n} files")}</div>
@@ -269,9 +269,9 @@ function FileDetail({ file, onReveal }) {
         <h3>${fileName(f)}</h3>
         <div class="muted small"><span class="mono selectable">${f.rel_path}</span>${info.map((part) => ` \u00a0·\u00a0 ${part}`)}</div>
       </div>
-      <button class="check-pii" onClick=${() => openReview(f)}>${t("Personal data…")}</button>
-      <button onClick=${() => call("open_library_file", { id: f.id })}>${t("Open")}</button>
-      <button onClick=${onReveal}>${t("Show in Finder")}</button>
+      <button class="check-pii" data-help="folders.pii" onClick=${() => openReview(f)}>${t("Personal data…")}</button>
+      <button data-help="folders.open" onClick=${() => call("open_library_file", { id: f.id })}>${t("Open")}</button>
+      <button data-help="folders.reveal" onClick=${onReveal}>${t("Show in Finder")}</button>
     </div>
-    <${Preview} key=${f.id} preview=${preview} interactive=${false} style="margin-top:12px" />`;
+    <${Preview} key=${f.id} preview=${preview} interactive=${false} style="margin-top:12px" help="templates.preview" />`;
 }

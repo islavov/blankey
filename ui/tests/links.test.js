@@ -206,27 +206,37 @@ test("delete asks first and removes the link", async () => {
   assert.equal($(".side"), null);
 });
 
-test("documents: collected files sit with generated ones and use their own commands", async () => {
+test("collected files are kept with their profile, not under Documents", async () => {
   await goTo("Documents");
-  const listed = rows();
-  assert.equal(listed.length, 3);
-  const collected = listed.find((r) => r.includes("payslip.pdf"));
-  assert.ok(collected.includes("Collected") && collected.includes("Tenant details · John") && collected.includes("3.0 MB"), collected);
+  assert.equal(rows().length, 2);
+  assert.ok(!rows().some((r) => r.includes("payslip.pdf")));
 
-  const row = $$(".grid tbody tr").find((tr) => tr.textContent.includes("payslip.pdf"));
-  await click(row);
-  await action("Open");
+  await goTo("Profiles");
+  assert.equal(text(".detail h3"), "John");
+  const file = $(".profile-files .file-row");
+  assert.ok(text(".name", file) === "payslip.pdf" && text(".small", file).includes("Tenant details") && text(".small", file).includes("3.0 MB"));
+
+  await click(byText(".profile-files button", "Open"));
   assert.deepEqual(backend.called("open_collected_files").at(-1), { ids: [4] });
-  assert.equal(backend.called("open_documents").length, 0);
-  await action("Export");
+  await click(byText(".profile-files button", "Export"));
   assert.deepEqual(backend.called("export_collected_file").at(-1), { id: 4 });
+  assert.equal(text("#toast"), "Saved to /tmp/payslip.pdf");
 
-  await click($$(".grid tbody tr").find((tr) => tr.textContent.includes("Loan")));
-  await click(row, { metaKey: true });
-  await action("Delete");
+  await click(byText(".profile-files button", "Delete"));
+  assert.equal(text(".modal h3"), "Delete \"payslip.pdf\"?");
   await submit($(".modal form"));
   assert.deepEqual(backend.called("delete_collected_files").at(-1), { ids: [4] });
-  assert.deepEqual(backend.called("delete_documents").at(-1), { ids: [2] });
+  assert.equal($(".profile-files .file-row"), null);
+});
+
+test("files can be added to any profile, also one without collection links", async () => {
+  await goTo("Profiles");
+  await click(byText(".list-item .title", "Acme").parentElement);
+  assert.equal($(".profile-files .file-row"), null);
+  await click(byText(".files-head button", "Add files…"));
+  assert.deepEqual(backend.called("add_profile_files").at(-1), { profileId: 2 });
+  assert.equal(text("#toast"), "1 file added");
+  assert.equal(text(".profile-files .file-row .name"), "id-card.jpg");
 });
 
 test("signed out with no links: the page offers to sign in", async () => {

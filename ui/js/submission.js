@@ -1,5 +1,6 @@
 import { useState } from "../vendor/preact-htm.js";
 import { call } from "./api.js";
+import { HelpNote } from "./help.js";
 import { problemText, t, tn } from "./i18n.js";
 import { html, megabytes, placeholder, useLoad, when } from "./lib.js";
 import { confirmDialog, toast } from "./ui/feedback.js";
@@ -88,15 +89,15 @@ function SubmissionSheet({ submission, close }) {
     </div>
     <div class="sheet-body">
       <form class="input-form" autocomplete="off" onSubmit=${(e) => (e.preventDefault(), save())}>
-        <label>${t("Save into")}</label>
-        <${Select} name="profile" value=${profileId} options=${options} onChange=${(v) => setProfileId(v === "new" ? "new" : Number(v))} />
+        <label data-help="submission.profile">${t("Save into")}</label>
+        <${Select} name="profile" data-help="submission.profile" value=${profileId} options=${options} onChange=${(v) => setProfileId(v === "new" ? "new" : Number(v))} />
         ${profileId === "new" && html`
           <label>${t("Profile name")}</label>
           <input type="text" name="__profile" value=${newName} onInput=${(e) => setNewName(e.target.value)} />`}
         ${fields.map(field)}
       </form>
       ${files.length > 0 && html`
-        <div class="files-list">
+        <div class="files-list" data-help="submission.files">
           ${files.map(
             (f) => html`
               <div class="file-row" key=${f.index}>
@@ -105,7 +106,7 @@ function SubmissionSheet({ submission, close }) {
                 <span class="muted small">${megabytes(f.size)}</span>
                 <button class="link" onClick=${() => call("open_submission_file", { sid, index: f.index })}>${t("Open")}</button>
                 <button class="link" onClick=${() => exportFile(f.index)}>${t("Export")}</button>
-                <label class="check-row small" title=${t("Keep an encrypted copy under Documents")}>
+                <label class="check-row small" title=${t("Keep an encrypted copy with the profile")}>
                   <input type="checkbox" class="keep" checked=${keep.includes(f.index)} onChange=${(e) => toggle(f.index, e.target.checked)} /> ${t("Keep")}
                 </label>
               </div>`
@@ -114,9 +115,9 @@ function SubmissionSheet({ submission, close }) {
       <div class="problems" style="max-width:640px;margin:0 auto;padding:0 24px">${problems.map(problemText).join("\n")}</div>
     </div>
     <div class="sheet-foot">
-      <span class="note">${t("Kept files are encrypted in the vault and listed under Documents. This submission stays here until you discard it.")}</span>
-      <button onClick=${discard} class="danger">${t("Discard")}</button>
-      <button onClick=${close}>${saved ? t("Close") : t("Later")}</button>
-      <button class="primary" onClick=${save}>${saved ? t("Save again") : t("Save")}</button>
+      <${HelpNote}>${t("Kept files are encrypted and stored with the profile. This submission stays here until you discard it.")}</${HelpNote}>
+      <button onClick=${discard} class="danger" data-help="submission.discard">${t("Discard")}</button>
+      <button data-help=${saved ? undefined : "submission.later"} onClick=${close}>${saved ? t("Close") : t("Later")}</button>
+      <button class="primary" data-help="submission.save" onClick=${save}>${saved ? t("Save again") : t("Save")}</button>
     </div>`;
 }

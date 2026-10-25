@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "../../vendor/preact-htm.js";
 import { call, invoke } from "../api.js";
+import { HelpNote } from "../help.js";
 import { t, tn } from "../i18n.js";
 import { html, matches, megabytes, reload, state, useLoad, useRemembered, useStore, when } from "../lib.js";
 import { openSubmission } from "../submission.js";
@@ -93,7 +94,7 @@ export function Links() {
         <${Empty}>
           ${t("Sign in to Blankey Online to make collection links.")}<br />
           <span class="small">${t("The person you send a link to fills in a form. What they send is encrypted in their browser and only opens on this computer.")}</span>
-          <div style="margin-top:14px"><button class="primary" onClick=${() => relaySignIn().catch(() => {})}>${t("Sign in")}</button></div>
+          <div style="margin-top:14px"><button class="primary" data-help="links.signin" onClick=${() => relaySignIn().catch(() => {})}>${t("Sign in")}</button></div>
         </${Empty}>
       </${Page}>`;
   }
@@ -106,14 +107,14 @@ export function Links() {
   const pending = links.reduce((n, l) => n + l.pending, 0);
   return html`
     <${Page} title=${t("Collection links")} subtitle=${pending ? tn(pending, "{n} submission to review", "{n} submissions to review") : tn(links.length, "{n} link", "{n} links")} actions=${[
-      [t("New link"), create, "primary"],
-      [t("Copy link"), need((l) => copyLink(l.url))],
-      [t("Revoke"), needAll(revoke)],
-      [t("Delete"), needAll(remove), "danger"],
+      [t("New link"), create, "primary", "links.new"],
+      [t("Copy link"), need((l) => copyLink(l.url)), "", "links.copy"],
+      [t("Revoke"), needAll(revoke), "", "links.revoke"],
+      [t("Delete"), needAll(remove), "danger", "links.delete"],
     ]}>
       <div class=${`links-split ${link ? "with-side" : ""}`}>
         <div class="links-main">
-          <div class="filters">
+          <div class="filters" data-help="links.filters">
             ${FILTERS.map(([id, label, test]) => html`
               <button class=${`chip ${filter === id ? "active" : ""}`} onClick=${() => setFilter(id)}>
                 ${label()} <span class="count">${links.filter(test).length}</span>
@@ -142,7 +143,7 @@ function Submissions({ link, close }) {
     reload();
   };
   return html`
-    <aside class="side submissions">
+    <aside class="side submissions" data-help="links.side">
       <div class="side-head">
         <h3>${link.title}</h3>
         <button class="ghost close" title=${t("Close")} onClick=${close}>✕</button>
@@ -323,13 +324,13 @@ function LinkSheet({ draft, requestId, close }) {
         <label>${t("Note")}</label>
         <textarea name="note" rows="2" value=${note} placeholder=${t("e.g. Please send these by Friday. A photo of each page is fine.")} onInput=${(e) => setNote(e.target.value)}></textarea>
         <div class="hint muted small">${t("Shown under the heading, above the fields.")}</div>
-        <label>${t("Save into")}</label>
-        <${Select} name="profile" value=${profileId ?? ""} options=${profileOptions} onChange=${(v) => setProfileId(v === "new" ? "new" : Number(v))} />
+        <label data-help="link.profile">${t("Save into")}</label>
+        <${Select} name="profile" data-help="link.profile" value=${profileId ?? ""} options=${profileOptions} onChange=${(v) => setProfileId(v === "new" ? "new" : Number(v))} />
         ${profileId === "new" && html`
           <label>${t("Profile name")}</label>
           <input type="text" name="new_profile" value=${newName} onInput=${(e) => setNewName(e.target.value)} />`}
-        <label class="top">${t("Fields")}</label>
-        <table class="fields link-fields">
+        <label class="top" data-help="link.fields">${t("Fields")}</label>
+        <table class="fields link-fields" data-help="link.fields">
           <thead><tr><th></th><th>${t("Key")}</th><th>${t("Label")}</th><th>${t("Type")}</th><th>${t("Required")}</th><th></th></tr></thead>
           <tbody>
             ${profileFields.map(
@@ -357,26 +358,26 @@ function LinkSheet({ draft, requestId, close }) {
           </tbody>
         </table>
         <span></span>
-        <div class="check-row">
+        <div class="check-row" data-help="link.fields">
           <button type="button" onClick=${() => setCustom([...custom, customRow()])}>${t("Add field")}</button>
           <span class="muted small">${t("Tip: click a key to ask for it, or press a checkbox or key and drag down the column to tick or untick several at once.")}</span>
         </div>
-        <label>${t("Files")}</label>
-        <div class="check-row">
+        <label data-help="link.files">${t("Files")}</label>
+        <div class="check-row" data-help="link.files">
           <input type="number" name="max_files" min="0" max="10" style="width:70px" value=${maxFiles} onInput=${(e) => setMaxFiles(e.target.value)} />
           <input type="text" name="kinds" placeholder=${t("Any kind, or e.g. .pdf, image/*")} value=${kinds} onInput=${(e) => setKinds(e.target.value)} />
         </div>
         <div class="hint muted small">${t("Up to 50 MB each.")}</div>
-        <label>${t("Expires after")}</label>
-        <${Select} name="days" value=${days} options=${DAYS.map((d) => [String(d), tn(d, "{n} day", "{n} days")])} onChange=${setDays} />
-        <label>${t("Submissions")}</label>
-        <input type="number" name="max_submissions" min="1" max="100" style="width:70px" value=${maxSubmissions} onInput=${(e) => setMaxSubmissions(e.target.value)} />
+        <label data-help="link.expires">${t("Expires after")}</label>
+        <${Select} name="days" data-help="link.expires" value=${days} options=${DAYS.map((d) => [String(d), tn(d, "{n} day", "{n} days")])} onChange=${setDays} />
+        <label data-help="link.submissions">${t("Submissions")}</label>
+        <input type="number" name="max_submissions" data-help="link.submissions" min="1" max="100" style="width:70px" value=${maxSubmissions} onInput=${(e) => setMaxSubmissions(e.target.value)} />
       </form>
       <div class="problems" style="max-width:640px;margin:0 auto;padding:0 24px">${problem}</div>
     </div>
     <div class="sheet-foot">
-      <span class="note">${t("The form shows only the title, note and labels. What people send is encrypted in their browser and opens only on this computer.")}</span>
-      <button onClick=${cancel}>${t("Cancel")}</button>
-      <button class="primary" onClick=${create}>${t("Create link")}</button>
+      <${HelpNote}>${t("The form shows only the title, note and labels. What people send is encrypted in their browser and opens only on this computer.")}</${HelpNote}>
+      <button data-help="sheet.cancel" onClick=${cancel}>${t("Cancel")}</button>
+      <button class="primary" data-help="link.create" onClick=${create}>${t("Create link")}</button>
     </div>`;
 }

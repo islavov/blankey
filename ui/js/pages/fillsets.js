@@ -12,7 +12,7 @@ export function FillSets() {
   if (!sets) return null;
   const selected = picked.filter((id) => sets.some((s) => s.id === id));
 
-  /** Open and export act on one fill set: the one clicked last. */
+  /** Open acts on one fill set: the one clicked last. */
   const need = (action) => () => (selected.length ? action(selected.at(-1)) : toast(t("Select a fill set")));
   const needAll = (action) => () => (selected.length ? action(selected) : toast(t("Select a fill set")));
 
@@ -22,19 +22,6 @@ export function FillSets() {
       for (const id of ids) made += (await call("generate_fill_set", { id })).length;
       toast(tn(made, "{n} document generated", "{n} documents generated"));
     });
-
-  const exportSet = async (id, bundle) => {
-    const path = await call("export_fill_set", { id, bundle });
-    if (path) toast(t("Exported to {path}", { path }), 4000);
-  };
-
-  const importSet = async () => {
-    const id = await call("import_fill_set");
-    if (!id) return;
-    setSelected([id]);
-    toast(t("Fill set imported"));
-    reload();
-  };
 
   const remove = async (ids) => {
     const title =
@@ -50,12 +37,9 @@ export function FillSets() {
   const visible = sets.filter((s) => matches(s.name, ...s.templates, ...s.profiles));
   return html`
     <${Page} title=${t("Fill sets")} subtitle=${tn(sets.length, "{n} set", "{n} sets")} actions=${[
-      [t("Open"), need((id) => openFill({ fill_set_id: id }))],
-      [t("Generate"), needAll(generate)],
-      [t("Export"), need((id) => exportSet(id, false))],
-      [t("Export bundle"), need((id) => exportSet(id, true))],
-      [t("Import"), importSet],
-      [t("Delete"), needAll(remove), "danger"],
+      [t("Open"), need((id) => openFill({ fill_set_id: id })), "", "fillsets.open"],
+      [t("Generate"), needAll(generate), "", "fillsets.generate"],
+      [t("Delete"), needAll(remove), "danger", "fillsets.delete"],
     ]}>
       ${visible.length
         ? html`<${Table}

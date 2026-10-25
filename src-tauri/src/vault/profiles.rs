@@ -27,7 +27,11 @@ impl Vault {
         self.repo.update_profile(id, name, kind)
     }
 
+    /// The profile, its fields and the files kept with it.
     pub fn delete_profile(&self, id: i64) -> Result<()> {
+        for file in self.repo.collected_files()?.into_iter().filter(|f| f.profile_id == Some(id)) {
+            self.delete_collected_file(file.id)?;
+        }
         self.repo.delete_profile(id)
     }
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "../../vendor/preact-htm.js";
 import { call, invoke } from "../api.js";
+import { HelpNote } from "../help.js";
 import { t, tn } from "../i18n.js";
 import { html } from "../lib.js";
 import { Preview } from "../preview.js";
@@ -235,12 +236,12 @@ function FillForm({ session: s, close }) {
     <div class="sheet-head">
       <${SheetHead} icon="doc" title=${title} reason=${s.reason ? `${s.reason}. ${explanation}` : explanation} />
       <div class="sheet-form">
-        <label>${t("Fill set")}</label>
-        <input type="text" value=${name} spellcheck="false" onInput=${(e) => setName(e.target.value)} />
+        <label data-help="fill.name">${t("Fill set")}</label>
+        <input type="text" data-help="fill.name" value=${name} spellcheck="false" onInput=${(e) => setName(e.target.value)} />
         ${Object.entries(s.roles).map(
           ([role, description]) => html`
-            <label title=${description}>${role}</label>
-            <${Select} value=${profiles[role] ?? ""} onChange=${(value) => chooseProfile(role, value)} options=${[
+            <label data-help="fill.role" title=${description}>${role}</label>
+            <${Select} data-help="fill.role" value=${profiles[role] ?? ""} onChange=${(value) => chooseProfile(role, value)} options=${[
               ["", evaluation.used_roles.includes(role) ? t("Choose a profile…") : t("Not needed")],
               ...s.all_profiles.map((p) => [p.id, `${p.name}${p.kind ? `  (${p.kind})` : ""}`]),
             ]} />`
@@ -276,7 +277,7 @@ function FillForm({ session: s, close }) {
               }} />`
           )}
         </div>
-        <div class="fill-preview">
+        <div class="fill-preview" data-help="fill.preview">
           <div class=${`tabs ${s.templates.length > 1 ? "" : "hidden"}`}>
             ${s.templates.map(
               (tpl) => html`<div class=${`tab ${tpl.id === tab ? "active" : ""}`} onClick=${() => setTab(tpl.id)}>${tpl.name}</div>`
@@ -290,10 +291,10 @@ function FillForm({ session: s, close }) {
       </div>
     </div>
     <div class="sheet-foot">
-      <span class="note">${t("Your data stays in Blankey. The AI assistant only learns where each value comes from, never the value.")}</span>
-      <button disabled=${busy} onClick=${cancel}>${t("Cancel")}</button>
-      <button disabled=${busy} onClick=${() => save(false)}>${t("Save")}</button>
-      <button class="primary" disabled=${busy} onClick=${() => save(true)}>${t("Save and Generate")}</button>
+      <${HelpNote}>${t("Your data stays in Blankey. The AI assistant only learns where each value comes from, never the value.")}</${HelpNote}>
+      <button disabled=${busy} data-help="sheet.cancel" onClick=${cancel}>${t("Cancel")}</button>
+      <button disabled=${busy} data-help="fill.save" onClick=${() => save(false)}>${t("Save")}</button>
+      <button class="primary" disabled=${busy} data-help="fill.generate" onClick=${() => save(true)}>${t("Save and Generate")}</button>
     </div>`;
 }
 
