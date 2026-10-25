@@ -1,6 +1,5 @@
 //! Application service shared by the MCP server (metadata + examples) and the UI (real values).
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, RwLock};
 use std::time::{Duration, Instant};
@@ -17,9 +16,7 @@ use crate::pii;
 use crate::render::pdf_form;
 use crate::render::preview;
 use crate::templates::engine::{self, BindingReport, Rendered};
-use crate::templates::{
-    bindings, docx, fill, yaml_dump, Origin, SaveTemplate, StrMap, Template, TemplateKind, TemplateStore,
-};
+use crate::templates::{bindings, docx, fill, Origin, SaveTemplate, StrMap, Template, TemplateKind, TemplateStore};
 use crate::vault::{Bindings, FieldInfo, FieldInput, Profiles, Vault};
 
 pub const PROFILE_INPUT: &str = "profile_input";
@@ -529,66 +526,6 @@ impl Blankey {
             .store_document(&template.id, title, profiles, pages, &filename, &rendered.content)
             .map_err(|e| e.to_string())?;
         let _ = vault.audit("user", "generate", &format!("template={} document={id}", template.id));
-        Ok(id)
-    }
-
-    pub fn export_fill_set(&self, fill_set_id: i64) -> Result<String, String> {
-        let vault = self.vault();
-        let (info, bindings) = vault.get_fill_set(fill_set_id).map_err(|e| e.to_string())?;
-        let data =
-            json!({"name": info.name, "templates": info.templates, "profiles": info.profiles, "bindings": bindings});
-        let _ = vault.audit("user", "export_fill_set", &fill_set_id.to_string());
-        Ok(yaml_dump(&data))
-    }
-
-    /// Zip with each template's manifest + source and the fill set as fill.yaml.
-    pub fn export_fill_bundle(&self, fill_set_id: i64, target: &Path) -> Result<(), String> {
-        let (info, _) = self.vault().get_fill_set(fill_set_id).map_err(|e| e.to_string())?;
-        let yaml = self.export_fill_set(fill_set_id)?;
-        let file = std::fs::File::create(target).map_err(|e| e.to_string())?;
-        let mut zip = zip::ZipWriter::new(file);
-        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-        for template in self.fill_templates(&info.templates)? {
-            for path in [template.directory.join("manifest.yaml"), template.source_path()] {
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-                zip.start_file(format!("{}/{name}", template.id), options).map_err(|e| e.to_string())?;
-                zip.write_all(&std::fs::read(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-            }
-        }
-        zip.start_file("fill.yaml", options).map_err(|e| e.to_string())?;
-        zip.write_all(yaml.as_bytes()).map_err(|e| e.to_string())?;
-        zip.finish().map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub fn import_fill_set(&self, text: &str) -> Result<i64, String> {
-        let data: Value = serde_yaml::from_str(text).map_err(|e| format!("Not a fill set: {e}"))?;
-        let name = data.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-        let templates: Vec<String> = data
-            .get("templates")
-            .and_then(Value::as_array)
-            .map(|t| t.iter().filter_map(Value::as_str).map(str::to_string).collect())
-            .unwrap_or_default();
-        if name.is_empty() || templates.is_empty() {
-            return Err("A fill set needs a name and templates".into());
-        }
-        self.fill_templates(&templates)?;
-        let mut profiles = Profiles::new();
-        for (role, id) in data.get("profiles").and_then(Value::as_object).into_iter().flatten() {
-            let id = id
-                .as_i64()
-                .or_else(|| id.as_str().and_then(|s| s.parse().ok()))
-                .ok_or("Profile ids must be numbers")?;
-            profiles.insert(role.clone(), id);
-        }
-        let bindings: Bindings = data.get("bindings").and_then(Value::as_object).cloned().unwrap_or_default();
-        let mut vault = self.vault();
-        for id in profiles.values() {
-            vault.get_profile(*id).map_err(|e| e.to_string())?;
-        }
-        let existing = vault.find_fill_set(&name).map_err(|e| e.to_string())?;
-        let id = vault.save_fill_set(&name, &templates, &profiles, &bindings, existing).map_err(|e| e.to_string())?;
-        let _ = vault.audit("user", "import_fill_set", &id.to_string());
         Ok(id)
     }
 }

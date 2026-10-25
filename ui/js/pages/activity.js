@@ -26,7 +26,7 @@ export function Activity() {
 
   return html`
     <${Page} title=${t("Activity")} subtitle=${pending ? t("{n} waiting", { n: pending }) : t("Nothing waiting")}
-      actions=${[[t("Open"), () => open(selected)]]}>
+      actions=${[[t("Open"), () => open(selected), "", "activity.open"]]}>
       ${visible.length
         ? html`<${Table}
             rows=${visible}

@@ -252,15 +252,19 @@ export function createBackend(db = seed()) {
     ],
     list_fill_sets: () => db.sets,
     generate_fill_set: () => [5, 6],
-    export_fill_set: () => "/tmp/acme.yaml",
-    import_fill_set: () => null,
     delete_fill_set: ({ id }) => {
       db.sets = db.sets.filter((s) => s.id !== id);
     },
-    list_documents: () => db.docs,
+    // newest first, as the vault lists them
+    list_documents: () => [...db.docs].sort((a, b) => b.id - a.id),
     list_collected_files: () => db.collected,
     open_collected_files: () => null,
     export_collected_file: () => "/tmp/payslip.pdf",
+    add_profile_files: ({ profileId }) => {
+      const id = Math.max(0, ...db.collected.map((f) => f.id)) + 1;
+      db.collected.unshift({ id, name: "id-card.jpg", type: "image/jpeg", size: 2048, profile_id: profileId, link_id: "", created_at: "2026-10-25T10:00:00", link_title: "", profile_name: null });
+      return 1;
+    },
     delete_collected_files: ({ ids }) => {
       db.collected = db.collected.filter((f) => !ids.includes(f.id));
     },
@@ -365,6 +369,7 @@ export function createBackend(db = seed()) {
     update_profile: ({ id, name, kind }) => Object.assign(db.profiles.find((p) => p.id === id), { name, kind }),
     delete_profile: ({ id }) => {
       db.profiles = db.profiles.filter((p) => p.id !== id);
+      db.collected = db.collected.filter((f) => f.profile_id !== id);
     },
     next_request: () => {
       if (!db.unlocked) throw "Vault is locked";

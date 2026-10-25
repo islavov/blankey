@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "../../vendor/preact-htm.js";
 import { call } from "../api.js";
 import { problemText, t, tn } from "../i18n.js";
-import { html, matches, placeholder, reload, state, useLoad, useRemembered } from "../lib.js";
+import { html, matches, megabytes, placeholder, reload, state, useLoad, useRemembered, when } from "../lib.js";
 import { confirmDialog, dialog, toast } from "../ui/feedback.js";
 import { Page } from "../ui/page.js";
 import { Select } from "../ui/select.js";
@@ -68,7 +68,7 @@ export function Profiles() {
       chosen.length === 1
         ? t("Delete the profile \"{name}\"?", { name: chosen[0].name })
         : tn(chosen.length, "Delete {n} profile?", "Delete {n} profiles?");
-    if (!(await confirmDialog(title, t("All its fields are removed from the vault.")))) return;
+    if (!(await confirmDialog(title, t("All its fields and files are removed from the vault.")))) return;
     for (const p of chosen) await call("delete_profile", { id: p.id });
     setDirty(false);
     setSelected([]);
@@ -82,12 +82,12 @@ export function Profiles() {
 
   return html`
     <${Page} title=${t("Profiles")} subtitle=${t("{profiles}, values encrypted per field", { profiles: tn(profiles.length, "{n} profile", "{n} profiles") })} actions=${[
-      [t("New profile"), create],
-      [t("Rename"), rename],
-      [t("Delete profile"), remove, "danger"],
+      [t("New profile"), create, "", "profiles.new"],
+      [t("Rename"), rename, "", "profiles.rename"],
+      [t("Delete profile"), remove, "danger", "profiles.delete"],
     ]}>
       <div class="split">
-        <div class="list">
+        <div class="list" data-help="profiles.list">
           ${visible.length
             ? visible.map(
                 (p) => html`
@@ -159,7 +159,7 @@ function ProfileDetail({ profile, onDirty, onSaved }) {
   return html`
     <h3>${profile.name}</h3>
     <div class="muted small">${t("Your AI assistant sees field names, labels, types and how long the values are. Never the values.")}</div>
-    <table class="fields">
+    <table class="fields" data-help="profiles.fields">
       <thead><tr><th>${t("Key")}</th><th>${t("Label")}</th><th>${t("Type")}</th><th>${t("Value")}</th><th></th></tr></thead>
       <tbody>
         ${rows.map(
@@ -169,15 +169,59 @@ function ProfileDetail({ profile, onDirty, onSaved }) {
       </tbody>
     </table>
     <div class="detail-actions">
-      <button onClick=${add}>${t("Add field")}</button>
-      <label class="check-row small muted">
+      <button data-help="profiles.add" onClick=${add}>${t("Add field")}</button>
+      <label class="check-row small muted" data-help="profiles.reveal">
         <input type="checkbox" checked=${reveal} onChange=${(e) => setReveal(e.target.checked)} /> ${t("Show values")}
       </label>
       <span class="spacer"></span>
       <span class="muted small">${status}</span>
-      <button class="primary" onClick=${save}>${t("Save")}</button>
+      <button class="primary" data-help="profiles.save" onClick=${save}>${t("Save")}</button>
     </div>
-    <div class="problems">${problems.map(problemText).join("\n")}</div>`;
+    <div class="problems">${problems.map(problemText).join("\n")}</div>
+    <${ProfileFiles} profile=${profile} />`;
+}
+
+/** Files kept with the profile: the ones the user adds and the ones its collection links brought in. */
+function ProfileFiles({ profile }) {
+  // bumped after a change; a page reload would drop unsaved field edits
+  const [version, setVersion] = useState(0);
+  const files = useLoad(() => call("list_collected_files"), [version]);
+  if (!files) return null;
+  const mine = files.filter((f) => f.profile_id === profile.id);
+
+  const add = async () => {
+    const added = await call("add_profile_files", { profileId: profile.id }).catch(() => 0);
+    if (!added) return;
+    toast(tn(added, "{n} file added", "{n} files added"));
+    setVersion(version + 1);
+  };
+  const exportFile = async (id) => {
+    const path = await call("export_collected_file", { id });
+    if (path) toast(t("Saved to {path}", { path }), 4000);
+  };
+  const remove = async (file) => {
+    const text = t("It is removed from the vault. Copies you exported stay where you saved them.");
+    if (!(await confirmDialog(t("Delete \"{name}\"?", { name: file.name }), text))) return;
+    await call("delete_collected_files", { ids: [file.id] });
+    setVersion(version + 1);
+  };
+  return html`
+    <div class="files-head" data-help="profiles.files">
+      <h4>${t("Files")}</h4>
+      <button onClick=${add}>${t("Add files…")}</button>
+    </div>
+    <div class="profile-files" data-help="profiles.files">
+      ${mine.map(
+        (f) => html`
+          <div class="file-row" key=${f.id}>
+            <span class="name" title=${f.name}>${f.name}</span>
+            <span class="muted small">${[f.link_title, when(f.created_at), megabytes(f.size)].filter(Boolean).join(" · ")}</span>
+            <button class="link" onClick=${() => call("open_collected_files", { ids: [f.id] })}>${t("Open")}</button>
+            <button class="link" onClick=${() => exportFile(f.id)}>${t("Export")}</button>
+            <button class="link danger" onClick=${() => remove(f)}>${t("Delete")}</button>
+          </div>`
+      )}
+    </div>`;
 }
 
 function FieldRow({ r, reveal, focus, onChange, onRemove }) {
@@ -200,6 +244,6 @@ function FieldRow({ r, reveal, focus, onChange, onRemove }) {
         <input type="text" class=${`value ${reveal ? "" : "masked"}`} value=${r.value}
           placeholder=${placeholder(r.type)} spellcheck="false" onInput=${input("value")} />
       </td>
-      <td style="width:1%"><button class="remove ghost" title=${t("Remove field")} onClick=${onRemove}>✕</button></td>
+      <td style="width:1%"><button class="remove ghost" data-help="profiles.remove" title=${t("Remove field")} onClick=${onRemove}>✕</button></td>
     </tr>`;
 }

@@ -514,11 +514,46 @@ impl Blankey {
         Ok(())
     }
 
+    /// Files the user keeps with a profile, encrypted like the ones a collection link brings in (with no link). Each
+    /// is checked against the size limit before any is added.
+    pub fn add_profile_files(&self, profile_id: i64, paths: &[PathBuf]) -> Result<usize, String> {
+        self.vault().get_profile(profile_id).map_err(|e| e.to_string())?;
+        let name = |path: &PathBuf| path.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
+        for path in paths {
+            if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > MAX_FILE_BYTES {
+                return Err(format!("{} is larger than 50 MB", name(path)));
+            }
+        }
+        for path in paths {
+            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            let id = self
+                .vault()
+                .add_collected_file(Some(profile_id), "", &name(path), file_type(&name(path)), &bytes)
+                .map_err(|e| e.to_string())?;
+            self.audit("user", "add_profile_file", &format!("profile={profile_id} file={id}"));
+        }
+        Ok(paths.len())
+    }
+
     pub fn export_collected_file(&self, id: i64, target: &std::path::Path) -> Result<(), String> {
         let (_, content) = self.vault().load_collected_file(id).map_err(|e| e.to_string())?;
         std::fs::write(target, content).map_err(|e| e.to_string())?;
         self.audit("user", "export_collected_file", &id.to_string());
         Ok(())
+    }
+}
+
+/// The media type of a file the user adds, by its extension.
+fn file_type(name: &str) -> &'static str {
+    let extension = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    match extension.as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "heic" => "image/heic",
+        _ => "application/octet-stream",
     }
 }
 
@@ -698,6 +733,37 @@ pub(crate) mod tests {
         assert_eq!(std::fs::read_dir(app.inbox_dir()).unwrap().count(), 0);
         assert_eq!(app.vault().get_submission("sub-1").unwrap().status, "discarded");
         assert!(app.open_submission("sub-1").unwrap_err().contains("discarded"));
+
+        // the files are kept with the profile and go with it
+        app.vault().delete_profile(profile.id).unwrap();
+        assert!(app.vault().list_collected_files().unwrap().is_empty());
+        assert_eq!(std::fs::read_dir(dir.path().join("data/files")).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn files_added_to_a_profile_are_encrypted_and_go_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let profile = app.vault().create_profile("Jane", "person").unwrap();
+        let scan = dir.path().join("ID card.JPG");
+        std::fs::write(&scan, b"jpeg bytes").unwrap();
+        let big = dir.path().join("big.bin");
+        std::fs::File::create(&big).unwrap().set_len(MAX_FILE_BYTES + 1).unwrap();
+
+        let err = app.add_profile_files(profile, &[scan.clone(), big]).unwrap_err();
+        assert!(err.contains("big.bin"), "{err}");
+        assert!(app.vault().list_collected_files().unwrap().is_empty(), "nothing is added when one file is too big");
+        assert!(app.add_profile_files(profile + 1, std::slice::from_ref(&scan)).is_err(), "an unknown profile");
+
+        assert_eq!(app.add_profile_files(profile, &[scan]).unwrap(), 1);
+        let files = app.vault().list_collected_files().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!((files[0].name.as_str(), files[0].file_type.as_str()), ("ID card.JPG", "image/jpeg"));
+        assert_eq!((files[0].profile_id, files[0].link_id.as_str()), (Some(profile), ""));
+        assert_eq!(app.vault().load_collected_file(files[0].id).unwrap().1, b"jpeg bytes");
+
+        app.vault().delete_profile(profile).unwrap();
+        assert!(app.vault().list_collected_files().unwrap().is_empty());
     }
 
     #[test]

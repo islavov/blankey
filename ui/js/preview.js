@@ -9,7 +9,7 @@ const ZOOM_MAX = 4;
  * A template preview: html (docx with blanks as chips) or page images with a box per field.
  * `active` is highlighted; bumping `revealSeq` scrolls it into view. Clicking a field calls `onPick(name)`.
  */
-export function Preview({ preview, placeholder = "", interactive = true, onPick, active, revealSeq = 0, style = "" }) {
+export function Preview({ preview, placeholder = "", interactive = true, onPick, active, revealSeq = 0, style = "", help }) {
   const area = useRef();
   usePinchZoom(area);
 
@@ -29,7 +29,7 @@ export function Preview({ preview, placeholder = "", interactive = true, onPick,
     if (field && onPick) onPick(field.dataset.var);
   };
 
-  return html`<div class="preview-area" style=${style} ref=${area} onClick=${pick}>${content(preview, placeholder, interactive)}</div>`;
+  return html`<div class="preview-area" style=${style} data-help=${help} ref=${area} onClick=${pick}>${content(preview, placeholder, interactive)}</div>`;
 }
 
 const $$var = (root) => [...root.querySelectorAll("[data-var]")];

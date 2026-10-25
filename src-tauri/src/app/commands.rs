@@ -604,6 +604,14 @@ async fn export_collected_file(handle: AppHandle, state: State<'_, AppState>, id
     Ok(Some(target.display().to_string()))
 }
 
+/// Files the user picks to keep with a profile; the number added.
+#[tauri::command]
+async fn add_profile_files(handle: AppHandle, state: State<'_, AppState>, profile_id: i64) -> CmdResult<usize> {
+    let picked = handle.dialog().file().set_title("Add files to the profile").blocking_pick_files();
+    let paths: Vec<PathBuf> = picked.unwrap_or_default().into_iter().filter_map(|p| p.into_path().ok()).collect();
+    state.app.add_profile_files(profile_id, &paths)
+}
+
 #[tauri::command]
 fn delete_collected_files(state: State<AppState>, ids: Vec<i64>) -> CmdResult<()> {
     let vault = state.app.vault();
@@ -657,39 +665,6 @@ async fn generate_fill_set(state: State<'_, AppState>, id: i64) -> CmdResult<Vec
         platform::open_document(&filename, &content)?;
     }
     Ok(ids)
-}
-
-#[tauri::command]
-async fn export_fill_set(
-    handle: AppHandle,
-    state: State<'_, AppState>,
-    id: i64,
-    bundle: bool,
-) -> CmdResult<Option<String>> {
-    let (info, _) = state.app.vault().get_fill_set(id).map_err(err)?;
-    let extension = if bundle { "zip" } else { "yaml" };
-    let target = handle
-        .dialog()
-        .file()
-        .set_title("Export")
-        .set_file_name(format!("{}.{extension}", info.name))
-        .blocking_save_file();
-    let Some(target) = target.and_then(|p| p.into_path().ok()) else { return Ok(None) };
-    if bundle {
-        state.app.export_fill_bundle(id, &target)?;
-    } else {
-        std::fs::write(&target, state.app.export_fill_set(id)?).map_err(err)?;
-    }
-    Ok(Some(target.display().to_string()))
-}
-
-#[tauri::command]
-async fn import_fill_set(handle: AppHandle, state: State<'_, AppState>) -> CmdResult<Option<i64>> {
-    let source =
-        handle.dialog().file().set_title("Import fill set").add_filter("YAML", &["yaml", "yml"]).blocking_pick_file();
-    let Some(source) = source.and_then(|p| p.into_path().ok()) else { return Ok(None) };
-    let text = std::fs::read_to_string(&source).map_err(err)?;
-    state.app.import_fill_set(&text).map(Some).map_err(|e| format!("Import failed: {e}"))
 }
 
 #[tauri::command]
@@ -1377,10 +1352,9 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         open_collected_files,
         export_collected_file,
         delete_collected_files,
+        add_profile_files,
         list_fill_sets,
         generate_fill_set,
-        export_fill_set,
-        import_fill_set,
         delete_fill_set,
         list_activity,
         next_request,

@@ -14,14 +14,14 @@ export function FillRow({ v, binding, row, suggested, ask, profileName, active, 
 
   return html`
     <div ref=${element} class=${`fill-row ${d.empty ? "is-empty" : ""} ${active ? "active" : ""}`} data-var=${v.name}>
-      <div class="fill-field" title=${tip} onClick=${onSelect}>
+      <div class="fill-field" data-help="fill.field" title=${tip} onClick=${onSelect}>
         <div class="label">${v.label || v.name}</div>
         <div class="var">${v.name}</div>
       </div>
       ${typing
-        ? html`<div class="source"><${TypeValue} value=${binding?.value ?? ""} hint=${ask} onDone=${onTyped} /></div>`
+        ? html`<div class="source" data-help="fill.source"><${TypeValue} value=${binding?.value ?? ""} hint=${ask} onDone=${onTyped} /></div>`
         : html`
-            <div class="source" tabindex="0" onClick=${(e) => onMenu(e.currentTarget)}>
+            <div class="source" data-help="fill.source" tabindex="0" onClick=${(e) => onMenu(e.currentTarget)}>
               <span class=${`chip ${d.kind}`}>${kindLabel(d.kind)}</span>
               ${d.path && html`<span class="path">${d.path}</span>`}
               <span class="val">${d.text}</span><span class="caret">⌄</span>

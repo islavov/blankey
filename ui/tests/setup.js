@@ -54,6 +54,12 @@ export async function click(element, init = {}) {
   await settle();
 }
 
+/** The pointer moves onto `element`; `ms` lets a delayed change (onto the pane around a control) happen. */
+export async function hover(element, ms = 0) {
+  element.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+  await settle(ms);
+}
+
 export async function dblclick(element) {
   element.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
   await settle();

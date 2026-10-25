@@ -131,8 +131,8 @@ The assistant turns an existing filled .docx into a template with `inspect_docx`
 become `{{ var }}` tags; use the same var names across related documents). `request_fill` opens a form listing every
 blank of one or more templates with its surrounding text; per blank you pick a vault field (`manager.egn`), a literal
 the assistant proposed (non-PII only), the template default, or type a value. Documents are always generated from a
-fill set. The choices are saved as a named fill set, encrypted in the vault, and can be reopened, regenerated,
-exported (YAML, or a zip with the templates) and imported on the Fill sets page.
+fill set. The choices are saved as a named fill set, encrypted in the vault, and can be reopened and regenerated on
+the Fill sets page.
 
 ### Template folders
 

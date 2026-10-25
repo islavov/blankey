@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "../vendor/preact-htm.js";
 import { call } from "./api.js";
+import { HelpNote } from "./help.js";
 import { t, tn } from "./i18n.js";
 import { html, Icon } from "./lib.js";
 import { Preview } from "./preview.js";
@@ -33,8 +34,8 @@ export const openReview = (file) =>
     </div>
     <div class="sheet-body"><${PiiReview} source=${`lib:${file.id}`} /></div>
     <div class="sheet-foot">
-      <span class="note">${t("Select text to hide it too. Click a marked value to change it.")}</span>
-      <button class="primary" onClick=${close}>${t("Done")}</button>
+      <${HelpNote}>${t("Select text to hide it too. Click a marked value to change it.")}</${HelpNote}>
+      <button class="primary" data-help="pii.done" onClick=${close}>${t("Done")}</button>
     </div>`);
 
 /** The id an element of the preview stands for: a hidden entity, or a value the user let through (shown:i). */
@@ -174,7 +175,7 @@ export function PiiReview({ source }) {
   const hiddenCount = review.items.filter((i) => i.hidden).length;
   return html`
     <div class="fill-split review">
-      <div class="fill-rows">
+      <div class="fill-rows" data-help="pii.list">
         <div class="list-note muted small">${tn(hiddenCount, "{n} value hidden", "{n} values hidden")}</div>
         ${review.items.map((item) => {
           const active = item.key === focused?.key;
@@ -185,24 +186,24 @@ export function PiiReview({ source }) {
             <span class="places">
               ${active && count > 1
                 ? html`
-                    <button class="icon prev" title=${t("Previous place")} onClick=${(e) => step(e, -1)}>‹</button>
+                    <button class="icon prev" data-help="pii.places" title=${t("Previous place")} onClick=${(e) => step(e, -1)}>‹</button>
                     <span class="small at">${current + 1}/${count}</span>
-                    <button class="icon next" title=${t("Next place")} onClick=${(e) => step(e, 1)}>›</button>`
+                    <button class="icon next" data-help="pii.places" title=${t("Next place")} onClick=${(e) => step(e, 1)}>›</button>`
                 : html`<span class="muted small">×${item.occurrences}</span>`}
             </span>
-            <button class="icon toggle" title=${item.hidden ? t("Hidden from the assistant. Click to show it.") : t("Visible to the assistant. Click to hide it.")}
+            <button class="icon toggle" data-help="pii.toggle" title=${item.hidden ? t("Hidden from the assistant. Click to show it.") : t("Visible to the assistant. Click to hide it.")}
               onClick=${(e) => (e.stopPropagation(), toggle(item))}><${Icon} name=${item.hidden ? "eye-off" : "eye"} /></button>
-            <button class="icon remove" title=${item.user ? t("Remove") : t("Not personal data. The assistant sees it and the list no longer shows it.")}
+            <button class="icon remove" data-help="pii.remove" title=${item.user ? t("Remove") : t("Not personal data. The assistant sees it and the list no longer shows it.")}
               onClick=${(e) => (e.stopPropagation(), remove(item))}><${Icon} name="trash" /></button>
           </div>`;
         })}
-        <form class="hide-typed" onSubmit=${addTyped}>
+        <form class="hide-typed" data-help="pii.typed" onSubmit=${addTyped}>
           <input type="text" class="hide-text" value=${typed} spellcheck="false" placeholder=${t("Text to hide…")}
             onInput=${(e) => setTyped(e.target.value)} />
           <button type="submit">${t("Hide")}</button>
         </form>
       </div>
-      <div class="fill-preview" ref=${area} onMouseUp=${select} onClick=${click}>
+      <div class="fill-preview" data-help="pii.preview" ref=${area} onMouseUp=${select} onClick=${click}>
         <${Preview} preview=${review.preview} />
       </div>
     </div>

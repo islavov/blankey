@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "../vendor/preact-htm.js";
 import { call, invoke, isLocked, refreshStatus } from "./api.js";
 import { openFill } from "./fill/form.js";
+import { HelpNote } from "./help.js";
 import { problemText, t, tn } from "./i18n.js";
 import { html, placeholder, reload, update } from "./lib.js";
 import { openLinkSheet } from "./pages/links.js";
@@ -133,7 +134,7 @@ function ProfileInput({ request, profile_name, existing, close }) {
         onInput=${(e) => e.target.classList.remove("suggested")} />
       ${offer &&
       html`<div class="hint">
-        <button type="button" class="chip Suggested" onClick=${() => useSuggestion(i, suggested)}>
+        <button type="button" class="chip Suggested" data-help="request.suggestion" onClick=${() => useSuggestion(i, suggested)}>
           ${t("Use suggestion: {value}", { value: suggested })}
         </button>
       </div>`}`;
@@ -144,7 +145,7 @@ function ProfileInput({ request, profile_name, existing, close }) {
       <${SheetHead} icon="person" title=${profile_name ? tn(specs.length, "{n} field for {profile}", "{n} fields for {profile}", { profile: profile_name }) : tn(specs.length, "{n} field for a new profile", "{n} fields for a new profile")} reason=${payload.reason} />
     </div>
     <div class="sheet-body">
-      <form class="input-form" autocomplete="off" ref=${form} onSubmit=${save}>
+      <form class="input-form" autocomplete="off" data-help="request.fields" ref=${form} onSubmit=${save}>
         ${payload.profile_id == null &&
         html`<label>${t("New profile")}</label><input type="text" name="__profile" value=${payload.new_profile?.name || ""} />`}
         ${specs.map(field)}
@@ -152,9 +153,9 @@ function ProfileInput({ request, profile_name, existing, close }) {
       <div class="problems" style="max-width:640px;margin:0 auto;padding:0 24px">${problems.map(problemText).join("\n")}</div>
     </div>
     <div class="sheet-foot">
-      <span class="note">${t("Your data stays in Blankey. The AI assistant only sees the field names and how long the values are.")}</span>
-      <button onClick=${cancel}>${t("Cancel")}</button>
-      <button class="primary" onClick=${() => save()}>${t("Save")}</button>
+      <${HelpNote}>${t("Your data stays in Blankey. The AI assistant only sees the field names and how long the values are.")}</${HelpNote}>
+      <button data-help="sheet.cancel" onClick=${cancel}>${t("Cancel")}</button>
+      <button class="primary" data-help="request.save" onClick=${() => save()}>${t("Save")}</button>
     </div>`;
 }
 
@@ -196,9 +197,9 @@ function FileRequest({ request, close }) {
       <div class="sheet-summary mono selectable shared-path">${path}</div>
       <div class="sheet-body"><${PiiReview} source=${source} /></div>
       <div class="sheet-foot">
-        <span class="note">${t("The assistant will read this file with the marked values hidden. Select text to hide it too.")}</span>
-        <button onClick=${cancel}>${t("Cancel")}</button>
-        <button class="primary" onClick=${allow}>${t("Allow")}</button>
+        <${HelpNote}>${t("The assistant will read this file with the marked values hidden. Select text to hide it too.")}</${HelpNote}>
+        <button data-help="sheet.cancel" onClick=${cancel}>${t("Cancel")}</button>
+        <button class="primary" data-help="request.allow" onClick=${allow}>${t("Allow")}</button>
       </div>`;
   }
 
@@ -209,11 +210,11 @@ function FileRequest({ request, close }) {
     ${picked && html`<div class="sheet-summary mono selectable shared-path">${picked.path}</div>`}
     <div class="sheet-body">${picked && html`<${PiiReview} source=${picked.path} />`}</div>
     <div class="sheet-foot">
-      <span class="note">${picked
+      <${HelpNote}>${picked
         ? t("The assistant will read this file with the marked values hidden. Select text to hide it too.")
-        : t("Blankey keeps a copy of the file you choose. The assistant can read that file, nothing else on this computer.")}</span>
-      <button onClick=${cancel}>${t("Cancel")}</button>
-      <button class=${picked ? "" : "primary"} onClick=${choose}>${picked ? t("Choose another…") : t("Choose file…")}</button>
-      ${picked && html`<button class="primary" onClick=${share}>${t("Share")}</button>`}
+        : t("Blankey keeps a copy of the file you choose. The assistant can read that file, nothing else on this computer.")}</${HelpNote}>
+      <button data-help="sheet.cancel" onClick=${cancel}>${t("Cancel")}</button>
+      <button class=${picked ? "" : "primary"} data-help="request.choose" onClick=${choose}>${picked ? t("Choose another…") : t("Choose file…")}</button>
+      ${picked && html`<button class="primary" data-help="request.share" onClick=${share}>${t("Share")}</button>`}
     </div>`;
 }
