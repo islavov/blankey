@@ -1,17 +1,44 @@
 import assert from "node:assert/strict";
 import { before, test } from "node:test";
-import { $, $$, action, byText, check, click, goTo, settle, startApp, submit, text, type } from "./setup.js";
+import { $, $$, byText, check, choose, click, goTo, settle, startApp, submit, text, type } from "./setup.js";
 
 let backend;
 before(async () => {
   backend = await startApp();
-  await goTo("Connections");
+  await click($("#settings-btn"));
 });
 
 const rows = () => $$(".grid tbody tr").map((tr) => $$("td", tr).map((td) => td.textContent.trim()));
 
+test("the cog opens the settings; they are not in the sidebar list", () => {
+  assert.equal(text(".toolbar h2"), "Settings");
+  assert.ok($("#settings-btn").classList.contains("active"));
+  assert.ok(!$$(".nav-item").some((el) => el.textContent.includes("Settings") || el.textContent.includes("Connections")));
+});
+
+test("the MCP server status sits in the settings, not in the sidebar", () => {
+  assert.equal(text("#mcp-state"), "MCP on port 8765");
+  assert.equal(text("#mcp-url"), "http://127.0.0.1:8765/mcp");
+  assert.equal($(".sidebar .mcp-status"), null);
+});
+
+test("the language picked here holds until set back to automatic", async () => {
+  assert.deepEqual($$("#language option").map((o) => [o.value, o.textContent]), [["", "Default"], ["en", "English"], ["bg", "Български"]]);
+  assert.equal($("#language").value, "");
+
+  await choose($("#language"), "bg");
+  assert.deepEqual(backend.called("language_set").at(-1), { language: "bg" });
+  assert.equal(document.documentElement.lang, "bg");
+  assert.equal(text(".toolbar h2"), "Настройки");
+  assert.equal($("#language").value, "bg");
+
+  await choose($("#language"), "");
+  assert.deepEqual(backend.called("language_set").at(-1), { language: null });
+  assert.equal(document.documentElement.lang, "en");
+  assert.equal(text(".toolbar h2"), "Settings");
+});
+
 test("shows the relay, its status and the accepted agents", () => {
-  assert.equal(text(".toolbar h2"), "Connections");
   assert.equal(text("#relay-url"), "https://relay.blankey.io");
   assert.equal(text("#relay-mcp-url"), "https://relay.blankey.io/mcp");
   assert.equal(text("#relay-state"), "Connected");
@@ -64,21 +91,23 @@ test("revoke asks first", async () => {
   assert.ok(text(".empty").startsWith("No web agents yet."));
 });
 
-test("the sidebar shows the Blankey Online account above the MCP status", async () => {
+test("the sidebar shows the Blankey Online account above the buttons", async () => {
   assert.equal(text("#relay-account"), "you@example.com");
   assert.equal(text("#relay-btn"), "you@example.com");
   assert.equal($("#relay-btn").title, "Blankey Online: you@example.com, Connected");
   const foot = [...document.querySelector(".sidebar-foot").children].map((el) => el.id || el.className);
-  assert.deepEqual(foot, ["relay-btn", "mcp-status", "foot-actions"], "the account sits above the MCP status");
+  assert.deepEqual(foot, ["relay-btn", "foot-actions"]);
   await goTo("Activity");
   await click($("#relay-btn"));
-  assert.equal(text(".toolbar h2"), "Connections");
+  assert.equal(text(".toolbar h2"), "Settings");
 });
 
-test("sign out and in again", async () => {
-  await action("Sign out");
+test("sign out and in again, next to the online server", async () => {
+  await click(byText(".relay button", "Sign out"));
   assert.equal(text("#relay-state"), "Signed out");
   assert.equal($("#relay-account"), null);
+  assert.equal($("#page-actions button"), null);
+  assert.ok(byText(".relay button", "Sign in").classList.contains("primary"));
   assert.equal(text("#relay-btn"), "Sign in to Blankey Online");
   await click($("#relay-btn"));
   assert.equal(backend.called("relay_login").length, 1);
@@ -113,10 +142,10 @@ test("relay status events refresh the page; the tray can open it", async () => {
   backend.emit("relay-status");
   await settle();
   assert.equal(text("#relay-state"), "Offline");
-  assert.equal(text(".relay-row .small"), "relay unreachable");
+  assert.equal(text("#relay-state + .small"), "relay unreachable");
 
   await goTo("Documents");
-  backend.emit("show-page", "connections");
+  backend.emit("show-page", "settings");
   await settle();
-  assert.equal(text(".toolbar h2"), "Connections");
+  assert.equal(text(".toolbar h2"), "Settings");
 });

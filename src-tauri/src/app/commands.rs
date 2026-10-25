@@ -50,8 +50,10 @@ pub struct Status {
     mcp_url: String,
     mcp_running: bool,
     field_types: &'static [&'static str],
-    /// the UI language, and every language the window can show as {code: name}
+    /// the UI language, the one picked in Settings (None follows the account), and every language the window can
+    /// show as {code: name}
     language: String,
+    device_language: Option<String>,
     languages: serde_json::Map<String, Value>,
 }
 
@@ -71,6 +73,7 @@ async fn status(state: State<'_, AppState>) -> CmdResult<Status> {
         mcp_running: state.mcp_running.load(Ordering::SeqCst),
         field_types: fieldtypes::TYPES,
         language: app.language(),
+        device_language: app.device_language(),
         languages: crate::i18n::languages(),
     })
 }
@@ -1275,6 +1278,27 @@ fn catalog(language: String) -> serde_json::Map<String, Value> {
     crate::i18n::catalog(&language)
 }
 
+/// The language picked in Settings, kept in config.toml; None follows the account's and the computer's again.
+#[tauri::command]
+fn language_set(
+    handle: AppHandle,
+    state: State<AppState>,
+    relay: RelayState,
+    language: Option<String>,
+) -> CmdResult<()> {
+    if language.as_deref().is_some_and(|code| !crate::i18n::is_supported(code)) {
+        return Err(format!("unknown language {language:?}"));
+    }
+    let app = &state.app;
+    // as it is on disk now, so other settings changed since launch stay
+    let mut config = crate::config::Config::load_from(app.config.data_dir.clone()).map_err(err)?;
+    config.language = language.clone();
+    config.save().map_err(err)?;
+    app.set_device_language(language);
+    super::online::refresh_language(&handle, app, relay.language().as_deref());
+    Ok(())
+}
+
 /// The window gained focus: the account's language may have changed on the relay meanwhile.
 #[tauri::command]
 fn focused(relay: RelayState) {
@@ -1385,6 +1409,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         relay_summary,
         focused,
         catalog,
+        language_set,
         log_error,
         relay_login,
         relay_logout,

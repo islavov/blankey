@@ -31,6 +31,8 @@ pub struct Config {
     pub auto_update: bool,
     /// Values that look personal reach the assistant as placeholders (src/pii); a user setting only.
     pub pii_redaction: bool,
+    /// The UI language picked in Settings; while set, the Blankey Online account's language never changes it.
+    pub language: Option<String>,
 }
 
 impl Default for Config {
@@ -46,6 +48,7 @@ impl Default for Config {
             telemetry_url: None,
             auto_update: true,
             pii_redaction: true,
+            language: None,
         }
     }
 }

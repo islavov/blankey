@@ -177,7 +177,7 @@ fn on_menu(handle: &AppHandle, id: &str) {
             }
             (None, _) => {}
         },
-        "relay_agents" => online::show_connections(handle),
+        "relay_agents" => online::show_settings(handle),
         "update_install" => {
             if let Some(updates) = handle.try_state::<Arc<Updates>>() {
                 let (handle, updates) = (handle.clone(), updates.inner().clone());

@@ -82,10 +82,13 @@ pub fn system_language() -> Option<String> {
     is_supported(&code).then_some(code)
 }
 
-/// The account's language when the relay gave one we have, else the computer's, else English.
-pub fn resolve(profile: Option<&str>) -> String {
-    profile
-        .filter(|code| is_supported(code))
+/// The language picked on this computer, else the account's when the relay gave one, else the computer's, else
+/// English; codes we have no catalog for are skipped.
+pub fn resolve(device: Option<&str>, profile: Option<&str>) -> String {
+    [device, profile]
+        .into_iter()
+        .flatten()
+        .find(|code| is_supported(code))
         .map(str::to_string)
         .or_else(system_language)
         .unwrap_or_else(|| DEFAULT.to_string())
@@ -124,9 +127,11 @@ mod tests {
 
     #[test]
     fn precedence() {
-        assert_eq!(resolve(Some("bg")), "bg");
+        assert_eq!(resolve(None, Some("bg")), "bg");
+        assert_eq!(resolve(Some("en"), Some("bg")), "en");
+        assert_eq!(resolve(Some("xx"), Some("bg")), "bg");
         let fallback = system_language().unwrap_or_else(|| DEFAULT.into());
-        assert_eq!(resolve(Some("xx")), fallback);
-        assert_eq!(resolve(None), fallback);
+        assert_eq!(resolve(None, Some("xx")), fallback);
+        assert_eq!(resolve(None, None), fallback);
     }
 }

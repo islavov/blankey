@@ -203,7 +203,8 @@ pub fn run() {
     }
     let secrets = OsKeyring::for_data_dir(&config.data_dir, &Config::default_data_dir());
     let app = Arc::new(Blankey::new(config, Box::new(secrets)).expect("cannot open the vault"));
-    app.set_language(&i18n::resolve(app.vault().relay_language().ok().flatten().as_deref()));
+    let profile = app.vault().relay_language().ok().flatten();
+    app.set_language(&app.resolve_language(profile.as_deref()));
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|handle, _args, _cwd| show_main(handle)))
         .plugin(tauri_plugin_dialog::init())

@@ -8,7 +8,7 @@ import { openSheet, SheetHead } from "../ui/sheet.js";
 import { Empty, Page } from "../ui/page.js";
 import { Select } from "../ui/select.js";
 import { Table, useSelection } from "../ui/table.js";
-import { relaySignIn } from "./connections.js";
+import { relaySignIn } from "./settings.js";
 
 const linkState = (state) => ({ open: t("Open"), expired: t("Expired"), revoked: t("Revoked"), full: t("Full") })[state] || state;
 const DAYS = [1, 7, 30];

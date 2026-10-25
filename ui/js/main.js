@@ -66,14 +66,14 @@ listen("language-changed", ({ payload }) => applyLanguage(payload));
 window.addEventListener("focus", () => invoke("focused").catch(() => {}));
 listen("relay-status", () => {
   refreshRelay();
-  if (state.page === "connections") reload();
+  if (state.page === "settings") reload();
 });
 // a template folder changed on disk (file watcher or poll)
 listen("library-changed", () => {
   if (state.page === "templates") reload();
 });
 listen("update-status", () => {
-  if (state.page === "connections") reload();
+  if (state.page === "settings") reload();
 });
 listen("show-page", ({ payload }) => update({ page: payload, search: "" }));
 
