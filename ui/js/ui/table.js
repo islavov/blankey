@@ -51,12 +51,12 @@ export function Table({ rows, columns, selected = [], onPick, onOpen, rowClass =
 
 /**
  * A table with a checkbox in front of each row and a ⋮ menu at its end. checked: the checked ids; onCheck(ids or
- * current => ids); menu(row): the row's popup items; onOpen(row) on double-click. Pressing a row's checkbox flips it,
- * and holding the button down gives every row passed over the same state; cmd/ctrl-click on a row flips it too.
+ * current => ids); menu(row): the row's popup items; onOpen(row) on double-click. Pressing a row's checkbox, or the
+ * row itself with cmd/ctrl, flips it, and holding the button down gives every row passed over the same state.
  * checks: false leaves the checkboxes out.
  */
 export function CheckTable({ rows, columns, checked = [], onCheck, menu, onOpen, checks = true, rowClass = () => "" }) {
-  // while the button is held after pressing a checkbox: the state the rows passed over get
+  // while the button is held after a press: the state the rows passed over get
   const paint = useRef(null);
   useEffect(() => {
     const stop = () => (paint.current = null);
@@ -72,8 +72,8 @@ export function CheckTable({ rows, columns, checked = [], onCheck, menu, onOpen,
     set(row.id, paint.current);
   };
   const pass = (row) => paint.current !== null && set(row.id, paint.current);
-  const click = (e, row) => {
-    if (checks && (e.metaKey || e.ctrlKey) && !e.target.closest("input, button, a")) set(row.id, !checked.includes(row.id));
+  const pressRow = (e, row) => {
+    if (checks && (e.metaKey || e.ctrlKey) && !e.target.closest("input, button, a, td.check")) press(e, row);
   };
   const open = (e, row) => {
     if (!e.target.closest("input, button")) onOpen?.(row);
@@ -95,7 +95,7 @@ export function CheckTable({ rows, columns, checked = [], onCheck, menu, onOpen,
         ${rows.map(
           (row) => html`
             <tr key=${row.id} class=${`${checked.includes(row.id) ? "selected" : ""} ${rowClass(row)}`}
-              onMouseEnter=${() => pass(row)} onClick=${(e) => click(e, row)} onDblClick=${(e) => open(e, row)}>
+              onMouseDown=${(e) => pressRow(e, row)} onMouseEnter=${() => pass(row)} onDblClick=${(e) => open(e, row)}>
               ${checks &&
               html`<td class="check" data-help="rows.check" onMouseDown=${(e) => press(e, row)}>
                 <input type="checkbox" checked=${checked.includes(row.id)} onChange=${(e) => set(row.id, e.target.checked)} />

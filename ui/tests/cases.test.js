@@ -224,6 +224,13 @@ test("files: checking rows turns the buttons on top into what to do with them", 
   assert.equal(text(".tab-actions .checked-count"), "1 selected", "cmd-click on a row checks it");
   await click($(".file-label", row("Title deed")), { metaKey: true });
   assert.equal(box("Title deed").checked, false, "cmd-click again unchecks it");
+
+  $(".file-label", row("power-of-attorney.docx")).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, metaKey: true }));
+  row("paul_id-card.jpg").dispatchEvent(new MouseEvent("mouseenter"));
+  document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  await settle();
+  assert.deepEqual(ticks(), [true, true, false, false], "cmd held down on a row drags like the checkbox");
+  await tabAction("Clear");
   await click($(".file-label", row("power-of-attorney.docx")), { shiftKey: true });
   assert.deepEqual(ticks(), [false, false, false, false], "a plain or shift click checks nothing");
 
