@@ -7,7 +7,8 @@
   },
   "description": "Tests for the Blankey UI in ui/tests (ui/ is served as-is, without a build step)",
   "scripts": {
-    "test": "node scripts/i18n-check.mjs && node --test ui/tests/*.test.js"
+    "test": "node scripts/i18n-check.mjs && node --test ui/tests/*.test.js",
+    "preview": "python3 ui/tests/preview/serve.py"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^15.11.7",

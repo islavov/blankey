@@ -1,6 +1,6 @@
 import { call } from "../api.js";
 import { t, tn } from "../i18n.js";
-import { html, matches, reload, useLoad, when } from "../lib.js";
+import { CaseLink, html, matches, reload, useLoad, when } from "../lib.js";
 import { confirmDialog, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
 import { Table, useSelection } from "../ui/table.js";
@@ -28,7 +28,8 @@ export function Documents() {
     reload();
   };
 
-  const visible = docs.filter((d) => matches(d.title, d.template_id, d.filename));
+  const visible = docs.filter((d) => matches(d.title, d.template_id, d.filename, d.case_title));
+  const caseColumn = docs.some((d) => d.case_id != null);
   return html`
     <${Page} title=${t("Documents")} subtitle=${t("Encrypted in the vault")} actions=${[
       [t("Open"), need(open), "", "documents.open"],
@@ -46,6 +47,7 @@ export function Documents() {
               { title: t("Template"), cell: (d) => html`<span class="mono">${d.template_id}</span>` },
               { title: t("Kind"), cell: (d) => (d.filename.endsWith(".pdf") ? "PDF" : "Word"), cls: "nowrap" },
               { title: t("Size"), cell: (d) => (d.pages ? tn(d.pages, "{n} page", "{n} pages") : "-"), cls: "nowrap" },
+              ...(caseColumn ? [{ title: t("Case"), cell: (d) => html`<${CaseLink} id=${d.case_id} title=${d.case_title} />` }] : []),
               { title: t("Created"), cell: (d) => html`<span class="muted">${when(d.created_at)}</span>`, cls: "nowrap" },
             ]} />`
         : html`<${Empty}>${t("No documents yet. Documents are generated from fill sets.")}</${Empty}>`}

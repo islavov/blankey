@@ -52,6 +52,11 @@ export function seed() {
       { id: 5, root_id: 1, rel_path: "Application.pdf", kind: "pdf", title: "Application for a permit", category: null, tags: [], readiness: "ready", fields: 4, blanks: 0, pages: 1, missing: false },
     ],
     requests: [],
+    // done requests; pending ones come from `requests`
+    activity: [{ id: 6, label: "Fill", details: "acme", outcome: "generated", status: "done", time: "2026-10-09T10:00", kind: "fill", document_ids: [1], fill_set_id: 1 }],
+    cases: [],
+    // {case_id, profile_id, role}
+    caseLinks: [],
     links: [
       {
         link_id: "XchaBj2",
@@ -171,7 +176,9 @@ const fillSession = (db, args) => ({
   ],
   roles: { applicant: "The person" },
   profiles: { applicant: 1 },
-  all_profiles: db.profiles,
+  // the profiles the form offers: global ones, and in a case the case's own
+  all_profiles: db.profiles.filter((p) => p.global !== false || db.caseLinks.some((l) => l.case_id === args.case_id && l.profile_id === p.id)),
+  case_id: args.case_id ?? null,
   vars: [
     { name: "name", label: "Name", defaults: { nzok: "{{ applicant.name }}" }, contexts: [["nzok", "Name: ___"]] },
     { name: "egn", label: "EGN", defaults: { nzok: "{{ applicant.egn }}" }, contexts: [] },
@@ -210,6 +217,23 @@ export function createBackend(db = seed()) {
   const emit = (name, payload) => (listeners[name] || []).forEach((listener) => listener({ payload }));
   const removeRequest = (id) => (db.requests = db.requests.filter((r) => r.id !== id));
 
+  const caseTitle = (id) => db.cases.find((c) => c.id === id)?.title ?? null;
+  // with a case: its rows; without one: every row, labelled with its case
+  const inCase = (rows, caseId) =>
+    caseId == null ? rows.map((r) => ({ ...r, case_id: r.case_id ?? null, case_title: caseTitle(r.case_id) })) : rows.filter((r) => r.case_id === caseId);
+  const linksOf = (caseId) => db.caseLinks.filter((l) => l.case_id === caseId);
+  const casesOf = (profileId) => db.caseLinks.filter((l) => l.profile_id === profileId);
+  const nextId = (rows) => Math.max(0, ...rows.map((r) => r.id)) + 1;
+  const touch = (caseId) => {
+    const found = db.cases.find((c) => c.id === caseId);
+    if (found) found.updated_at = now();
+  };
+  const deleteProfile = (id) => {
+    db.profiles = db.profiles.filter((p) => p.id !== id);
+    db.caseLinks = db.caseLinks.filter((l) => l.profile_id !== id);
+    db.collected = db.collected.filter((f) => f.profile_id !== id || f.case_id != null);
+  };
+
   const handlers = {
     status: () => ({
       initialized: db.initialized,
@@ -246,18 +270,23 @@ export function createBackend(db = seed()) {
     touch: () => null,
     set_busy: () => null,
     copy_text: () => null,
-    list_activity: () => [
-      ...db.requests.map((r) => ({ id: r.id, label: "Fill", details: "NZOK", outcome: "waiting", status: "pending", time: "2026-10-10T10:00", kind: r.kind, document_ids: [], fill_set_id: null })),
-      { id: 6, label: "Fill", details: "acme", outcome: "generated", status: "done", time: "2026-10-09T10:00", kind: "fill", document_ids: [1], fill_set_id: 1 },
-    ],
-    list_fill_sets: () => db.sets,
+    list_activity: ({ caseId } = {}) =>
+      inCase(
+        [
+          ...db.requests.map((r) => ({ id: r.id, label: "Fill", details: "NZOK", outcome: "waiting", status: "pending", time: "2026-10-10T10:00", kind: r.kind, document_ids: [], fill_set_id: null, case_id: r.payload?.case_id ?? null })),
+          ...db.activity,
+        ],
+        caseId
+      ),
+    list_fill_sets: ({ caseId } = {}) => inCase(db.sets, caseId),
     generate_fill_set: () => [5, 6],
     delete_fill_set: ({ id }) => {
       db.sets = db.sets.filter((s) => s.id !== id);
     },
     // newest first, as the vault lists them
-    list_documents: () => [...db.docs].sort((a, b) => b.id - a.id),
-    list_collected_files: () => db.collected,
+    list_documents: ({ caseId } = {}) => inCase([...db.docs].sort((a, b) => b.id - a.id), caseId),
+    list_collected_files: ({ caseId } = {}) =>
+      (caseId == null ? db.collected : db.collected.filter((f) => f.case_id === caseId)).map((f) => ({ case_id: null, description: "", ...f })),
     open_collected_files: () => null,
     export_collected_file: () => "/tmp/payslip.pdf",
     add_profile_files: ({ profileId }) => {
@@ -303,7 +332,15 @@ export function createBackend(db = seed()) {
     delete_documents: ({ ids }) => {
       db.docs = db.docs.filter((d) => !ids.includes(d.id));
     },
-    list_templates: () => db.templates,
+    // without a case: global templates; with one: its own first, then the global ones
+    list_templates: ({ caseId } = {}) => {
+      const card = (tpl) => ({ ...tpl, local: tpl.case_id != null });
+      const global = db.templates.filter((tpl) => tpl.case_id == null).map(card);
+      return caseId == null ? global : [...db.templates.filter((tpl) => tpl.case_id === caseId).map(card), ...global];
+    },
+    make_template_global: ({ id }) => {
+      delete db.templates.find((tpl) => tpl.id === id).case_id;
+    },
     library_roots: () => db.roots,
     library_files: () => db.libraryFiles.filter((f) => db.roots.some((r) => r.id === f.root_id)),
     add_library_root: () => {
@@ -353,23 +390,144 @@ export function createBackend(db = seed()) {
         blanks: 2,
         preview: id === "loan" ? htmlPreview : pagesPreview,
       }),
-    list_profiles: () => db.profiles,
+    list_profiles: () => db.profiles.filter((p) => p.global !== false),
     profile_fields: ({ id }) => db.fields[id],
     save_fields: ({ id, fields }) => {
       const problems = fields.filter((f) => f.key.includes(" ")).map((f) => ({ label: f.key, message: "use dotted words without spaces" }));
       if (!problems.length) db.fields[id] = fields;
       return problems;
     },
-    create_profile: ({ name, kind }) => {
+    // in a case: a local profile, linked to it
+    create_profile: ({ name, kind, caseId = null, role = "" }) => {
       const id = Math.max(...db.profiles.map((p) => p.id)) + 1;
-      db.profiles.push({ id, name, kind });
+      db.profiles.push({ id, name, kind, global: caseId == null });
       db.fields[id] = [];
+      if (caseId != null) {
+        db.caseLinks.push({ case_id: caseId, profile_id: id, role });
+        touch(caseId);
+      }
       return id;
     },
     update_profile: ({ id, name, kind }) => Object.assign(db.profiles.find((p) => p.id === id), { name, kind }),
-    delete_profile: ({ id }) => {
-      db.profiles = db.profiles.filter((p) => p.id !== id);
-      db.collected = db.collected.filter((f) => f.profile_id !== id);
+    delete_profile: ({ id }) => deleteProfile(id),
+    make_profile_global: ({ id }) => {
+      db.profiles.find((p) => p.id === id).global = true;
+    },
+
+    list_cases: () =>
+      [...db.cases]
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+        .map((c) => ({
+          id: c.id,
+          title: c.title,
+          updated_at: c.updated_at,
+          profiles: linksOf(c.id).map((l) => db.profiles.find((p) => p.id === l.profile_id).name),
+          files: db.collected.filter((f) => f.case_id === c.id).length,
+        })),
+    create_case: ({ title }) => {
+      if (!title.trim()) throw "Give the case a title";
+      const id = nextId(db.cases);
+      db.cases.push({ id, title: title.trim(), notes: "", created_at: now(), updated_at: now() });
+      return id;
+    },
+    get_case: ({ id }) => {
+      const found = db.cases.find((c) => c.id === id);
+      if (!found) throw `Unknown case ${id}`;
+      const profiles = linksOf(id).map((l) => {
+        const p = db.profiles.find((x) => x.id === l.profile_id);
+        return { id: p.id, name: p.name, kind: p.kind, global: p.global !== false, role: l.role, cases: casesOf(p.id).length };
+      });
+      const count = (rows) => rows.filter((r) => r.case_id === id).length;
+      return {
+        ...found,
+        profiles,
+        counts: {
+          files: count(db.collected),
+          profiles: profiles.length,
+          templates: count(db.templates),
+          fill_sets: count(db.sets),
+          documents: count(db.docs),
+          activity: count(db.activity) + db.requests.filter((r) => r.payload?.case_id === id).length,
+        },
+      };
+    },
+    update_case: ({ id, title, notes }) => {
+      const found = db.cases.find((c) => c.id === id);
+      if (title != null) {
+        if (!title.trim()) throw "Give the case a title";
+        found.title = title.trim();
+      }
+      if (notes != null) found.notes = notes;
+      touch(id);
+    },
+    delete_case: ({ id }) => {
+      const only = linksOf(id)
+        .map((l) => db.profiles.find((p) => p.id === l.profile_id))
+        .filter((p) => p.global === false && casesOf(p.id).length === 1);
+      const removed = (key, rows) => {
+        const kept = rows.filter((r) => r.case_id !== id);
+        const n = rows.length - kept.length;
+        db[key] = kept;
+        return n;
+      };
+      const deleted = {
+        files: removed("collected", db.collected),
+        fill_sets: removed("sets", db.sets),
+        documents: removed("docs", db.docs),
+        templates: removed("templates", db.templates),
+        profiles_deleted: only.length,
+        profiles_unlinked: linksOf(id).length - only.length,
+      };
+      only.forEach((p) => deleteProfile(p.id));
+      db.caseLinks = db.caseLinks.filter((l) => l.case_id !== id);
+      db.activity = db.activity.map((r) => (r.case_id === id ? { ...r, case_id: null } : r));
+      db.cases = db.cases.filter((c) => c.id !== id);
+      return deleted;
+    },
+    pick_files: () => db.pickPaths ?? ["/Users/test/Downloads/id-card.jpg", "/Users/test/Downloads/notary-deed.pdf", "/Users/test/Downloads/power-of-attorney.docx"],
+    import_case_files: ({ caseId, items }) => {
+      for (const { path, description } of items) {
+        const name = path.split(/[\\/]/).pop();
+        db.collected.unshift({
+          id: nextId(db.collected),
+          case_id: caseId,
+          profile_id: null,
+          link_id: "",
+          name,
+          type: fileType(name),
+          size: 200 * 1024,
+          description,
+          created_at: now(),
+          link_title: "",
+          profile_name: null,
+        });
+      }
+      touch(caseId);
+      return items.length;
+    },
+    update_case_file: ({ id, description }) => {
+      db.collected.find((f) => f.id === id).description = description;
+    },
+    // profiles a case can add: global ones not in it, and local ones of other cases (named by their cases)
+    linkable_profiles: ({ caseId }) =>
+      db.profiles
+        .filter((p) => !linksOf(caseId).some((l) => l.profile_id === p.id))
+        .filter((p) => p.global !== false || casesOf(p.id).length)
+        .map((p) => ({ id: p.id, name: p.name, kind: p.kind, global: p.global !== false, cases: casesOf(p.id).map((l) => caseTitle(l.case_id)) })),
+    link_case_profile: ({ caseId, profileId, role }) => {
+      const found = db.caseLinks.find((l) => l.case_id === caseId && l.profile_id === profileId);
+      if (found) found.role = role;
+      else db.caseLinks.push({ case_id: caseId, profile_id: profileId, role });
+      touch(caseId);
+    },
+    // a local profile on its last case goes with it
+    remove_case_profile: ({ caseId, profileId }) => {
+      const p = db.profiles.find((x) => x.id === profileId);
+      db.caseLinks = db.caseLinks.filter((l) => !(l.case_id === caseId && l.profile_id === profileId));
+      touch(caseId);
+      if (p.global !== false || casesOf(profileId).length) return false;
+      deleteProfile(profileId);
+      return true;
     },
     next_request: () => {
       if (!db.unlocked) throw "Vault is locked";
@@ -461,6 +619,11 @@ export function createBackend(db = seed()) {
   const called = (cmd) => calls.filter(([c]) => c === cmd).map(([, args]) => args);
   return { db, calls, called, emit, tauri };
 }
+
+const now = () => new Date().toISOString().slice(0, 19);
+
+const FILE_TYPES = { pdf: "application/pdf", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", heic: "image/heic" };
+const fileType = (name) => FILE_TYPES[name.split(".").pop().toLowerCase()] || "application/octet-stream";
 
 const delayed = (ms, value) => (ms ? new Promise((resolve) => setTimeout(() => resolve(value), ms)) : value);
 

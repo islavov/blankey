@@ -25,14 +25,14 @@ export function selectionSpan(root) {
   return { block: start.block, start: start.offset, end: end.offset, range: range.cloneRange() };
 }
 
-/** Opens the review of a library file in its own sheet. */
-export const openReview = (file) =>
+/** Opens the review of a file in its own sheet: source is lib:<id> or casefile:<id>, title what the user calls it. */
+export const openReview = ({ source, title }) =>
   openSheet((close) => html`
     <div class="sheet-head">
-      <${SheetHead} icon="lock" title=${t("Personal data in {name}", { name: file.title || file.rel_path.split("/").pop() })}
+      <${SheetHead} icon="lock" title=${t("Personal data in {name}", { name: title })}
         reason=${t("Your AI assistant sees hidden values masked, like Xxxx Xxxxxx.")} />
     </div>
-    <div class="sheet-body"><${PiiReview} source=${`lib:${file.id}`} /></div>
+    <div class="sheet-body"><${PiiReview} source=${source} /></div>
     <div class="sheet-foot">
       <${HelpNote}>${t("Select text to hide it too. Click a marked value to change it.")}</${HelpNote}>
       <button class="primary" data-help="pii.done" onClick=${close}>${t("Done")}</button>
@@ -114,7 +114,11 @@ export function PiiReview({ source }) {
   // the menu follows its text when the preview scrolls; Escape or a click elsewhere closes it
   useEffect(() => {
     if (!menu) return;
-    const key = (e) => e.key === "Escape" && closeMenu();
+    const key = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      closeMenu();
+    };
     const outside = (e) => !e.target.closest(".review-menu") && closeMenu();
     const scroll = () => setScrolled((n) => n + 1);
     document.addEventListener("keydown", key);

@@ -7,7 +7,7 @@ const FALLBACK = 200;
 
 let helpText;
 before(async () => {
-  await startApp();
+  await startApp({ cases: [{ id: 1, title: "Sale, 12 Oak Street", notes: "", created_at: "2026-10-28T09:00:00", updated_at: "2026-11-02T10:00:00" }] });
   ({ helpText } = await import(new URL("../js/help.js", import.meta.url).href));
 });
 
@@ -16,7 +16,7 @@ const shown = () => [text(".help-title"), text(".help-text")];
 test("the help box sits above the sidebar buttons and starts with what the page is for", () => {
   const order = [...$(".sidebar").children].map((el) => el.id || el.className);
   assert.deepEqual(order.slice(-3), ["nav", "help-box", "sidebar-foot"]);
-  assert.deepEqual(shown(), helpText("page.activity"));
+  assert.deepEqual(shown(), helpText("page.cases"));
 });
 
 test("hovering a nav item, a page action or a sidebar button shows what it does", async () => {
@@ -26,7 +26,7 @@ test("hovering a nav item, a page action or a sidebar button shows what it does"
   assert.ok(text(".help-text").includes("only be opened on this computer"), "a nav item explains the idea");
 
   await hover(byText(".nav-section", "Library"), FALLBACK);
-  assert.deepEqual(shown(), helpText("page.activity"), "section titles have no help of their own");
+  assert.deepEqual(shown(), helpText("page.cases"), "section titles have no help of their own");
 
   await goTo("Fill sets");
   await hover(byText("#page-actions button", "Generate"));
@@ -61,8 +61,13 @@ test("a button without a help key shows its own title", async () => {
 test("every help key on the pages and in Settings has a text", async () => {
   const keys = new Set();
   const collect = () => $$("[data-help]").forEach((el) => keys.add(el.getAttribute("data-help")));
-  for (const page of ["Activity", "Fill sets", "Documents", "Templates", "Profiles", "Collection links"]) {
+  for (const page of ["Cases", "Activity", "Fill sets", "Documents", "Templates", "Profiles", "Collection links"]) {
     await goTo(page);
+    collect();
+  }
+  await goTo("Cases");
+  for (const chip of $$(".case-tabs .chip")) {
+    await click(chip);
     collect();
   }
   await goTo("Templates");

@@ -8,13 +8,14 @@ import { refreshAfterRequests } from "../requests.js";
 import { alertDialog, isDialogOpen, toast } from "../ui/feedback.js";
 import { hidePopup, isMenuOpen, popup } from "../ui/menu.js";
 import { Select } from "../ui/select.js";
-import { openSheet, SheetHead } from "../ui/sheet.js";
+import { openSheet, SheetHead, useSheetEscape } from "../ui/sheet.js";
 import { FillRow } from "./rows.js";
 import { sourceItems } from "./source.js";
 
 const PREVIEW_DELAY = 250;
 
-/** Opens the fill form for templates, a saved fill set or a request from the assistant; resolves when it closes. */
+/** Opens the fill form for templates, a saved fill set or a request from the assistant; resolves when it closes.
+ * case_id: the case the fill is made in; its fill set and documents go there. */
 export async function openFill(args) {
   let session;
   try {
@@ -29,6 +30,7 @@ export async function openFill(args) {
         fill_set_id: null,
         copy_fill_set_id: null,
         request_id: null,
+        case_id: null,
         ...args,
       },
     });
@@ -113,7 +115,7 @@ function FillForm({ session: s, close }) {
 
   const at = (anchor, items) => {
     const rect = anchor.getBoundingClientRect();
-    popup(rect.left, rect.bottom + 2, items, rect.width);
+    popup(rect.left, rect.bottom + 2, items, Math.max(260, rect.width));
   };
 
   /** Any profile's fields, not only the ones chosen for the roles: pick the profile, then the field. */
@@ -160,7 +162,7 @@ function FillForm({ session: s, close }) {
     document.body.classList.add("busy");
     try {
       const result = await invoke("fill_save", {
-        args: { request_id: s.request_id, fill_set_id: fillSetId, name: name.trim(), ...args, generate },
+        args: { request_id: s.request_id, case_id: s.case_id ?? null, fill_set_id: fillSetId, name: name.trim(), ...args, generate },
       });
       setFillSetId(result.fill_set_id);
       setSaved(true);
@@ -192,10 +194,7 @@ function FillForm({ session: s, close }) {
 
   const onKey = (e) => {
     if (isDialogOpen()) return;
-    if (isMenuOpen()) {
-      if (e.key === "Escape") hidePopup();
-      return;
-    }
+    if (isMenuOpen()) return;
     if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
     const names = s.vars.map((v) => v.name);
     const index = names.indexOf(active);
@@ -207,11 +206,10 @@ function FillForm({ session: s, close }) {
       e.preventDefault();
       const source = document.querySelector(`.fill-row[data-var="${CSS.escape(active)}"] .source`);
       if (source) sourceMenu(active, source);
-    } else if (e.key === "Escape") {
-      cancel();
     }
   };
   useDocumentKeys(onKey);
+  useSheetEscape(cancel);
 
   const chooseProfile = (role, value) => {
     const next = { ...profiles };

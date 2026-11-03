@@ -1,10 +1,18 @@
 import { call, withBusy } from "../api.js";
 import { openFill } from "../fill/form.js";
 import { t, tn } from "../i18n.js";
-import { html, matches, reload, useLoad, when } from "../lib.js";
+import { CaseLink, html, matches, reload, useLoad, when } from "../lib.js";
 import { confirmDialog, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
 import { Table, useSelection } from "../ui/table.js";
+
+/** Makes the documents of fill sets again, with the profiles' current values. */
+export const generateFillSets = (ids) =>
+  withBusy(async () => {
+    let made = 0;
+    for (const id of ids) made += (await call("generate_fill_set", { id })).length;
+    toast(tn(made, "{n} document generated", "{n} documents generated"));
+  });
 
 export function FillSets() {
   const sets = useLoad(() => call("list_fill_sets"), []);
@@ -15,13 +23,6 @@ export function FillSets() {
   /** Open acts on one fill set: the one clicked last. */
   const need = (action) => () => (selected.length ? action(selected.at(-1)) : toast(t("Select a fill set")));
   const needAll = (action) => () => (selected.length ? action(selected) : toast(t("Select a fill set")));
-
-  const generate = (ids) =>
-    withBusy(async () => {
-      let made = 0;
-      for (const id of ids) made += (await call("generate_fill_set", { id })).length;
-      toast(tn(made, "{n} document generated", "{n} documents generated"));
-    });
 
   const remove = async (ids) => {
     const title =
@@ -34,11 +35,12 @@ export function FillSets() {
     reload();
   };
 
-  const visible = sets.filter((s) => matches(s.name, ...s.templates, ...s.profiles));
+  const visible = sets.filter((s) => matches(s.name, ...s.templates, ...s.profiles, s.case_title));
+  const caseColumn = sets.some((s) => s.case_id != null);
   return html`
     <${Page} title=${t("Fill sets")} subtitle=${tn(sets.length, "{n} set", "{n} sets")} actions=${[
       [t("Open"), need((id) => openFill({ fill_set_id: id })), "", "fillsets.open"],
-      [t("Generate"), needAll(generate), "", "fillsets.generate"],
+      [t("Generate"), needAll(generateFillSets), "", "fillsets.generate"],
       [t("Delete"), needAll(remove), "danger", "fillsets.delete"],
     ]}>
       ${visible.length
@@ -51,6 +53,7 @@ export function FillSets() {
               { title: t("Name"), cell: (s) => html`<b>${s.name}</b>` },
               { title: t("Templates"), cell: (s) => s.templates.join(", ") },
               { title: t("Profiles"), cell: (s) => s.profiles.join(", ") },
+              ...(caseColumn ? [{ title: t("Case"), cell: (s) => html`<${CaseLink} id=${s.case_id} title=${s.case_title} />` }] : []),
               { title: t("Updated"), cell: (s) => html`<span class="muted">${when(s.updated_at)}</span>`, cls: "nowrap" },
             ]} />`
         : html`<${Empty}>${t("No fill sets yet. Ask your AI assistant to fill in a template.")}</${Empty}>`}

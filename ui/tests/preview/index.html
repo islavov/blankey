@@ -1,0 +1,60 @@
+<!doctype html>
+<!-- The real UI over the fake backend, in a browser: npm run preview, then open /tests/preview/ (?lang=bg). -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <base href="../../">
+  <title>Blankey preview</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">{ "imports": { "node:fs": "./tests/preview/fs-shim.js" } }</script>
+</head>
+<body>
+  <div id="root"></div>
+  <div id="sheet-root"></div>
+  <div id="modal-root"></div>
+  <div id="menu-root"></div>
+  <div id="toast" class="toast hidden"></div>
+  <script type="module">
+    import { createBackend, seed } from "./tests/backend.js";
+    import { demo } from "./tests/preview/demo.js";
+    import { toast } from "./js/ui/feedback.js";
+
+    const language = new URLSearchParams(location.search).get("lang");
+    const backend = createBackend(Object.assign(seed(), demo(), language ? { language } : {}));
+    // the real app opens files in the computer's apps; the preview says which it would open
+    const invoke = backend.tauri.core.invoke;
+    const opens = {
+      open_collected_files: ({ ids }) => backend.db.collected.filter((f) => ids.includes(f.id)).map((f) => f.description || f.name),
+      open_documents: ({ ids }) => backend.db.docs.filter((d) => ids.includes(d.id)).map((d) => d.title),
+    };
+    backend.tauri.core.invoke = async (cmd, args = {}) => {
+      if (opens[cmd]) toast(`Opens in its app: ${opens[cmd](args).join(", ")}`);
+      return invoke(cmd, args);
+    };
+    window.__TAURI__ = backend.tauri;
+    // from the console: backend.emit("cases-changed"), backend.db, backend.calls
+    window.backend = backend;
+
+    // Files dragged from Finder become the window drag events Tauri sends, with made-up paths.
+    let depth = 0;
+    const position = (e) => ({ x: e.clientX, y: e.clientY });
+    const paths = (e) => [...(e.dataTransfer?.files || [])].map((f) => `/demo/${f.name}`);
+    window.addEventListener("dragenter", (e) => {
+      e.preventDefault();
+      if (depth++ === 0) backend.emit("tauri://drag-enter", { paths: [], position: position(e) });
+    });
+    window.addEventListener("dragover", (e) => e.preventDefault());
+    window.addEventListener("dragleave", () => {
+      if (--depth === 0) backend.emit("tauri://drag-leave", null);
+    });
+    window.addEventListener("drop", (e) => {
+      e.preventDefault();
+      depth = 0;
+      backend.emit("tauri://drag-drop", { paths: paths(e), position: position(e) });
+    });
+
+    await import("./js/main.js");
+  </script>
+</body>
+</html>
