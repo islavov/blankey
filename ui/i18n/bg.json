@@ -746,7 +746,7 @@
   "Select all": "Избери всички",
   "Checks every row, to act on all of them.": "Отбелязва всички редове, за да действате върху всички наведнъж.",
   "Select": "Избери",
-  "Check rows to act on several at once; the buttons on top change to what you can do with them. Cmd/Ctrl-click a row to check it, Shift-click for a range.": "Отбележете редове, за да действате върху няколко наведнъж; бутоните горе показват какво можете да направите с тях. Cmd/Ctrl-щракване върху ред го отбелязва, а Shift-щракване – цял диапазон.",
+  "Check rows to act on several at once; the buttons on top change to what you can do with them. Hold the button down and move over the boxes to check or uncheck many; Cmd/Ctrl-click a row to check it.": "Отбележете редове, за да действате върху няколко наведнъж; бутоните горе показват какво можете да направите с тях. Задръжте бутона на мишката и минете през полетата, за да отбележите или махнете много наведнъж; Cmd/Ctrl-щракване върху ред го отбелязва.",
   "What you can do with this row.": "Какво можете да направите с този ред.",
   "Unchecks every row.": "Премахва отметките от всички редове.",
   "Saves a copy of the file where you choose, outside the vault.": "Запазва копие на файла извън трезора, на място по ваш избор.",

@@ -195,8 +195,15 @@ test("files: checking rows turns the buttons on top into what to do with them", 
   assert.deepEqual($$(".tab-actions button").map((b) => b.textContent), ["Import…"]);
   const box = (part) => $("td.check input", row(part));
   const ticks = () => $$("td.check input").map((input) => input.checked);
-  await click(box("mary-id.jpg"));
-  await click(box("power-of-attorney.docx"));
+  /** Presses the first row's checkbox, moves over the others with the button held, lets go. */
+  const drag = async (first, ...over) => {
+    $("td.check", row(first)).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    for (const part of over) row(part).dispatchEvent(new MouseEvent("mouseenter"));
+    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    await settle();
+  };
+  await drag("mary-id.jpg");
+  await drag("power-of-attorney.docx");
   assert.equal(text(".tab-actions .checked-count"), "2 selected");
   assert.deepEqual($$(".tab-actions button").map((b) => b.textContent), ["Delete", "Clear"]);
 
@@ -204,29 +211,25 @@ test("files: checking rows turns the buttons on top into what to do with them", 
   assert.deepEqual($$(".tab-actions button").map((b) => b.textContent), ["Import…"]);
 
   // rows: power of attorney, Paul's ID, Mary's ID, title deed
-  await click(box("power-of-attorney.docx"));
-  await click(box("mary-id.jpg"), { shiftKey: true });
-  assert.deepEqual(ticks(), [true, true, true, false], "shift-click on a checkbox checks the rows from the last one");
-  await click(box("paul_id-card.jpg"), { shiftKey: true });
-  assert.deepEqual(ticks(), [true, false, false, false], "and unchecks them when it unchecks");
+  await drag("power-of-attorney.docx", "paul_id-card.jpg", "mary-id.jpg");
+  assert.deepEqual(ticks(), [true, true, true, false], "a drag from an unchecked box checks every row passed over");
+  await drag("paul_id-card.jpg", "mary-id.jpg", "Title deed");
+  assert.deepEqual(ticks(), [true, false, false, false], "a drag from a checked box unchecks them");
+  row("power-of-attorney.docx").dispatchEvent(new MouseEvent("mouseenter"));
+  await settle();
+  assert.deepEqual(ticks(), [true, false, false, false], "after letting go, moving over rows changes nothing");
   await tabAction("Clear");
 
   await click($(".file-label", row("Title deed")), { metaKey: true });
   assert.equal(text(".tab-actions .checked-count"), "1 selected", "cmd-click on a row checks it");
-  await click($(".file-label", row("mary-id.jpg")), { shiftKey: true });
-  assert.deepEqual(ticks(), [false, false, true, true], "shift-click on a row checks the range");
   await click($(".file-label", row("Title deed")), { metaKey: true });
   assert.equal(box("Title deed").checked, false, "cmd-click again unchecks it");
-  await click($(".file-label", row("power-of-attorney.docx")));
-  assert.equal(box("power-of-attorney.docx").checked, false, "a plain click checks nothing");
-  await tabAction("Clear");
-  await click($(".file-label", row("Title deed")), { shiftKey: true });
-  assert.deepEqual(ticks(), [false, false, false, true], "shift-click with nothing clicked before checks that row");
-  await tabAction("Clear");
+  await click($(".file-label", row("power-of-attorney.docx")), { shiftKey: true });
+  assert.deepEqual(ticks(), [false, false, false, false], "a plain or shift click checks nothing");
 
   await check($("thead th.check input"));
   assert.equal(text(".tab-actions .checked-count"), "4 selected");
-  await click(box("Title deed"));
+  await drag("Title deed");
   await tabAction("Delete");
   assert.equal(text(".modal h3"), "Delete 3 files?");
   await submit($(".modal form"));

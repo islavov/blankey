@@ -329,7 +329,9 @@ input.case-title:focus { background: var(--input); }
 .case-tab { flex: 1; min-height: 0; overflow: auto; }
 .case-tab .grid th:first-child, .case-tab .grid td:first-child { padding-left: 20px; }
 .check-grid th.check, .check-grid td.check { width: 1%; padding-right: 0; }
-.check-grid td.check input { margin: 2px 0 0; vertical-align: top; }
+.check-grid td.check { cursor: pointer; user-select: none; -webkit-user-select: none; }
+/* the cell takes the press, so a drag can start on the box */
+.check-grid td.check input { margin: 2px 0 0; vertical-align: top; pointer-events: none; }
 .check-grid th.check input { margin: 0; vertical-align: middle; }
 /* the button's middle on the middle of the row's first line of text */
 .check-grid th.row-menu, .check-grid td.row-menu { width: 1%; padding: 4px 12px 0 4px; text-align: right; }

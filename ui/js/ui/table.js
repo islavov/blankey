@@ -1,4 +1,4 @@
-import { useRef } from "../../vendor/preact-htm.js";
+import { useEffect, useRef } from "../../vendor/preact-htm.js";
 import { t } from "../i18n.js";
 import { html, Icon, useRemembered } from "../lib.js";
 import { popup } from "./menu.js";
@@ -50,27 +50,30 @@ export function Table({ rows, columns, selected = [], onPick, onOpen, rowClass =
 }
 
 /**
- * A table with a checkbox in front of each row and a ⋮ menu at its end. checked: the checked ids, onCheck(ids);
- * menu(row): the row's popup items; onOpen(row) on double-click. Cmd/Ctrl-click on a row checks or unchecks it;
- * shift-click, on a row or its checkbox, does the same to every row from the one clicked before.
+ * A table with a checkbox in front of each row and a ⋮ menu at its end. checked: the checked ids; onCheck(ids or
+ * current => ids); menu(row): the row's popup items; onOpen(row) on double-click. Pressing a row's checkbox flips it,
+ * and holding the button down gives every row passed over the same state; cmd/ctrl-click on a row flips it too.
  * checks: false leaves the checkboxes out.
  */
 export function CheckTable({ rows, columns, checked = [], onCheck, menu, onOpen, checks = true, rowClass = () => "" }) {
-  const anchor = useRef(null);
+  // while the button is held after pressing a checkbox: the state the rows passed over get
+  const paint = useRef(null);
+  useEffect(() => {
+    const stop = () => (paint.current = null);
+    document.addEventListener("mouseup", stop);
+    return () => document.removeEventListener("mouseup", stop);
+  }, []);
   const ids = rows.map((row) => row.id);
   const all = ids.length > 0 && ids.every((id) => checked.includes(id));
-  /** Checks (on) or unchecks the row, or with shift the rows from the last one clicked to it. */
-  const pick = (e, id, on) => {
-    const from = ids.indexOf(anchor.current);
-    const to = ids.indexOf(id);
-    const range = e.shiftKey && from >= 0 ? ids.slice(Math.min(from, to), Math.max(from, to) + 1) : [id];
-    onCheck(on ? [...new Set([...checked, ...range])] : checked.filter((x) => !range.includes(x)));
-    anchor.current = id;
+  const set = (id, on) => onCheck((current) => (on ? (current.includes(id) ? current : [...current, id]) : current.filter((x) => x !== id)));
+  const press = (e, row) => {
+    e.preventDefault();
+    paint.current = !checked.includes(row.id);
+    set(row.id, paint.current);
   };
+  const pass = (row) => paint.current !== null && set(row.id, paint.current);
   const click = (e, row) => {
-    if (!checks || e.target.closest("input, button, a")) return;
-    if (e.shiftKey) pick(e, row.id, true);
-    else if (e.metaKey || e.ctrlKey) pick(e, row.id, !checked.includes(row.id));
+    if (checks && (e.metaKey || e.ctrlKey) && !e.target.closest("input, button, a")) set(row.id, !checked.includes(row.id));
   };
   const open = (e, row) => {
     if (!e.target.closest("input, button")) onOpen?.(row);
@@ -92,8 +95,11 @@ export function CheckTable({ rows, columns, checked = [], onCheck, menu, onOpen,
         ${rows.map(
           (row) => html`
             <tr key=${row.id} class=${`${checked.includes(row.id) ? "selected" : ""} ${rowClass(row)}`}
-              onMouseDown=${keepText} onClick=${(e) => click(e, row)} onDblClick=${(e) => open(e, row)}>
-              ${checks && html`<td class="check"><input type="checkbox" data-help="rows.check" checked=${checked.includes(row.id)} onClick=${(e) => pick(e, row.id, e.target.checked)} /></td>`}
+              onMouseEnter=${() => pass(row)} onClick=${(e) => click(e, row)} onDblClick=${(e) => open(e, row)}>
+              ${checks &&
+              html`<td class="check" data-help="rows.check" onMouseDown=${(e) => press(e, row)}>
+                <input type="checkbox" checked=${checked.includes(row.id)} onChange=${(e) => set(row.id, e.target.checked)} />
+              </td>`}
               ${columns.map((c) => html`<td class=${c.cls || ""}>${c.cell(row)}</td>`)}
               <td class="row-menu">
                 <button class="ghost more" data-help="rows.menu" title=${t("More actions")} aria-label=${t("More actions")}
