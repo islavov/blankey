@@ -238,6 +238,7 @@ impl Blankey {
             return Ok(ProfileSave::Problems(errors));
         }
         let mut vault = self.vault();
+        let created = matches!(target, Target::New { .. });
         let profile_id = match target {
             Target::Existing(id) => vault.get_profile(id).map_err(|e| e.to_string())?.id,
             Target::New { name, kind, case: None } => {
@@ -248,6 +249,10 @@ impl Blankey {
             }
         };
         vault.set_values(profile_id, &items).map_err(|e| e.to_string())?;
+        if created {
+            // counted with the profiles made on the Profiles page, in the device's usage report
+            let _ = vault.audit("user", "create_profile", &profile_id.to_string());
+        }
         let lengths: IndexMap<String, i64> =
             vault.describe(profile_id).map_err(|e| e.to_string())?.into_iter().map(|f| (f.key, f.length)).collect();
         let fields = items
