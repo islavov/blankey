@@ -421,6 +421,18 @@ input.case-title:focus { background: var(--input); }
 .fill-row.is-empty .source .val { color: var(--warn); }
 .source .caret { color: var(--muted); flex: none; }
 .source input { border: 0; padding: 2px 0; box-shadow: none !important; background: transparent; }
+.fill-row.editing { position: relative; z-index: 2; }
+.source.editing { position: relative; border-color: var(--accent); border-style: solid; }
+.source-list {
+  position: absolute; left: -1px; right: -1px; top: calc(100% + 3px); z-index: 5; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 32px rgba(0, 0, 0, 0.22); padding: 4px;
+  max-height: 280px; overflow: auto;
+}
+.source-pick { padding: 5px 10px 5px 26px; border-radius: 5px; position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.source-pick:hover, .source-pick.active { background: var(--accent); color: var(--accent-text); }
+.source-pick.checked::before { content: "\2713"; position: absolute; left: 9px; }
+.source-sep { height: 1px; background: var(--line); margin: 4px 6px; }
+.source-head { padding: 4px 10px 2px; font-size: 11px; color: var(--muted); font-weight: 600; }
 .fill-preview { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .tabs { display: flex; gap: 2px; padding: 6px 10px 0; border-bottom: 1px solid var(--line); flex: none; }
 .tab { padding: 5px 12px; border-radius: 6px 6px 0 0; cursor: default; color: var(--muted); }

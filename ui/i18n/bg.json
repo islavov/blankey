@@ -616,7 +616,6 @@
   "Documents of this person or company, such as an ID card scan: the ones you add and the ones sent through a collection link. Encrypted in the vault.": "Документи на човека или фирмата, например сканирана лична карта – добавени от вас или получени чрез линк за събиране. Пазят се криптирани в трезора.",
   "Roles": "Роли",
   "A template names the parties it needs, such as applicant or landlord. Choose which profile plays each role.": "Шаблонът посочва страните, които са му нужни, например заявител или наемодател. Изберете кой профил да заеме всяка роля.",
-  "Where the value comes from: a profile field, the template default, the assistant's suggestion or a value you type. The assistant learns only which, never the value.": "Откъде идва стойността: от поле в профил, от шаблона, от предложение на асистента или я въвеждате вие. Асистентът научава само откъде, но не и самата стойност.",
   "The files that came with it. Open or export a copy; Keep stores it encrypted with the profile.": "Файловете, изпратени заедно с отговора. Можете да ги отворите или експортирате, а с „Запази“ ги пазите криптирани в профила.",
   "Template": "Шаблон",
   "No documents yet. Documents are generated from fill sets.": "Все още няма документи. Те се създават от наборите за попълване.",
@@ -789,5 +788,6 @@
   "model {time}": "модел {time}",
   "tools {time}": "инструменти {time}",
   "after {time}": "след {time}",
-  "Stops the assistant; so does Esc. What it did so far is kept.": "Спира асистента; Esc също го спира. Направеното дотук се запазва."
+  "Stops the assistant; so does Esc. What it did so far is kept.": "Спира асистента; Esc също го спира. Направеното дотук се запазва.",
+  "Where the value comes from. Click to type a value, or pick a profile field, the template default or the assistant's suggestion from the list. The assistant learns only which, never the value.": "Откъде идва стойността. Щракнете, за да въведете стойност, или изберете от списъка поле в профил, стойността от шаблона или предложението на асистента. Асистентът научава само откъде, но не и самата стойност."
 }
