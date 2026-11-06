@@ -1,6 +1,6 @@
-import { useEffect, useState } from "../../vendor/preact-htm.js";
+import { useEffect, useRef, useState } from "../../vendor/preact-htm.js";
 import { call } from "../api.js";
-import { CaseChat, Spinner, useRunning } from "../chat.js";
+import { CaseChat, Spinner, useRunning, useWorked } from "../chat.js";
 import { openFill } from "../fill/form.js";
 import { HelpNote } from "../help.js";
 import { t, tn } from "../i18n.js";
@@ -107,10 +107,24 @@ export function Cases() {
     </${Page}>`;
 }
 
+/** A tab's count; it flashes when it grows, so what the assistant just added catches the eye. */
+function Count({ n }) {
+  const last = useRef(n);
+  const [flashes, setFlashes] = useState(0);
+  useEffect(() => {
+    if (n > last.current) setFlashes((k) => k + 1);
+    last.current = n;
+  }, [n]);
+  // a new key restarts the animation on every increase
+  return html`<span key=${flashes} class=${`count${flashes ? " flash" : ""}`}>${n}</span>`;
+}
+
 function CaseDetail({ caseId }) {
   const { caseTab, relay } = useStore();
   const running = useRunning();
-  const info = useLoad(() => call("get_case", { id: caseId }), [caseId]);
+  // the assistant's tool calls may add files, profiles, templates, fill sets or documents
+  const worked = useWorked(caseId);
+  const info = useLoad(() => call("get_case", { id: caseId }), [caseId, worked]);
   if (!info) return null;
 
   // the chat only while the relay offers it
@@ -139,7 +153,7 @@ function CaseDetail({ caseId }) {
     <div class="filters case-tabs" data-help="case.tabs">
       ${tabs.map(([id, label, n, help]) => html`
         <button class=${`chip ${tab === id ? "active" : ""}`} data-help=${help} onClick=${() => update({ caseTab: id })}>
-          ${label} ${n != null && html`<span class="count">${n}</span>`}
+          ${label} ${typeof n === "number" ? html`<${Count} n=${n} />` : n != null && html`<span class="count">${n}</span>`}
         </button>`)}
     </div>
     <div class=${`case-tab ${tab === "chat" ? "chat-tab" : ""}`}>${(content[tab] || content.files)()}</div>`;

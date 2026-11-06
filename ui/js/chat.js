@@ -18,6 +18,11 @@ const live = new Map();
 const ended = new Map();
 // case id -> the composer's text, kept while another case is open
 const drafts = new Map();
+// case id -> tool calls and turns ended, which may have added to the case's lists
+const worked = new Map();
+let workChanges = 0;
+// the case whose Chat tab is shown: Escape stops its turn
+let openCase = null;
 const listeners = new Set();
 let changes = 0;
 let runningChanges = 0;
@@ -66,6 +71,10 @@ function end(caseId) {
 
 /** One `chat-event` from the backend: `{case_id, turn_id, event, data}`. */
 export function chatEvent({ case_id: caseId, turn_id: turnId, event, data = {} }) {
+  if (event === "tool_done" || event === "done" || event === "error") {
+    worked.set(caseId, (worked.get(caseId) ?? 0) + 1);
+    workChanges++;
+  }
   if (event === "started") {
     running.add(caseId);
     live.set(caseId, newTurn(turnId, data.text ?? "", data.sent_at ?? null));
@@ -164,6 +173,19 @@ export function useChat(caseId) {
   return { running: running.has(caseId), turn: live.get(caseId) ?? null, ended: ended.get(caseId) ?? 0, draft: drafts.get(caseId) ?? "" };
 }
 
+/** How many of the case's tool calls and turns ended, to reload what they may have added; re-renders only then. */
+export function useWorked(caseId) {
+  useStamp(() => workChanges);
+  return worked.get(caseId) ?? 0;
+}
+
+/** Escape with nothing else to close: stops the turn of the chat that is shown. False when none runs. */
+export function stopOpenChat() {
+  if (openCase == null || !running.has(openCase)) return false;
+  call("stop_chat", { caseId: openCase }).catch(() => {});
+  return true;
+}
+
 /** The cases with a turn in progress; re-renders only when a turn starts or ends. */
 export function useRunning() {
   useStamp(() => runningChanges);
@@ -257,6 +279,13 @@ export function CaseChat({ caseId }) {
   const stick = useRef(true);
 
   useEffect(() => {
+    openCase = caseId;
+    return () => {
+      if (openCase === caseId) openCase = null;
+    };
+  }, [caseId]);
+
+  useEffect(() => {
     let current = true;
     const at = chat.ended;
     call("case_chat", { caseId })
@@ -308,7 +337,8 @@ export function CaseChat({ caseId }) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
-    } else if (e.key === "Escape") {
+    } else if (e.key === "Escape" && !chat.running) {
+      // while a turn runs, Escape goes on to the window: a sheet closes first, else the turn stops
       e.preventDefault();
       e.target.blur();
     }

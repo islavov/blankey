@@ -285,6 +285,11 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .chip { border-radius: 14px; padding: 3px 12px; font-size: 12px; }
 .chip.active { background: var(--accent-soft); border-color: var(--accent); }
 .chip .count { color: var(--muted); margin-left: 2px; }
+.chip .count.flash { display: inline-block; border-radius: 6px; animation: count-flash 2s ease-out; }
+@keyframes count-flash {
+  0% { transform: scale(1.6); color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 4px var(--accent-soft); }
+  50% { transform: scale(1); color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 4px var(--accent-soft); }
+}
 .links-split { display: grid; grid-template-columns: minmax(0, 1fr); height: 100%; }
 .links-split.with-side { grid-template-columns: minmax(0, 1fr) 340px; }
 .links-main { overflow: auto; min-width: 0; }

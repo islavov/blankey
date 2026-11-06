@@ -1,7 +1,7 @@
 import { html, render } from "../vendor/preact-htm.js";
 import { applyLanguage, invoke, listen, refreshRelay, refreshStatus } from "./api.js";
 import { App } from "./app.js";
-import { chatEvent, resetChat } from "./chat.js";
+import { chatEvent, resetChat, stopOpenChat } from "./chat.js";
 import { enterApp, Gate, resetQuickUnlock } from "./gate.js";
 import { t } from "./i18n.js";
 import { reload, state, update, useStore } from "./lib.js";
@@ -43,13 +43,13 @@ for (const type of ["keydown", "mousedown", "wheel"]) {
   );
 }
 
-// Escape closes what is on top: a menu, a dialog, then a sheet through its own Cancel. Runs last (on window), so a
-// part of the page that handles Escape itself prevents it.
+// Escape closes what is on top: a menu, a dialog, then a sheet through its own Cancel; with nothing open, it stops the
+// shown chat's turn. Runs last (on window), so a part of the page that handles Escape itself prevents it.
 window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape" || e.defaultPrevented) return;
   if (isMenuOpen()) hidePopup();
   else if (isDialogOpen()) cancelDialog();
-  else escapeSheet();
+  else if (!escapeSheet()) stopOpenChat();
 });
 
 listen("vault-locked", async () => {
