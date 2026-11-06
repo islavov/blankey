@@ -164,6 +164,39 @@ test("Stop asks the backend to stop the case's turn", async () => {
   assert.deepEqual(backend.called("stop_chat").at(-1), { caseId: 1 });
 });
 
+test("Escape stops the shown chat's turn, from the composer or anywhere, once nothing else is open", async () => {
+  const { html } = await import(new URL("../js/lib.js", import.meta.url).href);
+  const { isSheetOpen, openSheet } = await import(new URL("../js/ui/sheet.js", import.meta.url).href);
+  const stops = () => backend.called("stop_chat").length;
+  let before = stops();
+  await key("Escape", composer());
+  assert.deepEqual([stops() - before, backend.called("stop_chat").at(-1)], [1, { caseId: 1 }]);
+  before = stops();
+  await key("Escape", document.body);
+  assert.equal(stops() - before, 1, "with the focus elsewhere too");
+
+  openSheet(() => html`<div>A fill to check</div>`);
+  await settle();
+  before = stops();
+  await key("Escape", document.body);
+  assert.equal(isSheetOpen(), false, "the sheet closes first");
+  assert.equal(stops(), before, "and the turn goes on");
+});
+
+test("a case's tab counts reload when a tool call ends, and a count that grows flashes", async () => {
+  const count = (label) => $(".count", $$(".case-tabs .chip").find((el) => el.textContent.trim().startsWith(label)));
+  const templates = count("Templates").textContent;
+  assert.ok(!count("Templates").classList.contains("flash"));
+  backend.db.templates.push({ id: "loan_agreement", name: "Loan agreement", kind: "docx", case_id: 1 });
+  const fetched = backend.called("get_case").length;
+  await chatEvent("tool_call", { id: "c30", name: "save_docx_template", input: {} });
+  await chatEvent("tool_done", { id: "c30", is_error: false });
+  assert.equal(backend.called("get_case").length, fetched + 1);
+  assert.equal(count("Templates").textContent, String(Number(templates) + 1));
+  assert.ok(count("Templates").classList.contains("flash"));
+  assert.ok(!count("Documents").classList.contains("flash"), "only the count that grew");
+});
+
 test("done fetches the stored thread again and the spinner goes", async () => {
   backend.db.chats[1].messages.push(
     stored(5, "user", [{ type: "text", text: "Fill the sale contract" }]),
