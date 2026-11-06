@@ -26,6 +26,10 @@ agent --POST /mcp (Bearer)--> relay --WebSocket frame--> Blankey app --> local M
   requests and files. Long waits are capped (`wait_request` ≤ 50 s per call over a relay).
 - Collection links: the relay stores one sealed blob per submission and never sees its plaintext or the key
   fingerprint in the link's fragment (see Collection links below).
+- Case chat: a relay that offers it runs the agent, so it sees the conversation and the same tool metadata an agent
+  sees, as claude.ai does. It reaches the app's tools only under a `case:` grant that the app accepts while its own
+  turn for that case runs. The official relay logs and stores nothing of the content, and sends model calls through
+  Cloudflare AI Gateway, with prompt logging off, to Workers AI models (see Case chat below).
 
 ## Discovery
 
@@ -43,13 +47,15 @@ agent --POST /mcp (Bearer)--> relay --WebSocket frame--> Blankey app --> local M
   "device_resource": "https://relay.example.com/device",
   "device_links": "https://relay.example.com/device/links",
   "device_inbox": "https://relay.example.com/device/inbox",
-  "device_profile": "https://relay.example.com/device/profile"
+  "device_profile": "https://relay.example.com/device/profile",
+  "chat_url": "https://relay.example.com/device/chat"
 }
 ```
 
 `device_resource` is optional: the OAuth resource the app's tokens are for (see below). Relays with a single resource
 for everything leave it out. `device_links` and `device_inbox` are optional too: relays without collection links
-leave them out, and older apps ignore them. `device_profile` is optional as well (see Profile below).
+leave them out, and older apps ignore them. `device_profile` is optional as well (see Profile below), and so is
+`chat_url` (see Case chat below): an app that finds none shows "This relay offers no assistant".
 
 The app refuses a relay whose `protocol` it does not support, and any URL that is not `https`/`wss` unless the host is
 `localhost` or `127.0.0.1` (for development). `account_url` is shown to the user (sign up, billing, devices).
@@ -242,12 +248,79 @@ static origin are the documented next steps.
 
 ## Profile
 
-`GET device_profile?device_id=<id>` with the device token → `200 {"lang": "bg" | null, ...}`: the UI language the
+`GET device_profile?device_id=<id>` with the device token → `200 {"lang": "bg" | null, "chat": true | false, ...}`:
+`chat` says whether the case chat is on for this account (a relay may turn it on per account; missing means false).
+`lang` is the UI language the
 user chose for the account (the codes in the app's `ui/i18n/languages.json`, such as `en` and `bg`). The app shows
 its window, tray and notifications in that language, or in the computer's language when it is null or unknown; MCP
 output stays English. The app reads the profile after each connect, when its window gains focus, and on
 `{"v": 1, "type": "profile"}` from the relay (no reply). Relays without `device_profile` leave the app to the
 computer's language.
+
+## Case chat
+
+The case chat's agent runs on the relay; the app is the tool host and keeps every rule. The app posts one turn at a
+time and reads the turn as server-sent events; the tool calls the agent makes come back to the app as `mcp` frames on
+the device WebSocket, under the grant `case:<case uuid>`.
+
+`POST chat_url?device_id=<id>` with the device token:
+
+```json
+{"turn_id": "<uuid>", "case": "<case uuid>", "context": "<case block>", "summary": "<text>" | null,
+ "messages": [ModelMessage, ...], "user": [part, ...]}
+```
+
+- `messages`: the case's thread after its summary, as the app stored it from earlier `done` events. They are AI SDK
+  `ModelMessage`s (roles `user`, `assistant`, `tool`; parts `text`, `file`, `reasoning`, `tool-call`, `tool-result`),
+  stored and sent back verbatim.
+- `user`: the new message's parts, `{"type": "text", "text"}` or `{"type": "file", "data", "mediaType"}`. A file's
+  `data` is a `blankey://` URI, which the relay reads with `resources/read` before the model sees it, or inline
+  base64 for an image. An attachment can also be a text part naming its handle, such as
+  `[attached casefile:56 "lease.docx", docx, 48 KB]`.
+- `context`: the case block (title, parties with roles and keys, files, notes; no values). The relay adds it to the new
+  message; it is not part of the thread.
+- `summary`: the summary from an earlier compaction, or null.
+
+Before the stream, the relay may answer with JSON `{"error", "error_description"}`:
+
+| Status | `error` | Meaning |
+|---|---|---|
+| 400 | `invalid_request` | The body is not a turn, or is too large |
+| 402 | `account_needs_attention` | As for the device socket |
+| 403 | `chat_not_enabled` | The account does not have the case chat |
+| 404 | `unknown_device` | The device is not this account's |
+| 409 | `turn_exists` | This `turn_id` was already started |
+| 429 | `chat_budget` | The month's budget is used up; `resets_at` says when it starts over |
+| 503 | `device_offline` | The relay holds no socket for this device |
+
+Otherwise `200 text/event-stream`, with these events (`event:` name, `data:` JSON) and `: ping` comments every 20 s:
+
+- `reasoning_delta {text}` and `text_delta {text}`: the model's reasoning and its answer as they stream.
+- `tool_call {id, name, input}` and `tool_done {id, is_error}`: one pair per tool call, for the tool cards.
+- `status {state}`: `compacting` while earlier turns are folded into the summary, `waiting` while a request waits for
+  the user (the relay polls `wait_request` itself, in calls of at most 40 s).
+- `done {messages, stopped, error?, compaction?, model, usage}`, always last:
+  - `messages`: the assistant and tool messages the turn added, in order, to append to the thread. Never the user
+    message, which the app stores itself, and never a tool call without its result.
+  - `stopped`: `null` when the model finished; `step_limit`, `cancelled` or `error` otherwise. The messages are kept
+    in every case, since their tools already ran.
+  - `error {code, message}`: `device_offline`, `not_allowed` (the app refused the grant), `model_unavailable` or
+    `internal`. `message` can be shown to the user.
+  - `compaction {summary, folded}`: a new summary that covers the first `folded` of the sent `messages`; the app stores
+    it and sends it as `summary`, with only the later messages, from the next turn on.
+  - `model`: the model that served the last step, for debugging; `usage {input_tokens, cached_input_tokens,
+    output_tokens}`.
+
+A stream that ends without `done` (a relay deploy, a dropped connection) is a failed turn; the app keeps nothing of it.
+`DELETE chat_url/<turn_id>?device_id=<id>` → `204` stops a turn (Stop, or the vault locking); its stream still ends with
+`done`.
+
+During the turn the relay sends `mcp` frames as in MCP above, with `grant: "case:<case uuid>"` and `client_name:
+"Blankey assistant"`, to the device that posted the turn rather than the primary. The app answers them only while its
+own turn for that case is running, under the same rules as any remote grant. Besides `tools/call`, the relay sends
+`resources/read` for the `blankey://` URIs it finds in the new message and in `resource_link`s of tool results; what
+each URI returns (an image, text, or an error) is the app's decision. Images reach the model; other binary content
+does not.
 
 ## Revoking
 
@@ -288,6 +361,8 @@ Any stack works (Workers, Node, Go…) as long as it speaks the above over TLS. 
 - optionally, collection links: `device_links`, `device_inbox`, the `inbox` frame and a form page that seals in the
   browser
 - optionally, `report` frames: store the device's monthly numbers and answer `ok`
+- optionally, the case chat: `chat_url`, `chat` in the device profile, the turn request and its events, and the agent's
+  `mcp` frames under `case:` grants
 
 Anonymous metrics go to the official relay regardless of the relay the app is signed in to; a custom relay never
 sees them and does not need `/telemetry`.
