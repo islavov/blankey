@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- A profile you create through the assistant's form, or from a collection link submission, now counts as a profile
+  created in the numbers Blankey Online shows on your Activity page, like one made on the Profiles page.
+
 ## 0.3.0
 
 - Cases: Blankey opens on Cases. A case keeps one matter together: its people with their roles, the files you import
