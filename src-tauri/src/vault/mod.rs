@@ -3,9 +3,11 @@
 //! - `repo/`: the database: schema and every query.
 //! - `encrypt.rs`: what is encrypted under which associated data.
 //! - `keys.rs`: the data key and how it is wrapped (password, recovery key, keychain), the request key pair.
-//! - one file per area for the operations: profiles, documents (and fill sets), requests, relay, links, audit.
+//! - one file per area for the operations: profiles, documents (and fill sets), requests, relay, links, cases,
+//!   audit.
 
 mod audit;
+mod cases;
 mod documents;
 mod encrypt;
 mod error;
@@ -28,6 +30,7 @@ use crate::keychain::SecretStore;
 use repo::Repo;
 
 pub use error::{Result, VaultError};
+pub use repo::{CaseCounts, NewDocument};
 pub use types::*;
 
 pub struct Vault {

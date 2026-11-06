@@ -1,4 +1,5 @@
 mod app;
+pub mod cases;
 pub mod config;
 pub mod core;
 pub mod crypto;

@@ -15,6 +15,7 @@ pub struct NewDocument<'a> {
     pub profiles: &'a Profiles,
     pub pages: i64,
     pub filename: &'a str,
+    pub case_id: Option<i64>,
 }
 
 fn parse_profiles(text: &str) -> Profiles {
@@ -32,9 +33,17 @@ impl Repo {
     pub fn insert_document(&mut self, doc: &NewDocument, encrypt: impl FnOnce(i64) -> Encrypted) -> Result<i64> {
         let tx = self.conn.transaction()?;
         tx.execute(
-            "INSERT INTO documents (template_id, title, profiles, pages, filename, created_at, nonce, ciphertext)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, x'', x'')",
-            params![doc.template_id, doc.title, serde_json::to_string(doc.profiles)?, doc.pages, doc.filename, now()],
+            "INSERT INTO documents (template_id, title, profiles, pages, filename, created_at, case_id, nonce, ciphertext)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, x'', x'')",
+            params![
+                doc.template_id,
+                doc.title,
+                serde_json::to_string(doc.profiles)?,
+                doc.pages,
+                doc.filename,
+                now(),
+                doc.case_id
+            ],
         )?;
         let id = tx.last_insert_rowid();
         let sealed = encrypt(id);
@@ -49,7 +58,7 @@ impl Repo {
     /// Newest first.
     pub fn documents(&self) -> Result<Vec<DocumentInfo>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, template_id, title, profiles, pages, filename, created_at FROM documents ORDER BY id DESC",
+            "SELECT id, template_id, title, profiles, pages, filename, created_at, case_id FROM documents ORDER BY id DESC",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(DocumentInfo {
@@ -60,6 +69,7 @@ impl Repo {
                 pages: r.get(4)?,
                 filename: r.get(5)?,
                 created_at: r.get(6)?,
+                case_id: r.get(7)?,
             })
         })?;
         collect(rows)
@@ -81,10 +91,11 @@ impl Repo {
     }
 
     /// Inserts a fill set (`id` None) or updates one, then stores what `encrypt` makes of its id, in one
-    /// transaction.
+    /// transaction. A fill set stays in the case it was made in.
     pub fn save_fill_set(
         &mut self,
         id: Option<i64>,
+        case_id: Option<i64>,
         name: &str,
         templates: &[String],
         profiles: &Profiles,
@@ -97,9 +108,9 @@ impl Repo {
         let id = match id {
             None => {
                 tx.execute(
-                    "INSERT INTO fill_sets (name, templates, profiles, created_at, updated_at, nonce, ciphertext)
-                     VALUES (?1, ?2, ?3, ?4, ?4, x'', x'')",
-                    params![name, templates, profiles, stamp],
+                    "INSERT INTO fill_sets (name, templates, profiles, created_at, updated_at, case_id, nonce, ciphertext)
+                     VALUES (?1, ?2, ?3, ?4, ?4, ?5, x'', x'')",
+                    params![name, templates, profiles, stamp, case_id],
                 )?;
                 tx.last_insert_rowid()
             }
@@ -125,8 +136,9 @@ impl Repo {
 
     /// Newest first.
     pub fn fill_sets(&self) -> Result<Vec<FillSetInfo>> {
-        let mut stmt =
-            self.conn.prepare("SELECT id, name, templates, profiles, updated_at FROM fill_sets ORDER BY id DESC")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, templates, profiles, updated_at, case_id FROM fill_sets ORDER BY id DESC")?;
         let rows = stmt.query_map([], |r| {
             Ok(FillSetInfo {
                 id: r.get(0)?,
@@ -134,6 +146,7 @@ impl Repo {
                 templates: json(r, 2)?,
                 profiles: parse_profiles(&r.get::<_, String>(3)?),
                 updated_at: r.get(4)?,
+                case_id: r.get(5)?,
             })
         })?;
         collect(rows)
@@ -148,8 +161,14 @@ impl Repo {
             .optional()?)
     }
 
-    pub fn fill_set_id(&self, name: &str) -> Result<Option<i64>> {
-        Ok(self.conn.query_row("SELECT id FROM fill_sets WHERE name = ?1", [name], |r| r.get(0)).optional()?)
+    /// Names are unique per case; the fill sets without a case are one group.
+    pub fn fill_set_id(&self, case_id: Option<i64>, name: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row("SELECT id FROM fill_sets WHERE case_id IS ?1 AND name = ?2", params![case_id, name], |r| {
+                r.get(0)
+            })
+            .optional()?)
     }
 
     pub fn delete_fill_set(&self, id: i64) -> Result<()> {

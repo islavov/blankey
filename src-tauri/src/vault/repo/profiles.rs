@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, Row};
 
 use super::{collect, encrypted, Repo};
 use crate::vault::encrypt::Encrypted;
@@ -18,19 +18,21 @@ pub struct FieldRow<'a> {
     pub value: Option<Encrypted>,
 }
 
+fn profile_row(r: &Row) -> rusqlite::Result<Profile> {
+    Ok(Profile { id: r.get(0)?, name: r.get(1)?, kind: r.get(2)?, global: r.get(3)? })
+}
+
 impl Repo {
     pub fn profiles(&self) -> Result<Vec<Profile>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, kind FROM profiles ORDER BY name")?;
-        let rows = stmt.query_map([], |r| Ok(Profile { id: r.get(0)?, name: r.get(1)?, kind: r.get(2)? }))?;
+        let mut stmt = self.conn.prepare("SELECT id, name, kind, global FROM profiles ORDER BY name")?;
+        let rows = stmt.query_map([], profile_row)?;
         collect(rows)
     }
 
     pub fn profile(&self, id: i64) -> Result<Option<Profile>> {
         Ok(self
             .conn
-            .query_row("SELECT id, name, kind FROM profiles WHERE id = ?1", [id], |r| {
-                Ok(Profile { id: r.get(0)?, name: r.get(1)?, kind: r.get(2)? })
-            })
+            .query_row("SELECT id, name, kind, global FROM profiles WHERE id = ?1", [id], profile_row)
             .optional()?)
     }
 
@@ -38,6 +40,11 @@ impl Repo {
         self.conn
             .execute("INSERT INTO profiles (name, kind, created_at) VALUES (?1, ?2, ?3)", params![name, kind, now()])?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn set_profile_global(&self, id: i64) -> Result<()> {
+        self.conn.execute("UPDATE profiles SET global = 1 WHERE id = ?1", [id])?;
+        Ok(())
     }
 
     pub fn update_profile(&self, id: i64, name: &str, kind: &str) -> Result<()> {

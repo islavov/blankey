@@ -27,9 +27,10 @@ impl Vault {
         self.repo.update_profile(id, name, kind)
     }
 
-    /// The profile, its fields and the files kept with it.
+    /// The profile, its fields and the files kept with it; files in a case stay there.
     pub fn delete_profile(&self, id: i64) -> Result<()> {
-        for file in self.repo.collected_files()?.into_iter().filter(|f| f.profile_id == Some(id)) {
+        let kept = |f: &super::repo::StoredCollected| f.profile_id == Some(id) && f.case_id.is_none();
+        for file in self.repo.collected_files()?.into_iter().filter(kept) {
             self.delete_collected_file(file.id)?;
         }
         self.repo.delete_profile(id)

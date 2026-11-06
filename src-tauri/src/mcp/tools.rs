@@ -14,6 +14,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use crate::cases::{self, Scope};
 use crate::core::{Blankey, DocxTemplate, FILE, FILE_KINDS, FILL, LIBRARY_SYNC_AGE, PROFILE_INPUT};
 use crate::fieldtypes;
 use crate::library::{self, LibraryFile};
@@ -34,13 +35,18 @@ Filling, in one request_fill if you can: find_templates, find_profiles with the 
 request_fill with a source for every var; wait_request returns the documents. copy_fill_set_id repeats a fill for
 another party. request_profile_input only to keep data in a profile for later.
 
-New template, named for the kind of document and party (not this case): inspect_pdf, then save_template (form)
+New template, named for the kind of document and party (not these parties): inspect_pdf, then save_template (form)
 or save_pdf_overlay_template (flat); inspect_docx, then save_docx_template; or save_template with Typst
 source_text. Bindings are Jinja in {{ }}: "{{ applicant.address.city }}", "{{ loan.amount | money }}".
 Check it with render_example and check_bindings.
 find_templates also lists the user's own files (status candidate, source lib:<id>): templatize one only when a fill
 needs it, passing lib:<id> as path and source_path (remote sessions: request_file with source lib:<id> first).
 Blankey rebuilds the template when the file changes.
+
+Cases keep one matter together: its profiles with their roles, the files the user imported, and the templates, fill
+sets and documents made for it. A blankey://case/<id> link the user pastes names a case: pass <id> as case_id to
+every tool. In a case find_profiles lists its profiles and get_case its files (casefile:<id>, found by the user's
+descriptions); what you save there stays in the case. Without case_id, tools see global data only.
 "#;
 
 /// Added to the instructions when the user is signed in to Blankey Online.
@@ -77,17 +83,21 @@ pub fn expand(path: &str) -> PathBuf {
     }
 }
 
-/// A local path, a `file:<uuid>` id from request_file or a `lib:<id>` file from find_templates. Remote sessions
-/// only get ids, and a `lib:` file only once the user shared it through request_file.
+/// A local path, a `file:<uuid>` id from request_file, a `lib:<id>` file from find_templates or a `casefile:<id>`
+/// from get_case. Remote sessions only get ids, and a `lib:` or `casefile:` file only once the user shared it through
+/// request_file.
 fn source_path(app: &Blankey, remote: Option<&Remote>, path: &str) -> Result<PathBuf, String> {
+    let shared_only = path.starts_with("lib:") || path.starts_with("casefile:");
+    if shared_only && remote.is_some_and(|r| !app.file_shared(&r.grant, path)) {
+        return Err(format!(
+            "Ask the user first: call request_file with source {path:?}, then wait_request; the file opens once they \
+             allow it"
+        ));
+    }
     if path.starts_with("lib:") {
-        match remote {
-            Some(r) if !app.library_shared(&r.grant, path) => Err(format!(
-                "Ask the user first: call request_file with source {path:?}, then wait_request; the file opens once \
-                 they allow it"
-            )),
-            _ => app.library.path(path),
-        }
+        app.library.path(path)
+    } else if path.starts_with("casefile:") {
+        Ok(app.case_file(path)?.0)
     } else if path.starts_with("file:") {
         app.upload_path(path, remote.map(|r| r.grant.as_str()))
     } else if remote.is_some() {
@@ -110,6 +120,27 @@ fn origin(
     match source {
         Some(file) => app.library_origin(file, recipe),
         None => Ok(existing.and_then(|t| t.origin.clone())),
+    }
+}
+
+/// The scope a template is saved in: case_id, or the case of a `casefile:` source.
+fn save_scope(app: &Blankey, case_id: Option<i64>, source: Option<&str>) -> Result<Scope, String> {
+    let file_case = match source.and_then(cases::parse_case_file) {
+        Some(id) => app.vault().get_collected_file(id).map_err(string)?.case_id,
+        None => None,
+    };
+    match (case_id, file_case) {
+        (Some(case), Some(file)) if case != file => Err(format!("The source is a file of case {file}, not {case}")),
+        (case, file) => app.scope(case.or(file)),
+    }
+}
+
+/// A fill set, document or request of another case (or of none) than the scope.
+fn check_holds(scope: &Scope, what: &str, case_id: Option<i64>) -> Result<(), String> {
+    match case_id {
+        _ if scope.holds(case_id) => Ok(()),
+        Some(case) => Err(format!("{what} belongs to case {case}; pass case_id {case}")),
+        None => Err(format!("{what} is not in this case; call without case_id")),
     }
 }
 
@@ -286,6 +317,9 @@ pub struct FindProfilesArgs {
     limit: Option<i64>,
     #[serde(default, deserialize_with = "lenient::opt_int")]
     offset: Option<i64>,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -307,6 +341,9 @@ pub struct FindTemplatesArgs {
     limit: Option<i64>,
     #[serde(default, deserialize_with = "lenient::opt_int")]
     offset: Option<i64>,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -322,12 +359,18 @@ pub struct FindFillSetsArgs {
     limit: Option<i64>,
     #[serde(default, deserialize_with = "lenient::opt_int")]
     offset: Option<i64>,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct FillSetArgs {
     #[serde(deserialize_with = "lenient::int")]
     fill_set_id: i64,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -344,6 +387,9 @@ pub struct FindDocumentsArgs {
     limit: Option<i64>,
     #[serde(default, deserialize_with = "lenient::opt_int")]
     offset: Option<i64>,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -362,17 +408,20 @@ pub struct ListLinksArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct TemplateArgs {
     template_id: String,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct PathArgs {
-    /// A local path, a file id from request_file, or a lib:<id> from find_templates.
+    /// A local path, a file id from request_file, a lib:<id> from find_templates or a casefile:<id> from get_case.
     path: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct InspectPdfArgs {
-    /// A local path, a file id from request_file, or a lib:<id> from find_templates.
+    /// A local path, a file id from request_file, a lib:<id> from find_templates or a casefile:<id> from get_case.
     path: String,
     /// 1-based pages to render: a form's pages with its fields outlined (default none), a flat PDF's pages
     /// with the grid (default all).
@@ -392,11 +441,14 @@ pub struct SavePdfOverlayArgs {
     roles: StrMap,
     #[serde(deserialize_with = "lenient::str_map")]
     fields: StrMap,
-    /// A local path, a file id from request_file, or a lib:<id> from find_templates.
+    /// A local path, a file id from request_file, a lib:<id> from find_templates or a casefile:<id> from get_case.
     source_path: Option<String>,
     #[serde(default, deserialize_with = "lenient::str_map")]
     labels: StrMap,
     description: Option<String>,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -410,16 +462,19 @@ pub struct SaveTemplateArgs {
     #[serde(deserialize_with = "lenient::str_map")]
     roles: StrMap,
     description: Option<String>,
-    /// A local path, a file id from request_file, or a lib:<id> from find_templates.
+    /// A local path, a file id from request_file, a lib:<id> from find_templates or a casefile:<id> from get_case.
     source_path: Option<String>,
     source_text: Option<String>,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct SaveDocxArgs {
     template_id: String,
     name: String,
-    /// A local path, a file id from request_file, or a lib:<id> from find_templates.
+    /// A local path, a file id from request_file, a lib:<id> from find_templates or a casefile:<id> from get_case.
     source_path: String,
     /// [{find, var, occurrence?}]
     replacements: Vec<Map<String, Value>>,
@@ -430,6 +485,9 @@ pub struct SaveDocxArgs {
     #[serde(default, deserialize_with = "lenient::str_map")]
     labels: StrMap,
     description: Option<String>,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -444,6 +502,9 @@ pub struct RenderExampleArgs {
     /// Image resolution, default 80.
     #[serde(default, deserialize_with = "lenient::opt_int")]
     dpi: Option<i64>,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -452,6 +513,9 @@ pub struct CheckBindingsArgs {
     /// {role: profile_id}
     #[serde(deserialize_with = "lenient::profiles")]
     profiles: Profiles,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -463,6 +527,11 @@ pub struct RequestProfileInputArgs {
     profile_id: Option<i64>,
     new_profile_name: Option<String>,
     new_profile_kind: Option<String>,
+    /// With case_id: the new profile's role in the case (buyer, seller...).
+    role: Option<String>,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -492,6 +561,9 @@ pub struct RequestFillArgs {
     /// Open the form even though some vars fall back to a template default that gives no vault value.
     #[serde(default)]
     allow_defaults: bool,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -502,8 +574,11 @@ pub struct RequestFileArgs {
     kind: String,
     /// Shown to the user: which document you need and what for.
     reason: String,
-    /// A lib:<id> from find_templates: ask to read that file from the user's folders instead of picking one.
+    /// A lib:<id> from find_templates or a casefile:<id> from get_case: ask to read that file instead of picking one.
     source: Option<String>,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -555,6 +630,61 @@ pub struct ListRequestsArgs {
     limit: Option<i64>,
     #[serde(default, deserialize_with = "lenient::opt_int")]
     offset: Option<i64>,
+    /// The case to work in: the number in a blankey://case/<id> link. Without it, global data only.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct FindCasesArgs {
+    /// Words to match in the title and in the names and roles of the case's profiles.
+    query: Option<String>,
+    /// Default 20, at most 100.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    limit: Option<i64>,
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    offset: Option<i64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct CaseArgs {
+    /// The number in a blankey://case/<id> link.
+    #[serde(deserialize_with = "lenient::int")]
+    case_id: i64,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct CreateCaseArgs {
+    /// What the matter is: "Sale of apartment, 12 Oak Street".
+    title: String,
+    notes: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct UpdateCaseArgs {
+    #[serde(deserialize_with = "lenient::int")]
+    case_id: i64,
+    title: Option<String>,
+    /// Replaces the notes.
+    notes: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct LinkProfileArgs {
+    #[serde(deserialize_with = "lenient::int")]
+    case_id: i64,
+    #[serde(deserialize_with = "lenient::int")]
+    profile_id: i64,
+    /// The profile's role in the case (buyer, seller...).
+    role: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct UnlinkProfileArgs {
+    #[serde(deserialize_with = "lenient::int")]
+    case_id: i64,
+    #[serde(deserialize_with = "lenient::int")]
+    profile_id: i64,
 }
 
 // -- tools -------------------------------------------------------------------------------------------------
@@ -627,9 +757,16 @@ impl Tools {
     async fn find_profiles(&self, Parameters(a): Parameters<FindProfilesArgs>) -> ToolResult {
         self.run(move |app| {
             app.audit("mcp", "find_profiles", a.query.as_deref().unwrap_or(""));
+            let scope = app.scope(a.case_id)?;
+            // in a case its parties, else the global profiles
+            let listed = |p: &Profile| match scope.case_id() {
+                Some(_) => scope.role(p.id).is_some(),
+                None => p.global,
+            };
             let (profiles, index) = {
                 let vault = app.vault();
-                (vault.list_profiles().map_err(string)?, vault.field_index().map_err(string)?)
+                let profiles = vault.list_profiles().map_err(string)?.into_iter().filter(listed).collect::<Vec<_>>();
+                (profiles, vault.field_index().map_err(string)?)
             };
             let words = find::words(a.query.as_deref());
             let kind = a.kind.as_deref().map(find::fold);
@@ -669,6 +806,10 @@ impl Tools {
                 if a.with_fields {
                     item["fields"] = json!(fields);
                 }
+                if let Some(role) = scope.role(p.id) {
+                    item["role"] = json!(role);
+                    item["global"] = json!(p.global);
+                }
                 item
             }))
         })
@@ -683,7 +824,8 @@ impl Tools {
             app.sync_library(LIBRARY_SYNC_AGE);
             let words = find::words(a.query.as_deref());
             let wanted = |status: &str| a.status.as_deref().is_none_or(|s| s == status);
-            let all = app.templates.all();
+            let scope = app.scope(a.case_id)?;
+            let all = app.visible_templates(&scope);
             let templatized: HashSet<&str> =
                 all.iter().filter_map(|t| t.origin.as_ref()).map(|o| o.file.as_str()).collect();
             let mut templates: Vec<&Template> = all
@@ -733,7 +875,8 @@ impl Tools {
             raw(find::found(&matched, a.limit, a.offset, |item| match item {
                 Found::Template(t) => json!({"id": t.id, "name": t.name, "kind": t.kind.as_str(),
                        "status": template_status(t), "roles": t.roles.keys().collect::<Vec<_>>(),
-                       "vars": t.fields.len(), "description": find::clip(&t.description, 120)}),
+                       "vars": t.fields.len(), "description": find::clip(&t.description, 120),
+                       "scope": if scope.template_case(t).is_some() { "case" } else { "global" }}),
                 Found::File(f) => {
                     json!({"source": f.source(), "status": "candidate", "name": pii::redact_line(f.name()),
                        "kind": f.kind, "path": f.rel_path, "category": f.category, "tags": f.tags,
@@ -747,7 +890,7 @@ impl Tools {
     #[tool(description = "Full template manifest (roles, field bindings) and its example names.")]
     async fn get_template(&self, Parameters(a): Parameters<TemplateArgs>) -> ToolResult {
         self.run(move |app| {
-            let template = app.templates.get(&a.template_id)?;
+            let template = app.visible_template(&app.scope(a.case_id)?, &a.template_id)?;
             let mut out = engine::describe_template(&template);
             out["examples"] = json!(app.templates.examples(&a.template_id)?);
             text(&out)
@@ -795,7 +938,16 @@ impl Tools {
                 })
                 .collect();
             let pii = if app.config.pii_redaction { doc.entities() } else { Vec::new() };
-            let mut out = vec![ContentBlock::text(dump(&json!({"kind": "flat", "pages": pages, "pii": pii})))];
+            // a page of a case file without text is a scan or a photo, likely of an ID: no image of it goes out
+            let (scans, selected): (Vec<usize>, Vec<usize>) = match a.path.starts_with("casefile:") {
+                true => selected.into_iter().partition(|&page| all[page - 1].lines.is_empty()),
+                false => (Vec::new(), selected),
+            };
+            let mut summary = json!({"kind": "flat", "pages": pages, "pii": pii});
+            if !scans.is_empty() {
+                summary["scans"] = json!(scans);
+            }
+            let mut out = vec![ContentBlock::text(dump(&summary))];
             for page in selected {
                 let image = preview::grid_page(&pdf, page, dpi(a.dpi))?;
                 out.push(png(match app.config.pii_redaction {
@@ -819,6 +971,8 @@ impl Tools {
         let remote = remote(&ext);
         self.run(move |app| {
             check_id(&a.template_id)?;
+            let scope = save_scope(app, a.case_id, a.source_path.as_deref())?;
+            app.check_template_save(&scope, &a.template_id)?;
             let flat = match &a.source_path {
                 Some(path) => read_file(app, remote.as_ref(), path)?,
                 None => {
@@ -844,6 +998,7 @@ impl Tools {
                 labels: a.labels,
                 boxes: boxes.clone(),
                 origin,
+                case: scope.template_scope(),
             })?;
             std::fs::write(template.directory.join("flat.pdf"), &flat).map_err(string)?;
             app.audit("mcp", "save_template", &a.template_id);
@@ -875,11 +1030,13 @@ impl Tools {
     }
 
     #[tool(
-        description = "Create or replace a template. kind: pdf_form (source_path = blank PDF form), typst (source_text,\nreads `json(bytes(sys.inputs.data))` for the field values) or docx (source_path, docxtpl Jinja tags).\nfields maps PDF field names / template variables to Jinja expressions over the roles.\nroles maps role names (e.g. applicant, loan) to a short description. Name the template, its roles\nand its variables for the kind of document and party (applicant, counterparty, amount, start_date),\nnot for the particular case in front of you, so the template and its fill sets work for other\ncases too. Checkboxes check on any truthy value; radio groups take the state name (\"/Choice2\").\nOmit the source to keep the existing one."
+        description = "Create or replace a template. kind: pdf_form (source_path = blank PDF form), typst (source_text,\nreads `json(bytes(sys.inputs.data))` for the field values) or docx (source_path, docxtpl Jinja tags).\nfields maps PDF field names / template variables to Jinja expressions over the roles.\nroles maps role names (e.g. applicant, loan) to a short description. Name the template, its roles\nand its variables for the kind of document and party (applicant, counterparty, amount, start_date),\nnot for the particular parties in front of you, so the template and its fill sets work for other\ncases too. Checkboxes check on any truthy value; radio groups take the state name (\"/Choice2\").\nOmit the source to keep the existing one."
     )]
     async fn save_template(&self, Parameters(a): Parameters<SaveTemplateArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
         self.run(move |app| {
+            let scope = save_scope(app, a.case_id, a.source_path.as_deref())?;
+            app.check_template_save(&scope, &a.template_id)?;
             let source = a.source_path.as_deref().map(|path| source_path(app, remote.as_ref(), path)).transpose()?;
             let existing = app.templates.get(&a.template_id).ok();
             let origin = origin(app, a.source_path.as_deref(), Vec::new(), existing.as_ref())?;
@@ -896,6 +1053,7 @@ impl Tools {
                 labels: existing.as_ref().map(|t| t.labels.clone()).unwrap_or_default(),
                 boxes: existing.map(|t| t.boxes).unwrap_or_default(),
                 origin,
+                case: scope.template_scope(),
             })?;
             app.audit("mcp", "save_template", &a.template_id);
             text(&engine::describe_template(&template))
@@ -926,6 +1084,8 @@ impl Tools {
         let remote = remote(&ext);
         self.run(move |app| {
             check_id(&a.template_id)?;
+            let scope = save_scope(app, a.case_id, Some(&a.source_path))?;
+            app.check_template_save(&scope, &a.template_id)?;
             let source = source_path(app, remote.as_ref(), &a.source_path)?;
             let replacements: Vec<Value> = a.replacements.into_iter().map(Value::Object).collect();
             let doc = pii::Document::docx(&source, &app.pii_corrections(&a.source_path, &source)?)?;
@@ -939,6 +1099,7 @@ impl Tools {
                 fields: a.fields,
                 labels: a.labels,
                 description: &a.description.unwrap_or_default(),
+                case: scope.template_scope(),
             };
             let saved = app.save_docx_template(&source, origin, spec).map_err(|e| doc.scrub(&e));
             let (template, report) = saved?;
@@ -956,7 +1117,7 @@ impl Tools {
     async fn render_example(&self, Parameters(a): Parameters<RenderExampleArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext).is_some();
         self.run(move |app| {
-            let template = app.templates.get(&a.template_id)?;
+            let template = app.visible_template(&app.scope(a.case_id)?, &a.template_id)?;
             let data = match a.example {
                 Value::String(name) => app.templates.get_example(&a.template_id, &name)?,
                 data @ Value::Object(_) => data,
@@ -995,6 +1156,9 @@ impl Tools {
                     serde_json::to_string(&a.profiles).unwrap_or_default()
                 ),
             );
+            let scope = app.scope(a.case_id)?;
+            app.visible_template(&scope, &a.template_id)?;
+            app.check_visible(&scope, a.profiles.values().copied())?;
             let reports = app.check_bindings(&a.template_id, &a.profiles)?;
             let problems: Vec<_> = reports.iter().filter(|r| r.status != "ok").collect();
             text(&json!({
@@ -1021,9 +1185,8 @@ impl Tools {
             if a.profile_id.is_none() && new_name.is_none() {
                 return Err("Pass profile_id or new_profile_name".into());
             }
-            if let Some(id) = a.profile_id {
-                app.vault().get_profile(id).map_err(string)?;
-            }
+            let scope = app.scope(a.case_id)?;
+            app.check_visible(&scope, a.profile_id)?;
             for item in &a.fields {
                 if item.get("key").and_then(Value::as_str).is_none_or(str::is_empty) {
                     return Err("Every field needs a key".into());
@@ -1045,6 +1208,8 @@ impl Tools {
                 "new_profile": new_profile,
                 "fields": a.fields,
                 "reason": a.reason.unwrap_or_default(),
+                "case_id": a.case_id,
+                "role": a.role.unwrap_or_default(),
             });
             let id = app.create_request(PROFILE_INPUT, payload, grant.as_deref())?;
             text(&json!({"request_id": id, "status": "pending"}))
@@ -1063,12 +1228,14 @@ impl Tools {
                 return Err("Pass fill_set_id or copy_fill_set_id, not both".into());
             }
             let base = a.fill_set_id.or(a.copy_fill_set_id);
+            let scope = app.scope(a.case_id)?;
             let mut profiles = Profiles::new();
             let mut bindings = Map::new();
             let mut templates = a.templates.clone();
             if let Some(id) = base {
                 let sets = app.vault().list_fill_sets().map_err(string)?;
                 let info = sets.into_iter().find(|f| f.id == id).ok_or_else(|| format!("Unknown fill set {id}"))?;
+                check_holds(&scope, &format!("Fill set {id}"), info.case_id)?;
                 if templates.is_empty() {
                     templates = info.templates;
                 }
@@ -1079,6 +1246,12 @@ impl Tools {
                 }
             }
             profiles.extend(a.profiles.clone());
+            for id in templates.iter().filter(|id| library::parse_source(id).is_none()) {
+                app.visible_template(&scope, id)?;
+            }
+            let pinned =
+                a.paths.values().filter_map(|path| fill::path_binding(path).ok()?.get(fill::PROFILE)?.as_i64());
+            app.check_visible(&scope, profiles.values().copied().chain(pinned))?;
             let loaded = app.fill_templates(&templates)?;
             if loaded.is_empty() || name.is_empty() {
                 return Err("Pass at least one template and a name".into());
@@ -1133,7 +1306,7 @@ impl Tools {
                     missing.join(", ")
                 ));
             }
-            let saved = base.is_some() || app.vault().find_fill_set(&name).map_err(string)?.is_some();
+            let saved = base.is_some() || app.vault().find_fill_set(scope.case_id(), &name).map_err(string)?.is_some();
             if !a.allow_defaults && !saved {
                 let uncovered: Vec<String> = known
                     .values()
@@ -1173,6 +1346,7 @@ impl Tools {
                 "fill_set_id": a.fill_set_id,
                 "copy_fill_set_id": a.copy_fill_set_id,
                 "reason": reason,
+                "case_id": a.case_id,
             });
             let id = app.create_request(FILL, payload, grant.as_deref())?;
             text(&json!({"request_id": id, "status": "pending"}))
@@ -1189,10 +1363,22 @@ impl Tools {
             if a.reason.trim().is_empty() {
                 return Err("Pass a reason: the user sees it when picking the file".into());
             }
+            let scope = app.scope(a.case_id)?;
             let payload = match a.source.as_deref().filter(|s| !s.is_empty()) {
+                Some(source) if source.starts_with("casefile:") => {
+                    let (_, file) = app.case_file(source)?;
+                    if scope.case_id().is_some() {
+                        check_holds(&scope, source, file.case_id)?;
+                    }
+                    let kind = cases::readable_kind(&file.file_type).unwrap_or_default();
+                    // the sheet shows what the user called the file; the payload never holds its name
+                    json!({"kind": kind, "reason": a.reason.trim(), "source": source, "path": file.description,
+                           "case_id": file.case_id})
+                }
                 Some(source) => {
-                    let id = library::parse_source(source)
-                        .ok_or_else(|| format!("source must be a lib:<id> from find_templates, not {source:?}"))?;
+                    let id = library::parse_source(source).ok_or_else(|| {
+                        format!("source must be a lib:<id> from find_templates or a casefile:<id>, not {source:?}")
+                    })?;
                     let file = app.library.file(id)?;
                     app.library.path(source)?;
                     json!({"kind": file.kind, "reason": a.reason.trim(), "source": source, "path": file.rel_path})
@@ -1202,7 +1388,7 @@ impl Tools {
                     if !FILE_KINDS.contains(&kind.as_str()) {
                         return Err(format!("kind must be one of {}", FILE_KINDS.join(", ")));
                     }
-                    json!({"kind": kind, "reason": a.reason.trim()})
+                    json!({"kind": kind, "reason": a.reason.trim(), "case_id": scope.case_id()})
                 }
             };
             let id = app.create_request(FILE, payload, grant.as_deref())?;
@@ -1216,6 +1402,7 @@ impl Tools {
     )]
     async fn find_fill_sets(&self, Parameters(a): Parameters<FindFillSetsArgs>) -> ToolResult {
         self.run(move |app| {
+            let scope = app.scope(a.case_id)?;
             let (sets, profile_names) = {
                 let vault = app.vault();
                 let names: std::collections::HashMap<i64, String> =
@@ -1232,7 +1419,8 @@ impl Tools {
                     attrs.extend(set.templates.iter().map(String::as_str));
                     attrs.extend(set.templates.iter().filter_map(|t| template_names.get(t)).map(String::as_str));
                     attrs.extend(set.profiles.values().filter_map(|id| profile_names.get(id)).map(String::as_str));
-                    a.template_id.as_ref().is_none_or(|t| set.templates.contains(t))
+                    scope.holds(set.case_id)
+                        && a.template_id.as_ref().is_none_or(|t| set.templates.contains(t))
                         && a.profile_id.is_none_or(|id| set.profiles.values().any(|p| *p == id))
                         && find::hit(&words, &attrs)
                 })
@@ -1248,7 +1436,9 @@ impl Tools {
     )]
     async fn get_fill_set(&self, Parameters(a): Parameters<FillSetArgs>) -> ToolResult {
         self.run(move |app| {
+            let scope = app.scope(a.case_id)?;
             let (info, bindings) = app.vault().get_fill_set(a.fill_set_id).map_err(string)?;
+            check_holds(&scope, &format!("Fill set {}", a.fill_set_id), info.case_id)?;
             let mut out = json!(info);
             let vars: Map<String, Value> =
                 bindings.iter().map(|(v, b)| (v.clone(), json!(fill::describe_binding(b)))).collect();
@@ -1281,11 +1471,13 @@ impl Tools {
     async fn list_requests(&self, Parameters(a): Parameters<ListRequestsArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
         self.run_any(move |app| {
+            let scope = app.scope(a.case_id)?;
             let mut requests: Vec<Request> = app
                 .vault()
                 .list_requests(a.status.as_deref())
                 .map_err(string)?
                 .into_iter()
+                .filter(|r| scope.holds(r.case_id))
                 .filter_map(|r| visible(r, remote.as_ref()).ok())
                 .collect();
             requests.sort_by_key(|r| std::cmp::Reverse(r.id));
@@ -1308,9 +1500,7 @@ impl Tools {
             if a.profile_id.is_none() && new_profile.is_none() {
                 return Err("Pass profile_id or new_profile_name".into());
             }
-            if let Some(id) = a.profile_id {
-                app.vault().get_profile(id).map_err(string)?;
-            }
+            app.check_visible(&app.scope(None)?, a.profile_id)?;
             let count =
                 |value: Option<i64>, default: u32| value.map_or(default, |v| v.clamp(0, u32::MAX as i64) as u32);
             let draft = LinkDraft {
@@ -1385,10 +1575,186 @@ impl Tools {
     }
 
     #[tool(
+        description = "Find cases (one matter each: a sale, a lease, a power of attorney) by words in their title and in the\nnames and roles of their profiles; latest change first. A blankey://case/<id> link the user pastes names one.\nPaged: total, next_offset."
+    )]
+    async fn find_cases(&self, Parameters(a): Parameters<FindCasesArgs>) -> ToolResult {
+        self.run(move |app| {
+            let (cases, links, names, files) = {
+                let vault = app.vault();
+                let names: std::collections::HashMap<i64, String> =
+                    vault.list_profiles().map_err(string)?.into_iter().map(|p| (p.id, p.name)).collect();
+                let links = vault.case_links().map_err(string)?;
+                (vault.list_cases().map_err(string)?, links, names, vault.case_file_counts().map_err(string)?)
+            };
+            let parties = |case: i64| -> Vec<(i64, &str, &str)> {
+                links
+                    .iter()
+                    .filter(|l| l.case_id == case)
+                    .filter_map(|l| Some((l.profile_id, names.get(&l.profile_id)?.as_str(), l.role.as_str())))
+                    .collect()
+            };
+            let words = find::words(a.query.as_deref());
+            let mut matched: Vec<_> = cases
+                .into_iter()
+                .filter(|c| {
+                    let mut attrs = vec![c.title.as_str()];
+                    attrs.extend(parties(c.id).into_iter().flat_map(|(_, name, role)| [name, role]));
+                    find::hit(&words, &attrs)
+                })
+                .collect();
+            find::rank_by(&mut matched, a.query.as_deref(), |c| (c.id.to_string(), c.title.clone()));
+            raw(find::found(&matched, a.limit, a.offset, |c| {
+                let profiles: Vec<Value> = parties(c.id)
+                    .into_iter()
+                    .map(|(id, name, role)| json!({"id": id, "name": name, "role": role}))
+                    .collect();
+                json!({"id": c.id, "title": c.title, "updated_at": c.updated_at, "profiles": profiles,
+                       "files": files.get(&c.id).copied().unwrap_or(0)})
+            }))
+        })
+        .await
+    }
+
+    #[tool(
+        description = "One case: its title and notes, its profiles with their roles, its files as casefile:<id> with the\ndescription the user gave each (what it is and whose; read a readable one with inspect_pdf or inspect_docx), the\ntemplates made in it, its fill sets, documents and waiting requests. No values and no file names."
+    )]
+    async fn get_case(&self, Parameters(a): Parameters<CaseArgs>, ext: Extensions) -> ToolResult {
+        let remote = remote(&ext);
+        self.run(move |app| {
+            let scope = app.scope(Some(a.case_id))?;
+            let info = scope.case.clone().ok_or("Unknown case")?;
+            let profiles: Vec<Value> = app
+                .case_profiles(a.case_id)?
+                .into_iter()
+                .map(|(p, role, _)| json!({"id": p.id, "name": p.name, "kind": p.kind, "role": role, "global": p.global}))
+                .collect();
+            let templates: Vec<Value> = app
+                .case_templates(&scope)
+                .iter()
+                .map(|t| json!({"id": t.id, "name": t.name, "kind": t.kind.as_str()}))
+                .collect();
+            let (notes, files, sets, documents, requests) = {
+                let vault = app.vault();
+                let held = |case: Option<i64>| case == Some(a.case_id);
+                (
+                    vault.case_notes(a.case_id).map_err(string)?,
+                    vault.list_collected_files().map_err(string)?.into_iter().filter(|f| held(f.case_id)).collect::<Vec<_>>(),
+                    vault.list_fill_sets().map_err(string)?.into_iter().filter(|f| held(f.case_id)).collect::<Vec<_>>(),
+                    vault.list_documents().map_err(string)?.into_iter().filter(|d| held(d.case_id)).collect::<Vec<_>>(),
+                    vault.list_requests(Some("pending")).map_err(string)?.into_iter().filter(|r| held(r.case_id)).collect::<Vec<_>>(),
+                )
+            };
+            let files: Vec<Value> = files
+                .iter()
+                .map(|f| {
+                    let source = cases::case_file_source(f.id);
+                    let mut item = json!({"file_id": source, "description": f.description, "type": f.file_type,
+                                          "size": f.size, "readable": cases::readable_kind(&f.file_type).is_some()});
+                    if let Some(r) = &remote {
+                        item["shared"] = json!(app.file_shared(&r.grant, &source));
+                    }
+                    item
+                })
+                .collect();
+            let requests: Vec<Value> = requests
+                .into_iter()
+                .filter_map(|r| visible(r, remote.as_ref()).ok())
+                .map(|r| json!({"id": r.id, "kind": r.kind, "created_at": r.created_at}))
+                .collect();
+            app.audit("mcp", "get_case", &a.case_id.to_string());
+            text(&json!({
+                "id": info.id, "title": info.title, "notes": notes, "created_at": info.created_at,
+                "updated_at": info.updated_at, "profiles": profiles, "files": files, "templates": templates,
+                "fill_sets": sets.iter().map(|f| json!({"id": f.id, "name": f.name, "templates": f.templates,
+                                                         "profiles": f.profiles, "updated_at": f.updated_at}))
+                    .collect::<Vec<_>>(),
+                "documents": documents.iter().map(|d| json!({"id": d.id, "title": d.title, "template_id": d.template_id,
+                                                              "created_at": d.created_at}))
+                    .collect::<Vec<_>>(),
+                "pending_requests": requests,
+            }))
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Start a case for a new matter; the user can drop its documents into it in Blankey. Returns case_id: pass it\nto the other tools to work in the case."
+    )]
+    async fn create_case(&self, Parameters(a): Parameters<CreateCaseArgs>) -> ToolResult {
+        self.run(move |app| {
+            let id = app.create_case(&a.title)?;
+            if let Some(notes) = a.notes.filter(|n| !n.trim().is_empty()) {
+                app.update_case(id, None, Some(&notes))?;
+            }
+            app.audit("mcp", "create_case", &id.to_string());
+            app.cases_changed();
+            text(&json!({"case_id": id}))
+        })
+        .await
+    }
+
+    #[tool(description = "Change a case's title or replace its notes.")]
+    async fn update_case(&self, Parameters(a): Parameters<UpdateCaseArgs>) -> ToolResult {
+        self.run(move |app| {
+            app.update_case(a.case_id, a.title.as_deref(), a.notes.as_deref())?;
+            app.audit("mcp", "update_case", &a.case_id.to_string());
+            app.cases_changed();
+            text(&json!({"case_id": a.case_id, "status": "updated"}))
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Add a global profile (from find_profiles without case_id) to a case with its role there, or change the\nrole of a profile already in it. A new profile for the case comes from request_profile_input with case_id."
+    )]
+    async fn case_link_profile(&self, Parameters(a): Parameters<LinkProfileArgs>) -> ToolResult {
+        self.run(move |app| {
+            let scope = app.scope(Some(a.case_id))?;
+            let profile = app.vault().get_profile(a.profile_id).map_err(string)?;
+            if !profile.global && scope.role(a.profile_id).is_none() {
+                return Err(format!(
+                    "Profile {} belongs to another case; the user can add it to this one in Blankey",
+                    a.profile_id
+                ));
+            }
+            app.link_profile(a.case_id, a.profile_id, a.role.as_deref().unwrap_or_default())?;
+            app.audit("mcp", "link_profile", &format!("case={} profile={}", a.case_id, a.profile_id));
+            app.cases_changed();
+            text(&json!({"case_id": a.case_id, "profile_id": a.profile_id, "status": "linked"}))
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Take a global profile out of a case; the profile stays. The profiles made in the case are removed in\nBlankey by the user."
+    )]
+    async fn case_unlink_profile(&self, Parameters(a): Parameters<UnlinkProfileArgs>) -> ToolResult {
+        self.run(move |app| {
+            let scope = app.scope(Some(a.case_id))?;
+            let profile = app.vault().get_profile(a.profile_id).map_err(string)?;
+            if scope.role(a.profile_id).is_none() {
+                return Err(format!("Profile {} is not in case {}", a.profile_id, a.case_id));
+            }
+            if !profile.global {
+                return Err(format!(
+                    "Profile {} was made in a case; the user removes it from the case in Blankey",
+                    a.profile_id
+                ));
+            }
+            app.vault().unlink_profile(a.case_id, a.profile_id).map_err(string)?;
+            app.audit("mcp", "unlink_profile", &format!("case={} profile={}", a.case_id, a.profile_id));
+            app.cases_changed();
+            text(&json!({"case_id": a.case_id, "profile_id": a.profile_id, "status": "unlinked"}))
+        })
+        .await
+    }
+
+    #[tool(
         description = "Find generated real documents (metadata only; the user exports them from the app), newest first, by\nwords in the title or file name, template_id, profile_id or since (YYYY-MM-DD). Paged: total, next_offset."
     )]
     async fn find_documents(&self, Parameters(a): Parameters<FindDocumentsArgs>) -> ToolResult {
         self.run(move |app| {
+            let scope = app.scope(a.case_id)?;
             let words = find::words(a.query.as_deref());
             let documents: Vec<_> = app
                 .vault()
@@ -1396,7 +1762,8 @@ impl Tools {
                 .map_err(string)?
                 .into_iter()
                 .filter(|d| {
-                    a.template_id.as_ref().is_none_or(|t| d.template_id == *t)
+                    scope.holds(d.case_id)
+                        && a.template_id.as_ref().is_none_or(|t| d.template_id == *t)
                         && a.profile_id.is_none_or(|id| d.profiles.values().any(|p| p.as_i64() == Some(id)))
                         && a.since.as_deref().is_none_or(|since| d.created_at.as_str() >= since)
                         && find::hit(&words, &[&d.title, &d.filename, &d.template_id])
@@ -1568,11 +1935,11 @@ pub mod tests {
                 .await),
         ];
         let profiles: Profiles = [("applicant".to_string(), pid)].into_iter().collect();
-        let fill_set = app.vault().save_fill_set("leak", &["t".into()], &profiles, &Map::new(), None).unwrap();
+        let fill_set = app.vault().save_fill_set("leak", &["t".into()], &profiles, &Map::new(), None, None).unwrap();
         let docs = app.generate_fill(fill_set).unwrap();
         app.vault().resolve_request(1, "done", json!({"fill_set_id": fill_set, "document_ids": docs})).unwrap();
         let bindings = json!({"amount": {"value": SENTINEL_NAME}}).as_object().cloned().unwrap();
-        app.vault().save_fill_set("f", &["d".into()], &profiles, &bindings, None).unwrap();
+        app.vault().save_fill_set("f", &["d".into()], &profiles, &bindings, None, None).unwrap();
 
         use crate::links::tests::{plaintext, stored_link, submit};
         let public = stored_link(&app, "Ab3dE9z");
@@ -1589,6 +1956,20 @@ pub mod tests {
             let hidden = t.wait_request(args(json!({"request_id": id, "timeout_s": 0})), local()).await.unwrap_err();
             assert!(hidden.contains("Unknown request"), "{hidden}");
         }
+        let case = app.create_case("Sale of apartment").unwrap();
+        app.update_case(case, None, Some("Buyer pays in two parts")).unwrap();
+        app.link_profile(case, pid, "buyer").unwrap();
+        let card = dir.path().join("Hiddenwell ID.pdf");
+        std::fs::write(&card, SENTINEL_EGN.as_bytes()).unwrap();
+        app.import_case_files(case, &[(card, "Buyer, ID card".into())]).unwrap();
+        let in_case = [
+            out(t.get_case(args(json!({"case_id": case})), local()).await),
+            out(t.find_cases(args(json!({}))).await),
+            out(t.find_profiles(args(json!({"case_id": case, "with_fields": true}))).await),
+        ];
+        let shown = in_case.iter().map(|(t, _)| t.as_str()).collect::<String>();
+        assert!(shown.contains("Buyer, ID card") && shown.contains("Buyer pays in two parts"), "{shown}");
+        outputs.extend(in_case);
         let link = json!({"title": "More details", "profile_id": pid, "fields": [{"key": "phone", "type": "phone"}]});
         outputs.extend([
             out(t.list_collection_links(args(json!({}))).await),
@@ -1734,8 +2115,8 @@ pub mod tests {
             let mut vault = app.vault();
             let bindings = json!({"price": {"path": "offered_price", "profile": filled}}).as_object().cloned().unwrap();
             let buyer = |id: i64| -> Profiles { [("buyer".to_string(), id)].into_iter().collect() };
-            let older = vault.save_fill_set("first", &["offer".into()], &buyer(filled), &bindings, None).unwrap();
-            let newer = vault.save_fill_set("second", &["offer".into()], &buyer(pid), &Map::new(), None).unwrap();
+            let older = vault.save_fill_set("first", &["offer".into()], &buyer(filled), &bindings, None, None).unwrap();
+            let newer = vault.save_fill_set("second", &["offer".into()], &buyer(pid), &Map::new(), None, None).unwrap();
             (older, newer)
         };
         assert_eq!(
@@ -1839,12 +2220,12 @@ pub mod tests {
         assert_eq!(request.payload["path"], "Leases/Lease agreement.docx");
         assert_eq!(request.payload["kind"], "docx");
         assert!(t.inspect_docx(args(json!({"path": source})), remote()).await.is_err(), "pending is not shared");
-        let shared = app.share_library_file(request_id).unwrap();
+        let shared = app.share_source(request_id).unwrap();
         assert_eq!(shared["file_id"], json!(source));
         let (inspected, _) = out(t.inspect_docx(args(json!({"path": source})), remote()).await);
         assert!(inspected.contains("Loan in the amount") && !inspected.contains("John Smith"));
         assert!(t.inspect_docx(args(json!({"path": source})), remote_as("g2")).await.is_err(), "another agent");
-        assert!(app.share_library_file(request_id).is_err(), "a request is shared once");
+        assert!(app.share_source(request_id).is_err(), "a request is shared once");
         let bad = t.request_file(args(json!({"reason": "x", "source": "lib:999"})), remote()).await;
         assert!(bad.is_err());
         let save = json!({"template_id": "lease", "name": "Lease", "source_path": source,
@@ -1986,7 +2367,7 @@ pub mod tests {
         let context = app.fill_context(&Profiles::new(), &bindings).unwrap();
         let resolved = fill::resolve(&app.fill_templates(&["u".into()]).unwrap(), &bindings, &context).unwrap();
         assert_eq!(resolved["u"].0["who"], json!("Example Name"));
-        let set = app.vault().save_fill_set("pinned", &["u".into()], &Profiles::new(), &bindings, None).unwrap();
+        let set = app.vault().save_fill_set("pinned", &["u".into()], &Profiles::new(), &bindings, None, None).unwrap();
         assert_eq!(app.generate_fill(set).unwrap().len(), 1);
     }
 
@@ -2052,19 +2433,19 @@ pub mod tests {
         assert_eq!((request.kind.as_str(), request.status.as_str()), ("file", "pending"));
         assert_eq!(request.payload["kind"], "pdf");
 
-        assert!(app.store_upload(id, &fixture("filled.docx")).unwrap_err().contains(".pdf"));
+        assert!(app.store_upload(id, &fixture("filled.docx"), None).unwrap_err().contains(".pdf"));
         // corrections made while reviewing the picked file follow it into the upload
         let mut corrections = pii::Corrections::default();
         corrections.hide("Example Value", true);
         let form = fixture("form.pdf");
         app.set_pii_corrections(&form.display().to_string(), &form, &corrections).unwrap();
-        let picked = app.store_upload(id, &fixture("form.pdf")).unwrap();
+        let picked = app.store_upload(id, &fixture("form.pdf"), None).unwrap();
         let upload = picked["file_id"].as_str().unwrap();
         let stored = app.pii_corrections(upload, &app.upload_path(upload, None).unwrap()).unwrap();
         assert_eq!(stored, corrections);
         assert_eq!(picked["name"], "form.pdf");
         assert_eq!(picked["size"], std::fs::metadata(fixture("form.pdf")).unwrap().len());
-        assert!(app.store_upload(id, &fixture("form.pdf")).is_err());
+        assert!(app.store_upload(id, &fixture("form.pdf"), None).is_err());
         let (waited, _) = out(t.wait_request(args(json!({"request_id": id, "timeout_s": 0})), remote()).await);
         let file_id =
             serde_json::from_str::<Value>(&waited).unwrap()["result"]["file_id"].as_str().unwrap().to_string();
@@ -2095,6 +2476,205 @@ pub mod tests {
         }
         let missing = format!("file:{}", uuid::Uuid::new_v4());
         assert!(t.inspect_pdf(args(json!({"path": missing})), local()).await.unwrap_err().contains("Unknown"));
+
+        // a case file opens for a remote agent once the user allowed it for that agent
+        let case = app.create_case("Sale").unwrap();
+        let casefile = import(&app, case, &[(fixture("form.pdf"), "Seller, blank form")])["form.pdf"].clone();
+        let refused = t.inspect_pdf(args(json!({"path": casefile})), remote()).await.unwrap_err();
+        assert!(refused.contains("call request_file"), "{refused}");
+        let detail = json_out(t.get_case(args(json!({"case_id": case})), remote()).await);
+        assert_eq!(detail["files"][0]["shared"], false);
+        let ask = json!({"reason": "The form to fill", "source": casefile, "case_id": case});
+        let id = json_out(t.request_file(args(ask), remote()).await)["request_id"].as_i64().unwrap();
+        let request = app.vault().get_request(id).unwrap();
+        assert_eq!(
+            (request.payload["path"].as_str(), request.payload["kind"].as_str()),
+            (Some("Seller, blank form"), Some("pdf"))
+        );
+        app.share_source(id).unwrap();
+        out(t.inspect_pdf(args(json!({"path": casefile})), remote()).await);
+        assert!(t.inspect_pdf(args(json!({"path": casefile})), other()).await.is_err(), "only for that agent");
+        let detail = json_out(t.get_case(args(json!({"case_id": case})), remote()).await);
+        assert_eq!(detail["files"][0]["shared"], true);
+    }
+
+    /// A one-page PDF with nothing printed on it, as a scan or a photo looks to text extraction.
+    fn blank_pdf(path: &Path) {
+        use lopdf::{dictionary, Document, Object, Stream};
+        let mut doc = Document::with_version("1.5");
+        let pages = doc.new_object_id();
+        let content = doc.add_object(Stream::new(dictionary! {}, Vec::new()));
+        let media: Vec<Object> = vec![0.into(), 0.into(), 595.into(), 842.into()];
+        let page = doc
+            .add_object(dictionary! {"Type" => "Page", "Parent" => pages, "MediaBox" => media, "Contents" => content});
+        doc.objects.insert(
+            pages,
+            Object::Dictionary(dictionary! {"Type" => "Pages", "Kids" => vec![Object::from(page)], "Count" => 1}),
+        );
+        let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+        doc.trailer.set("Root", catalog);
+        doc.save(path).unwrap();
+    }
+
+    fn json_out(result: ToolResult) -> Value {
+        serde_json::from_str(&out(result).0).unwrap()
+    }
+
+    /// Imports the files into the case; their casefile: handles by file name.
+    fn import(app: &Blankey, case: i64, files: &[(PathBuf, &str)]) -> std::collections::HashMap<String, String> {
+        let items: Vec<(PathBuf, String)> = files.iter().map(|(p, d)| (p.clone(), d.to_string())).collect();
+        app.import_case_files(case, &items).unwrap();
+        let stored = app.vault().list_collected_files().unwrap();
+        stored.into_iter().map(|f| (f.name, cases::case_file_source(f.id))).collect()
+    }
+
+    #[tokio::test]
+    async fn cases_scope_every_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let changed = Arc::new(AtomicUsize::new(0));
+        let counter = changed.clone();
+        app.set_cases_hook(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let t = Tools::new(app.clone());
+        let (global, _) = setup(&app, dir.path());
+        let case =
+            json_out(t.create_case(args(json!({"title": "Sale of apartment, 12 Oak Street", "notes": "n"}))).await)
+                ["case_id"]
+                .as_i64()
+                .unwrap();
+        let other = app.create_case("Lease, shop on Main Road").unwrap();
+        let tenant = app.create_case_profile(other, "Jane Example", "person", "tenant").unwrap();
+        assert_eq!(changed.load(Ordering::SeqCst), 1, "the Cases page reloads");
+
+        // profiles: global ones without a case, the case's own in it
+        out(t.case_link_profile(args(json!({"case_id": case, "profile_id": global, "role": "buyer"}))).await);
+        let refused = t.case_link_profile(args(json!({"case_id": case, "profile_id": tenant}))).await.unwrap_err();
+        assert!(refused.contains("another case"), "{refused}");
+        let found = json_out(t.find_profiles(args(json!({"case_id": case}))).await);
+        assert_eq!((found["total"].as_u64(), found["items"][0]["role"].as_str()), (Some(1), Some("buyer")));
+        let found = json_out(t.find_profiles(args(json!({}))).await);
+        assert_eq!(found["total"], 1, "tenant profiles stay out of the global view: {found}");
+        let found = json_out(t.find_cases(args(json!({"query": "jane"}))).await);
+        assert_eq!(found["items"][0]["id"], other);
+
+        // templates made in a case stay there
+        let save = json!({"template_id": "deed", "name": "Deed", "kind": "typst", "source_text": "x", "fields": {},
+                          "roles": {"buyer": "person"}, "case_id": case});
+        out(t.save_template(args(save.clone()), local()).await);
+        assert_eq!(app.templates.get("deed").unwrap().case, Some(app.vault().get_case(case).unwrap().uuid));
+        let mut global_save = save.clone();
+        global_save.as_object_mut().unwrap().remove("case_id");
+        let refused = t.save_template(args(global_save), local()).await.unwrap_err();
+        assert!(refused.contains("deed-2"), "{refused}");
+        let in_case = json_out(t.find_templates(args(json!({"case_id": case}))).await);
+        assert_eq!(in_case["items"][0]["scope"], "case");
+        assert_eq!(json_out(t.find_templates(args(json!({}))).await)["total"], 0);
+        assert!(t.get_template(args(json!({"template_id": "deed"}))).await.unwrap_err().contains("case_id"));
+        out(t.get_template(args(json!({"template_id": "deed", "case_id": case}))).await);
+
+        // fills: the case's profiles and templates, and its own fill sets
+        let fill = json!({"templates": ["deed"], "profiles": {"buyer": global}, "name": "Sale", "case_id": case});
+        let request = json_out(t.request_fill(args(fill), local()).await)["request_id"].as_i64().unwrap();
+        assert_eq!(app.vault().get_request(request).unwrap().case_id, Some(case));
+        let wrong = json!({"templates": ["deed"], "profiles": {"buyer": tenant}, "name": "Sale", "case_id": case});
+        assert!(t.request_fill(args(wrong), local()).await.unwrap_err().contains("another case"));
+        let profiles: Profiles = [("buyer".to_string(), global)].into_iter().collect();
+        let set =
+            app.vault().save_fill_set("Sale", &["deed".into()], &profiles, &Map::new(), None, Some(case)).unwrap();
+        assert_eq!(json_out(t.find_fill_sets(args(json!({"case_id": case}))).await)["total"], 1);
+        assert_eq!(json_out(t.find_fill_sets(args(json!({}))).await)["total"], 0);
+        assert!(t.get_fill_set(args(json!({"fill_set_id": set}))).await.unwrap_err().contains("pass case_id"));
+        let requests = json_out(t.list_requests(args(json!({"case_id": case})), local()).await);
+        assert_eq!(requests["total"], 1);
+        assert_eq!(json_out(t.list_requests(args(json!({})), local()).await)["total"], 0);
+        let documents = app.generate_fill(set).unwrap();
+        assert_eq!(app.vault().list_documents().unwrap()[0].case_id, Some(case));
+        let found = json_out(t.find_documents(args(json!({"case_id": case}))).await);
+        assert_eq!(found["total"].as_u64(), Some(documents.len() as u64));
+        assert_eq!(json_out(t.find_documents(args(json!({}))).await)["total"], 0);
+
+        let detail = json_out(t.get_case(args(json!({"case_id": case})), local()).await);
+        assert_eq!((detail["notes"].as_str(), detail["templates"][0]["id"].as_str()), (Some("n"), Some("deed")));
+        assert_eq!(detail["pending_requests"][0]["id"], request);
+
+        let link = json!({"title": "x", "profile_id": tenant, "fields": [{"key": "a"}]});
+        assert!(t.create_collection_link(args(link), local()).await.unwrap_err().contains("pass case_id"));
+        let refused = t.case_unlink_profile(args(json!({"case_id": other, "profile_id": tenant}))).await.unwrap_err();
+        assert!(refused.contains("in Blankey"), "{refused}");
+        out(t.case_unlink_profile(args(json!({"case_id": case, "profile_id": global}))).await);
+        assert!(app.scope(Some(case)).unwrap().role(global).is_none());
+    }
+
+    #[tokio::test]
+    async fn request_profile_input_in_a_case_makes_a_local_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let t = Tools::new(app.clone());
+        let case = app.create_case("Sale").unwrap();
+        let ask = json!({"case_id": case, "new_profile_name": "Buyer", "role": "buyer", "fields": [{"key": "name"}]});
+        let id = json_out(t.request_profile_input(args(ask), local()).await)["request_id"].as_i64().unwrap();
+        let request = app.vault().get_request(id).unwrap();
+        assert_eq!((request.case_id, request.payload["role"].as_str()), (Some(case), Some("buyer")));
+
+        // what resolve_profile_input does with it
+        let specs = request.payload["fields"].as_array().unwrap().clone();
+        let values: indexmap::IndexMap<String, String> =
+            [("name".to_string(), "Jane Example".to_string())].into_iter().collect();
+        let target = crate::core::Target::New { name: "Jane", kind: "person", case: Some((case, "buyer")) };
+        let crate::core::ProfileSave::Saved { profile_id, .. } =
+            app.save_profile_values(&specs, &values, target).unwrap()
+        else {
+            panic!("not saved");
+        };
+        assert!(!app.vault().get_profile(profile_id).unwrap().global);
+        assert_eq!(app.scope(Some(case)).unwrap().role(profile_id), Some("buyer"));
+    }
+
+    #[tokio::test]
+    async fn case_files_are_read_through_casefile_handles() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let t = Tools::new(app.clone());
+        let case = app.create_case("Sale").unwrap();
+        let (scan, photo) = (dir.path().join("Hiddenwell scan.pdf"), dir.path().join("Hiddenwell ID.jpg"));
+        blank_pdf(&scan);
+        std::fs::write(&photo, b"jpeg").unwrap();
+        let ids = import(
+            &app,
+            case,
+            &[
+                (fixture("filled.docx"), "Seller, contract to reuse"),
+                (fixture("flat.pdf"), "Seller, deed"),
+                (scan, "Buyer, ID card scan"),
+                (photo, "Buyer, ID card photo"),
+            ],
+        );
+        let detail = json_out(t.get_case(args(json!({"case_id": case})), local()).await);
+        let text = detail.to_string();
+        assert!(text.contains("Seller, deed") && !text.contains("Hiddenwell") && !text.contains("flat.pdf"), "{text}");
+        let readable: Vec<bool> =
+            detail["files"].as_array().unwrap().iter().map(|f| f["readable"].as_bool().unwrap()).collect();
+        assert_eq!(readable.iter().filter(|r| **r).count(), 3);
+
+        let (docx, _) = out(t.inspect_docx(args(json!({"path": ids["filled.docx"]})), local()).await);
+        assert!(docx.contains("paragraphs"), "{docx}");
+        let (flat, images) = out(t.inspect_pdf(args(json!({"path": ids["flat.pdf"]})), local()).await);
+        assert!(flat.contains("\"flat\"") && images == 1, "{flat}");
+        let (blank, images) = out(t.inspect_pdf(args(json!({"path": ids["Hiddenwell scan.pdf"]})), local()).await);
+        assert!(blank.contains("\"scans\"") && images == 0, "no image of a page without text: {blank}");
+        let refused = t.inspect_pdf(args(json!({"path": ids["Hiddenwell ID.jpg"]})), local()).await.unwrap_err();
+        assert!(refused.contains("cannot be read"), "{refused}");
+
+        // a template made from a case file is the case's, without case_id
+        let save = json!({"template_id": "contract", "name": "Contract", "source_path": ids["filled.docx"],
+                          "replacements": [{"find": "John Smith", "var": "who"}], "roles": {}, "fields": {}});
+        out(t.save_docx_template(args(save.clone()), local()).await);
+        assert!(app.templates.get("contract").unwrap().case.is_some());
+        let mut elsewhere = save;
+        elsewhere["case_id"] = json!(app.create_case("Lease").unwrap());
+        assert!(t.save_docx_template(args(elsewhere), local()).await.unwrap_err().contains("file of case"));
     }
 
     #[test]

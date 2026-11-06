@@ -12,11 +12,14 @@ use super::{Request, Vault};
 const LATEST: i64 = 100;
 
 impl Vault {
+    /// The payload's `case_id` is also kept in the clear, so a case lists its requests while the vault is locked.
     pub fn create_request(&self, kind: &str, payload: &Value, grant: Option<&str>) -> Result<i64> {
         let public = self.request_public_key()?;
-        let id = self.repo.insert_request(kind, grant)?;
+        let case_id = payload.get("case_id").and_then(Value::as_i64);
+        let id = self.repo.insert_request(kind, grant, case_id)?;
         let sealed = encrypt::seal_request(&public, id, "payload", &serde_json::to_vec(payload)?)?;
         self.repo.set_sealed_payload(id, &sealed)?;
+        self.touch_case(case_id)?;
         Ok(id)
     }
 
@@ -82,6 +85,7 @@ impl Vault {
             created_at: r.created_at,
             resolved_at: r.resolved_at,
             grant_id: r.grant_id,
+            case_id: r.case_id,
             hidden,
         })
     }

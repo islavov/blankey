@@ -73,6 +73,17 @@ pub fn open_fill_set(dek: &Key, id: i64, nonce: &[u8], ciphertext: &[u8]) -> Res
     Ok(crypto::decrypt(dek.as_ref(), nonce, ciphertext, format!("fillset:{id}").as_bytes())?)
 }
 
+// -- cases -------------------------------------------------------------------------
+// The title is plaintext; what the user writes about the case is JSON {"notes"} under the DEK.
+
+pub fn case_private(dek: &Key, id: i64, private: &[u8]) -> Encrypted {
+    encrypt(dek, private, format!("case:{id}").as_bytes())
+}
+
+pub fn open_case_private(dek: &Key, id: i64, nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
+    Ok(crypto::decrypt(dek.as_ref(), nonce, ciphertext, format!("case:{id}").as_bytes())?)
+}
+
 // -- requests ------------------------------------------------------------------
 // Sealed to the request public key, so a request can be stored while the vault is locked.
 

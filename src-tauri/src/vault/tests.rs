@@ -101,13 +101,25 @@ fn documents_and_fill_sets_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let mut vault = vault(dir.path());
     let profiles: Profiles = [("applicant".to_string(), 1)].into_iter().collect();
-    let doc = vault.store_document("t", "Title", &profiles, 1, "t.pdf", b"%PDF-1.7").unwrap();
+    let doc = vault
+        .store_document(
+            &NewDocument {
+                template_id: "t",
+                title: "Title",
+                profiles: &profiles,
+                pages: 1,
+                filename: "t.pdf",
+                case_id: None,
+            },
+            b"%PDF-1.7",
+        )
+        .unwrap();
     assert_eq!(vault.load_document(doc).unwrap().1, b"%PDF-1.7");
     assert_eq!(vault.list_documents().unwrap()[0].profiles["applicant"], json!(1));
 
     let bindings: Bindings = serde_json::from_value(json!({"amount": {"value": "34 000"}})).unwrap();
-    let id = vault.save_fill_set("acme", &["loan".into()], &profiles, &bindings, None).unwrap();
-    assert_eq!(vault.find_fill_set("acme").unwrap(), Some(id));
+    let id = vault.save_fill_set("acme", &["loan".into()], &profiles, &bindings, None, None).unwrap();
+    assert_eq!(vault.find_fill_set(None, "acme").unwrap(), Some(id));
     let (info, loaded) = vault.get_fill_set(id).unwrap();
     assert_eq!((info.templates, loaded), (vec!["loan".to_string()], bindings));
     vault.lock();
@@ -185,7 +197,143 @@ fn migrations_rerun_safely() {
     let vault = Vault::open(&path, Box::new(MemoryStore::default())).unwrap();
     let version: i64 = vault.repo.raw().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
     assert_eq!(version, MIGRATIONS.len() as i64);
-    assert_eq!(vault.list_profiles().unwrap()[0].name, "John");
+    let profiles = vault.list_profiles().unwrap();
+    assert_eq!((profiles[0].name.as_str(), profiles[0].global), ("John", true));
+}
+
+fn file<'a>(case_id: Option<i64>, profile_id: Option<i64>, name: &'a str, description: &'a str) -> NewFile<'a> {
+    NewFile { profile_id, link_id: "", case_id, name, file_type: "application/pdf", description }
+}
+
+#[test]
+fn cases_round_trip_with_encrypted_notes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(dir.path());
+    let id = vault.create_case("Sale of apartment, 12 Oak Street").unwrap();
+    assert_eq!(vault.case_notes(id).unwrap(), "");
+    vault.update_case(id, None, Some("Buyer Sentinel pays in two parts")).unwrap();
+    vault.update_case(id, Some("Sale, 12 Oak Street"), None).unwrap();
+    let raw: Vec<u8> = vault.repo.raw().query_row("SELECT ciphertext FROM cases", [], |r| r.get(0)).unwrap();
+    assert!(!String::from_utf8_lossy(&raw).contains("Sentinel"));
+    assert_eq!(vault.case_notes(id).unwrap(), "Buyer Sentinel pays in two parts");
+    let case = vault.get_case(id).unwrap();
+    assert_eq!(case.title, "Sale, 12 Oak Street");
+    assert!(!case.uuid.is_empty());
+    assert!(vault.get_case(id + 1).is_err());
+
+    vault.lock();
+    assert_eq!(vault.list_cases().unwrap().len(), 1, "titles stay readable");
+    assert!(matches!(vault.case_notes(id), Err(VaultError::Locked)));
+}
+
+#[test]
+fn case_profiles_links_roles_and_globality() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(dir.path());
+    let case = vault.create_case("Lease").unwrap();
+    let global = vault.create_profile("Acme Ltd", "company").unwrap();
+    let local = vault.create_local_profile("Jane Example", "person", case, "tenant").unwrap();
+    assert!(vault.get_profile(global).unwrap().global);
+    assert!(!vault.get_profile(local).unwrap().global);
+
+    vault.link_profile(case, global, "landlord").unwrap();
+    vault.link_profile(case, global, "owner").unwrap();
+    let links: Vec<(i64, String)> = vault.case_links().unwrap().into_iter().map(|l| (l.profile_id, l.role)).collect();
+    assert_eq!(links, [(local, "tenant".to_string()), (global, "owner".to_string())]);
+    assert!(vault.link_profile(case, 999, "x").is_err());
+
+    vault.make_profile_global(local).unwrap();
+    assert!(vault.get_profile(local).unwrap().global);
+    vault.unlink_profile(case, global).unwrap();
+    assert_eq!(vault.case_links().unwrap().len(), 1);
+}
+
+#[test]
+fn fill_set_names_are_unique_per_case() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(dir.path());
+    let (a, b) = (vault.create_case("A").unwrap(), vault.create_case("B").unwrap());
+    let none = Profiles::new();
+    let save =
+        |vault: &mut Vault, case: Option<i64>| vault.save_fill_set("Sale", &[], &none, &Bindings::new(), None, case);
+    let global = save(&mut vault, None).unwrap();
+    let in_a = save(&mut vault, Some(a)).unwrap();
+    let in_b = save(&mut vault, Some(b)).unwrap();
+    assert!(save(&mut vault, Some(a)).is_err(), "names repeat across cases, not within one");
+    assert!(save(&mut vault, None).is_err());
+    assert_eq!(vault.find_fill_set(None, "Sale").unwrap(), Some(global));
+    assert_eq!(vault.find_fill_set(Some(a), "Sale").unwrap(), Some(in_a));
+    assert_eq!(vault.find_fill_set(Some(b), "Sale").unwrap(), Some(in_b));
+
+    // saving over it keeps its case
+    vault.save_fill_set("Sale", &["loan".into()], &none, &Bindings::new(), Some(in_a), None).unwrap();
+    let sets = vault.list_fill_sets().unwrap();
+    assert_eq!(sets.iter().find(|f| f.id == in_a).unwrap().case_id, Some(a));
+}
+
+#[test]
+fn case_file_descriptions_are_encrypted() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(dir.path());
+    let case = vault.create_case("Sale").unwrap();
+    let id = vault.add_collected_file(file(Some(case), None, "scan.pdf", "Sentinel, buyer, ID card"), b"%PDF").unwrap();
+    let raw: Vec<u8> = vault.repo.raw().query_row("SELECT ciphertext FROM collected_files", [], |r| r.get(0)).unwrap();
+    assert!(!String::from_utf8_lossy(&raw).contains("Sentinel"));
+    let stored = vault.get_collected_file(id).unwrap();
+    assert_eq!((stored.case_id, stored.description.as_str()), (Some(case), "Sentinel, buyer, ID card"));
+
+    vault.set_file_description(id, "Seller, deed").unwrap();
+    let (stored, content) = vault.load_collected_file(id).unwrap();
+    assert_eq!(
+        (stored.description.as_str(), stored.name.as_str(), content.as_slice()),
+        ("Seller, deed", "scan.pdf", &b"%PDF"[..])
+    );
+}
+
+#[test]
+fn deleting_a_case_removes_its_rows_and_blobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(dir.path());
+    let (case, other) = (vault.create_case("Sale").unwrap(), vault.create_case("Lease").unwrap());
+    let profile = vault.create_profile("John", "person").unwrap();
+    vault.link_profile(case, profile, "buyer").unwrap();
+    let mine = vault.add_collected_file(file(Some(case), None, "a.pdf", "a"), b"a").unwrap();
+    let kept = vault.add_collected_file(file(Some(other), None, "b.pdf", "b"), b"b").unwrap();
+    let none = Profiles::new();
+    let doc =
+        |case_id| NewDocument { template_id: "t", title: "T", profiles: &none, pages: 1, filename: "t.pdf", case_id };
+    vault.store_document(&doc(Some(case)), b"x").unwrap();
+    vault.store_document(&doc(None), b"y").unwrap();
+    vault.save_fill_set("Sale", &[], &none, &Bindings::new(), None, Some(case)).unwrap();
+    let request = vault.create_request("fill", &json!({"case_id": case}), None).unwrap();
+    assert_eq!(vault.get_request(request).unwrap().case_id, Some(case));
+    let counts = vault.case_counts(case).unwrap();
+    assert_eq!((counts.files, counts.documents, counts.fill_sets, counts.requests), (1, 1, 1, 1));
+
+    vault.delete_case(case).unwrap();
+    assert!(vault.get_case(case).is_err());
+    let files: Vec<i64> = vault.list_collected_files().unwrap().iter().map(|f| f.id).collect();
+    assert_eq!(files, [kept]);
+    assert!(!dir.path().join(format!("files/{mine}.bin")).exists());
+    assert!(dir.path().join(format!("files/{kept}.bin")).exists());
+    assert_eq!(vault.list_documents().unwrap().len(), 1);
+    assert!(vault.list_fill_sets().unwrap().is_empty());
+    assert!(vault.case_links().unwrap().is_empty());
+    assert_eq!(vault.get_profile(profile).unwrap().name, "John");
+    assert_eq!(vault.get_request(request).unwrap().case_id, None, "the request stays as activity");
+}
+
+#[test]
+fn deleting_a_profile_keeps_case_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(dir.path());
+    let case = vault.create_case("Sale").unwrap();
+    let profile = vault.create_profile("John", "person").unwrap();
+    vault.add_collected_file(file(None, Some(profile), "own.pdf", ""), b"a").unwrap();
+    let in_case = vault.add_collected_file(file(Some(case), None, "case.pdf", "John, ID"), b"b").unwrap();
+    vault.delete_profile(profile).unwrap();
+    let files: Vec<i64> = vault.list_collected_files().unwrap().iter().map(|f| f.id).collect();
+    assert_eq!(files, [in_case]);
 }
 
 #[test]
@@ -238,7 +386,7 @@ fn reads_python_vault() {
 
     vault.unlock("legacy-pw").unwrap();
     assert_eq!(vault.get_values(1).unwrap()["name"].1, "John Watson");
-    let id = vault.find_fill_set("acme").unwrap().unwrap();
+    let id = vault.find_fill_set(None, "acme").unwrap().unwrap();
     let (info, bindings) = vault.get_fill_set(id).unwrap();
     assert_eq!(info.templates, ["loan"]);
     assert_eq!(info.profiles["manager"], 1);

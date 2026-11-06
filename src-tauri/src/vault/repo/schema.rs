@@ -16,6 +16,7 @@ pub const MIGRATIONS: &[fn(&Connection) -> rusqlite::Result<()>] = &[
     collection_links,
     link_submissions,
     field_keys,
+    cases,
 ];
 
 /// The Python app's DDL (peewee): NOT NULL without SQL defaults, so every insert names all its columns.
@@ -86,6 +87,33 @@ CREATE INDEX IF NOT EXISTS "link_submissions_link_id" ON "link_submissions" ("li
 /// Finding profiles by the keys they hold.
 fn field_keys(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(r#"CREATE INDEX IF NOT EXISTS "fieldrow_key" ON "fields" ("key");"#)
+}
+
+/// Cases: a title in plaintext (like a profile name), notes under the DEK. Profiles are global or local to the cases
+/// they are linked to; files, documents, fill sets and requests belong to at most one case. The `case_id` columns
+/// have no foreign key: deleting a case removes its rows and blobs itself.
+fn cases(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS "cases" ("id" INTEGER NOT NULL PRIMARY KEY, "uuid" TEXT NOT NULL UNIQUE, "title" TEXT NOT NULL, "created_at" TEXT NOT NULL, "updated_at" TEXT NOT NULL, "nonce" BLOB, "ciphertext" BLOB);
+CREATE TABLE IF NOT EXISTS "case_profiles" ("case_id" INTEGER NOT NULL, "profile_id" INTEGER NOT NULL, "role" TEXT NOT NULL, "added_at" TEXT NOT NULL, PRIMARY KEY ("case_id", "profile_id"), FOREIGN KEY ("case_id") REFERENCES "cases" ("id") ON DELETE CASCADE, FOREIGN KEY ("profile_id") REFERENCES "profiles" ("id") ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS "case_profiles_profile_id" ON "case_profiles" ("profile_id");
+"#,
+    )?;
+    add_column(conn, "profiles", "global", "INTEGER NOT NULL DEFAULT 1")?;
+    add_column(conn, "collected_files", "case_id", "INTEGER")?;
+    add_column(conn, "documents", "case_id", "INTEGER")?;
+    add_column(conn, "fill_sets", "case_id", "INTEGER")?;
+    add_column(conn, "requests", "case_id", "INTEGER")?;
+    conn.execute_batch(
+        r#"
+CREATE INDEX IF NOT EXISTS "collected_files_case_id" ON "collected_files" ("case_id");
+CREATE INDEX IF NOT EXISTS "documents_case_id" ON "documents" ("case_id");
+CREATE INDEX IF NOT EXISTS "requests_case_id" ON "requests" ("case_id");
+DROP INDEX IF EXISTS "fillsetrow_name";
+CREATE UNIQUE INDEX IF NOT EXISTS "fill_sets_case_name" ON "fill_sets" (coalesce("case_id", 0), "name");
+"#,
+    )
 }
 
 fn add_column(conn: &Connection, table: &str, column: &str, declaration: &str) -> rusqlite::Result<()> {

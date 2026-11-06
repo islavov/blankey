@@ -8,6 +8,8 @@ pub struct Profile {
     pub id: i64,
     pub name: String,
     pub kind: String,
+    /// false: local to the cases it is linked to
+    pub global: bool,
 }
 
 /// Metadata only: safe for MCP.
@@ -53,6 +55,7 @@ pub struct DocumentInfo {
     pub pages: i64,
     pub filename: String,
     pub created_at: String,
+    pub case_id: Option<i64>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -62,6 +65,7 @@ pub struct FillSetInfo {
     pub templates: Vec<String>,
     pub profiles: Profiles,
     pub updated_at: String,
+    pub case_id: Option<i64>,
 }
 
 /// role -> profile id
@@ -79,6 +83,7 @@ pub struct Request {
     pub created_at: String,
     pub resolved_at: Option<String>,
     pub grant_id: Option<String>,
+    pub case_id: Option<i64>,
     /// payload sealed and the vault is locked
     pub hidden: bool,
 }
@@ -135,4 +140,37 @@ pub struct CollectedFile {
     pub name: String,
     #[serde(rename = "type")]
     pub file_type: String,
+    pub case_id: Option<i64>,
+    /// what the file is and whose, as the user typed it on import; how the AI finds case files
+    pub description: String,
+}
+
+/// A file to keep: with a profile (from a link or added by hand) or in a case.
+pub struct NewFile<'a> {
+    pub profile_id: Option<i64>,
+    pub link_id: &'a str,
+    pub case_id: Option<i64>,
+    pub name: &'a str,
+    pub file_type: &'a str,
+    pub description: &'a str,
+}
+
+/// One matter: the profiles in it, its files, templates, fill sets, documents and requests. The title is plaintext
+/// like a profile name; the notes are encrypted and read with `case_notes`.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct CaseInfo {
+    pub id: i64,
+    /// what a case-local template's manifest names it by, so it can't match another case after a vault reset
+    pub uuid: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A profile in a case, with its role there.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct CaseLink {
+    pub case_id: i64,
+    pub profile_id: i64,
+    pub role: String,
 }

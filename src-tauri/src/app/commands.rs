@@ -151,18 +151,212 @@ fn copy_text(handle: AppHandle, text: String) -> CmdResult<()> {
     handle.clipboard().write_text(text).map_err(err)
 }
 
-// -- profiles ----------------------------------------------------------------
+// -- cases -------------------------------------------------------------------
 
+#[derive(Serialize)]
+struct CaseRow {
+    id: i64,
+    title: String,
+    updated_at: String,
+    profiles: Vec<String>,
+    files: i64,
+}
+
+/// Latest change first, each with the names of its profiles and its file count.
 #[tauri::command]
-fn list_profiles(state: State<AppState>) -> CmdResult<Vec<crate::vault::Profile>> {
-    state.app.vault().list_profiles().map_err(err)
+fn list_cases(state: State<AppState>) -> CmdResult<Vec<CaseRow>> {
+    let vault = state.app.vault();
+    let names: IndexMap<i64, String> =
+        vault.list_profiles().map_err(err)?.into_iter().map(|p| (p.id, p.name)).collect();
+    let links = vault.case_links().map_err(err)?;
+    let files = vault.case_file_counts().map_err(err)?;
+    Ok(vault
+        .list_cases()
+        .map_err(err)?
+        .into_iter()
+        .map(|c| CaseRow {
+            profiles: links
+                .iter()
+                .filter(|l| l.case_id == c.id)
+                .filter_map(|l| names.get(&l.profile_id).cloned())
+                .collect(),
+            files: files.get(&c.id).copied().unwrap_or(0),
+            id: c.id,
+            title: c.title,
+            updated_at: c.updated_at,
+        })
+        .collect())
 }
 
 #[tauri::command]
-fn create_profile(state: State<AppState>, name: String, kind: String) -> CmdResult<i64> {
-    let id = state.app.vault().create_profile(name.trim(), kind.trim()).map_err(err)?;
+fn create_case(state: State<AppState>, title: String) -> CmdResult<i64> {
+    let id = state.app.create_case(&title)?;
+    state.app.audit("user", "create_case", &id.to_string());
+    Ok(id)
+}
+
+#[derive(Serialize)]
+struct CaseProfile {
+    id: i64,
+    name: String,
+    kind: String,
+    global: bool,
+    role: String,
+    /// how many cases it is in
+    cases: usize,
+}
+
+/// The case with its notes (needs the vault unlocked), its profiles and how much of each kind it holds.
+#[tauri::command]
+fn get_case(state: State<AppState>, id: i64) -> CmdResult<Value> {
+    let app = &state.app;
+    let scope = app.scope(Some(id))?;
+    let info = scope.case.clone().ok_or("Unknown case")?;
+    let profiles: Vec<CaseProfile> = app
+        .case_profiles(id)?
+        .into_iter()
+        .map(|(p, role, cases)| CaseProfile { id: p.id, name: p.name, kind: p.kind, global: p.global, role, cases })
+        .collect();
+    let (notes, counts) = {
+        let vault = app.vault();
+        (vault.case_notes(id).map_err(err)?, vault.case_counts(id).map_err(err)?)
+    };
+    Ok(json!({
+        "id": info.id, "title": info.title, "notes": notes, "created_at": info.created_at, "updated_at": info.updated_at,
+        "counts": {
+            "files": counts.files, "profiles": profiles.len(), "templates": app.case_templates(&scope).len(),
+            "fill_sets": counts.fill_sets, "documents": counts.documents, "activity": counts.requests,
+        },
+        "profiles": profiles,
+    }))
+}
+
+#[tauri::command]
+fn update_case(state: State<AppState>, id: i64, title: Option<String>, notes: Option<String>) -> CmdResult<()> {
+    state.app.update_case(id, title.as_deref(), notes.as_deref())?;
+    state.app.audit("user", "update_case", &id.to_string());
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_case(handle: AppHandle, state: State<AppState>, id: i64) -> CmdResult<crate::cases::DeletedCase> {
+    let deleted = state.app.delete_case(id)?;
+    tray::refresh(&handle);
+    let _ = handle.emit("requests-changed", ());
+    Ok(deleted)
+}
+
+/// Files the user picks to import; nothing is imported yet.
+#[tauri::command]
+async fn pick_files(handle: AppHandle) -> CmdResult<Vec<PathBuf>> {
+    let picked = handle.dialog().file().set_title("Import files into the case").blocking_pick_files();
+    Ok(picked.unwrap_or_default().into_iter().filter_map(|p| p.into_path().ok()).collect())
+}
+
+#[derive(Deserialize)]
+struct ImportItem {
+    path: PathBuf,
+    description: String,
+}
+
+/// Encrypts each file into the case with its description; the number imported.
+#[tauri::command]
+async fn import_case_files(state: State<'_, AppState>, case_id: i64, items: Vec<ImportItem>) -> CmdResult<usize> {
+    let app = state.app.clone();
+    let files: Vec<(PathBuf, String)> = items.into_iter().map(|i| (i.path, i.description.trim().to_string())).collect();
+    tauri::async_runtime::spawn_blocking(move || app.import_case_files(case_id, &files)).await.map_err(err)?
+}
+
+#[tauri::command]
+fn update_case_file(state: State<AppState>, id: i64, description: String) -> CmdResult<()> {
+    state.app.vault().set_file_description(id, description.trim()).map_err(err)?;
+    state.app.audit("user", "update_case_file", &id.to_string());
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct LinkableProfile {
+    id: i64,
+    name: String,
+    kind: String,
+    global: bool,
+    /// the titles of the cases it is in
+    cases: Vec<String>,
+}
+
+/// What the case can add: global profiles not in it yet, and the local profiles of other cases.
+#[tauri::command]
+fn linkable_profiles(state: State<AppState>, case_id: i64) -> CmdResult<Vec<LinkableProfile>> {
+    let titles = case_titles(&state.app)?;
+    let vault = state.app.vault();
+    let links = vault.case_links().map_err(err)?;
+    Ok(vault
+        .list_profiles()
+        .map_err(err)?
+        .into_iter()
+        .filter(|p| !links.iter().any(|l| l.case_id == case_id && l.profile_id == p.id))
+        .filter_map(|p| {
+            let cases: Vec<String> =
+                links.iter().filter(|l| l.profile_id == p.id).filter_map(|l| titles.get(&l.case_id).cloned()).collect();
+            (p.global || !cases.is_empty()).then_some(LinkableProfile {
+                id: p.id,
+                name: p.name,
+                kind: p.kind,
+                global: p.global,
+                cases,
+            })
+        })
+        .collect())
+}
+
+/// Adds the profile to the case, or changes its role there.
+#[tauri::command]
+fn link_case_profile(state: State<AppState>, case_id: i64, profile_id: i64, role: String) -> CmdResult<()> {
+    state.app.link_profile(case_id, profile_id, &role)?;
+    state.app.audit("user", "link_profile", &format!("case={case_id} profile={profile_id}"));
+    Ok(())
+}
+
+/// True when the profile was local to this case only, and so deleted.
+#[tauri::command]
+fn remove_case_profile(state: State<AppState>, case_id: i64, profile_id: i64) -> CmdResult<bool> {
+    let deleted = state.app.remove_case_profile(case_id, profile_id)?;
+    let action = if deleted { "delete_profile" } else { "unlink_profile" };
+    state.app.audit("user", action, &format!("case={case_id} profile={profile_id}"));
+    Ok(deleted)
+}
+
+// -- profiles ----------------------------------------------------------------
+
+/// Global profiles; a case's own are listed with the case.
+#[tauri::command]
+fn list_profiles(state: State<AppState>) -> CmdResult<Vec<crate::vault::Profile>> {
+    let app = &state.app;
+    app.visible_profiles(&app.scope(None)?)
+}
+
+/// In a case: local to it and linked with the role.
+#[tauri::command]
+fn create_profile(
+    state: State<AppState>,
+    name: String,
+    kind: String,
+    case_id: Option<i64>,
+    role: Option<String>,
+) -> CmdResult<i64> {
+    let id = match case_id {
+        Some(case) => state.app.create_case_profile(case, &name, &kind, role.as_deref().unwrap_or_default())?,
+        None => state.app.vault().create_profile(name.trim(), kind.trim()).map_err(err)?,
+    };
     state.app.audit("user", "create_profile", &id.to_string());
     Ok(id)
+}
+
+#[tauri::command]
+fn make_profile_global(state: State<AppState>, id: i64) -> CmdResult<()> {
+    state.app.vault().make_profile_global(id).map_err(err)?;
+    state.app.audit("user", "make_profile_global", &id.to_string());
+    Ok(())
 }
 
 #[tauri::command]
@@ -245,6 +439,8 @@ struct TemplateCard {
     /// lib:<id> when made from a library file
     source: Option<String>,
     stale: String,
+    /// made in the case the list is for, and not made global since
+    local: bool,
 }
 
 fn blanks(template: &crate::templates::Template) -> usize {
@@ -254,13 +450,15 @@ fn blanks(template: &crate::templates::Template) -> usize {
     }
 }
 
+/// Without a case the global templates; with one its own first, then the global ones.
 #[tauri::command]
-fn list_templates(state: State<AppState>) -> CmdResult<Vec<TemplateCard>> {
-    let sets = state.app.vault().list_fill_sets().map_err(err)?;
-    Ok(state
-        .app
-        .templates
-        .all()
+fn list_templates(state: State<AppState>, case_id: Option<i64>) -> CmdResult<Vec<TemplateCard>> {
+    let app = &state.app;
+    let scope = app.scope(case_id)?;
+    let sets = app.vault().list_fill_sets().map_err(err)?;
+    let mut templates = app.visible_templates(&scope);
+    templates.sort_by_key(|t| scope.template_case(t).is_none());
+    Ok(templates
         .iter()
         .map(|t| TemplateCard {
             id: t.id.clone(),
@@ -271,8 +469,16 @@ fn list_templates(state: State<AppState>) -> CmdResult<Vec<TemplateCard>> {
             used_by: sets.iter().filter(|s| s.templates.contains(&t.id)).map(|s| s.name.clone()).collect(),
             source: t.origin.as_ref().map(|o| o.file.clone()),
             stale: t.stale.clone(),
+            local: scope.template_case(t).is_some(),
         })
         .collect())
+}
+
+#[tauri::command]
+fn make_template_global(state: State<AppState>, id: String) -> CmdResult<()> {
+    state.app.make_template_global(&id)?;
+    state.app.audit("user", "make_template_global", &id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -336,10 +542,12 @@ fn remove_library_root(state: State<AppState>, id: i64) -> CmdResult<()> {
     Ok(())
 }
 
-/// Files of the library folders that no template was made from yet.
+/// Files of the library folders that no global template was made from yet.
 #[tauri::command]
 fn library_files(state: State<AppState>) -> CmdResult<Vec<crate::library::LibraryFile>> {
-    let used: Vec<String> = state.app.templates.all().into_iter().filter_map(|t| t.origin.map(|o| o.file)).collect();
+    let app = &state.app;
+    let global = app.visible_templates(&app.scope(None)?);
+    let used: Vec<String> = global.into_iter().filter_map(|t| t.origin.map(|o| o.file)).collect();
     Ok(state.app.library.files()?.into_iter().filter(|f| !used.contains(&f.source())).collect())
 }
 
@@ -355,9 +563,16 @@ async fn library_preview(state: State<'_, AppState>, id: i64) -> CmdResult<Previ
     tauri::async_runtime::spawn_blocking(move || preview::file_preview(&file.path, &file.kind)).await.map_err(err)
 }
 
-/// The file a PII review is about: a library file (lib:<id>) or a file picked for a request, by path.
+/// The file a PII review is about: a library file (lib:<id>), a case file (casefile:<id>) or a file picked for a
+/// request, by path.
 fn review_path(app: &Blankey, source: &str) -> Result<(PathBuf, String), String> {
-    let path = if source.starts_with("lib:") { app.library.path(source)? } else { PathBuf::from(source) };
+    let path = if source.starts_with("lib:") {
+        app.library.path(source)?
+    } else if source.starts_with("casefile:") {
+        app.case_file(source)?.0
+    } else {
+        PathBuf::from(source)
+    };
     let kind = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_lowercase();
     Ok((path, kind))
 }
@@ -522,9 +737,37 @@ fn show_library_file(state: State<AppState>, id: i64) -> CmdResult<()> {
 
 // -- documents -----------------------------------------------------------------
 
+/// A row of a global list, with the title of the case it is in.
+#[derive(Serialize)]
+struct InCase<T> {
+    #[serde(flatten)]
+    row: T,
+    case_title: Option<String>,
+}
+
+/// case id -> title
+fn case_titles(app: &Blankey) -> CmdResult<IndexMap<i64, String>> {
+    Ok(app.vault().list_cases().map_err(err)?.into_iter().map(|c| (c.id, c.title)).collect())
+}
+
+/// Without a case: every row, each with its case's title. With one: that case's rows.
+fn in_case<T>(
+    rows: Vec<T>,
+    case_id: Option<i64>,
+    titles: &IndexMap<i64, String>,
+    case_of: impl Fn(&T) -> Option<i64>,
+) -> Vec<InCase<T>> {
+    rows.into_iter()
+        .filter(|row| case_id.is_none() || case_of(row) == case_id)
+        .map(|row| InCase { case_title: case_of(&row).and_then(|id| titles.get(&id).cloned()), row })
+        .collect()
+}
+
 #[tauri::command]
-fn list_documents(state: State<AppState>) -> CmdResult<Vec<crate::vault::DocumentInfo>> {
-    state.app.vault().list_documents().map_err(err)
+fn list_documents(state: State<AppState>, case_id: Option<i64>) -> CmdResult<Vec<InCase<crate::vault::DocumentInfo>>> {
+    let titles = case_titles(&state.app)?;
+    let documents = state.app.vault().list_documents().map_err(err)?;
+    Ok(in_case(documents, case_id, &titles, |d| d.case_id))
 }
 
 #[tauri::command]
@@ -565,9 +808,10 @@ struct CollectedRow {
     profile_name: Option<String>,
 }
 
-/// Files that came in through collection links.
+/// Files kept with profiles (from collection links or added by hand) and imported into cases; with a case only its
+/// own.
 #[tauri::command]
-fn list_collected_files(state: State<AppState>) -> CmdResult<Vec<CollectedRow>> {
+fn list_collected_files(state: State<AppState>, case_id: Option<i64>) -> CmdResult<Vec<CollectedRow>> {
     let vault = state.app.vault();
     let titles: IndexMap<String, String> =
         vault.list_links().map_err(err)?.into_iter().map(|l| (l.link_id, l.title)).collect();
@@ -577,6 +821,7 @@ fn list_collected_files(state: State<AppState>) -> CmdResult<Vec<CollectedRow>> 
         .list_collected_files()
         .map_err(err)?
         .into_iter()
+        .filter(|file| case_id.is_none() || file.case_id == case_id)
         .map(|file| CollectedRow {
             link_title: titles.get(&file.link_id).cloned().unwrap_or_default(),
             profile_name: file.profile_id.and_then(|id| names.get(&id).cloned()),
@@ -614,11 +859,14 @@ async fn add_profile_files(handle: AppHandle, state: State<'_, AppState>, profil
 
 #[tauri::command]
 fn delete_collected_files(state: State<AppState>, ids: Vec<i64>) -> CmdResult<()> {
-    let vault = state.app.vault();
-    for id in ids {
-        vault.delete_collected_file(id).map_err(err)?;
-        let _ = vault.audit("user", "delete_collected_file", &id.to_string());
+    {
+        let vault = state.app.vault();
+        for id in ids {
+            vault.delete_collected_file(id).map_err(err)?;
+            let _ = vault.audit("user", "delete_collected_file", &id.to_string());
+        }
     }
+    state.app.clear_scratch();
     Ok(())
 }
 
@@ -631,14 +879,16 @@ struct FillSetRow {
     templates: Vec<String>,
     profiles: Vec<String>,
     updated_at: String,
+    case_id: Option<i64>,
 }
 
 #[tauri::command]
-fn list_fill_sets(state: State<AppState>) -> CmdResult<Vec<FillSetRow>> {
+fn list_fill_sets(state: State<AppState>, case_id: Option<i64>) -> CmdResult<Vec<InCase<FillSetRow>>> {
+    let titles = case_titles(&state.app)?;
     let vault = state.app.vault();
     let names: IndexMap<i64, String> =
         vault.list_profiles().map_err(err)?.into_iter().map(|p| (p.id, p.name)).collect();
-    Ok(vault
+    let rows = vault
         .list_fill_sets()
         .map_err(err)?
         .into_iter()
@@ -652,8 +902,10 @@ fn list_fill_sets(state: State<AppState>) -> CmdResult<Vec<FillSetRow>> {
                 .map(|id| names.get(id).cloned().unwrap_or_else(|| format!("#{id}")))
                 .collect(),
             updated_at: info.updated_at,
+            case_id: info.case_id,
         })
-        .collect())
+        .collect();
+    Ok(in_case(rows, case_id, &titles, |row| row.case_id))
 }
 
 #[tauri::command]
@@ -798,11 +1050,13 @@ struct ActivityRow {
     status: String,
     fill_set_id: Option<i64>,
     document_ids: Vec<i64>,
+    case_id: Option<i64>,
 }
 
-/// Everything the assistant asked for, waiting requests first. Metadata only.
+/// Everything the assistant asked for, waiting requests first; with a case only its requests. Metadata only.
 #[tauri::command]
-fn list_activity(state: State<AppState>) -> CmdResult<Vec<ActivityRow>> {
+fn list_activity(state: State<AppState>, case_id: Option<i64>) -> CmdResult<Vec<InCase<ActivityRow>>> {
+    let titles = case_titles(&state.app)?;
     let names: IndexMap<String, String> = state.app.templates.all().into_iter().map(|t| (t.id, t.name)).collect();
     let lang = state.app.language();
     let vault = state.app.vault();
@@ -812,7 +1066,7 @@ fn list_activity(state: State<AppState>) -> CmdResult<Vec<ActivityRow>> {
     let documents: Vec<i64> = vault.list_documents().map_err(err)?.iter().map(|d| d.id).collect();
     let mut requests = vault.list_requests(None).map_err(err)?;
     requests.sort_by_key(|r| (r.status != "pending", -r.id));
-    Ok(requests
+    let rows = requests
         .iter()
         .map(|r| {
             let result = r.result.clone().unwrap_or_default();
@@ -836,9 +1090,11 @@ fn list_activity(state: State<AppState>) -> CmdResult<Vec<ActivityRow>> {
                 status: r.status.clone(),
                 fill_set_id,
                 document_ids,
+                case_id: r.case_id,
             }
         })
-        .collect())
+        .collect();
+    Ok(in_case(rows, case_id, &titles, |row| row.case_id))
 }
 
 #[derive(Serialize)]
@@ -901,9 +1157,11 @@ fn resolve_profile_input(
     let specs = request.payload.get("fields").and_then(Value::as_array).cloned().unwrap_or_default();
     let new_name = profile_name.unwrap_or_default();
     let kind = request.payload.get("new_profile").and_then(|p| p.get("kind")).and_then(Value::as_str).unwrap_or("");
+    let role = request.payload.get("role").and_then(Value::as_str).unwrap_or_default();
+    let case = request.case_id.map(|case_id| (case_id, role));
     let target = match request.payload.get("profile_id").and_then(Value::as_i64) {
         Some(id) => Target::Existing(id),
-        None => Target::New { name: &new_name, kind },
+        None => Target::New { name: &new_name, kind, case },
     };
     let (profile_id, statuses) = match app.save_profile_values(&specs, &values, target)? {
         ProfileSave::Problems(problems) => return Ok(problems),
@@ -936,19 +1194,26 @@ async fn pick_request_file(handle: AppHandle, state: State<'_, AppState>, id: i6
     Ok(Some(json!({"path": path, "name": name})))
 }
 
-/// Shares the picked file with the agent: Blankey keeps a copy, and the corrections made for it go along.
+/// Shares the picked file with the agent: Blankey keeps a copy, and the corrections made for it go along. In a case
+/// the file is imported into it, with the description.
 #[tauri::command]
-fn share_upload(handle: AppHandle, state: State<AppState>, id: i64, path: PathBuf) -> CmdResult<Value> {
-    let result = state.app.store_upload(id, &path)?;
+fn share_upload(
+    handle: AppHandle,
+    state: State<AppState>,
+    id: i64,
+    path: PathBuf,
+    description: Option<String>,
+) -> CmdResult<Value> {
+    let result = state.app.store_upload(id, &path, description.as_deref())?;
     tray::refresh(&handle);
     let _ = handle.emit("requests-changed", ());
     Ok(result)
 }
 
-/// The user lets the agent read the library file a `file` request names.
+/// The user lets the agent read the library or case file a `file` request names.
 #[tauri::command]
 fn share_library_request(handle: AppHandle, state: State<AppState>, id: i64) -> CmdResult<Value> {
-    let result = state.app.share_library_file(id)?;
+    let result = state.app.share_source(id)?;
     tray::refresh(&handle);
     let _ = handle.emit("requests-changed", ());
     Ok(result)
@@ -1093,7 +1358,7 @@ async fn resolve_submission(
         let name = profile_name.unwrap_or_default();
         let target = match profile_id {
             Some(id) => Target::Existing(id),
-            None => Target::New { name: &name, kind: "person" },
+            None => Target::New { name: &name, kind: "person", case: None },
         };
         app.resolve_submission(&sid, target, &values, &keep)
     })
@@ -1324,13 +1589,26 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         touch,
         set_busy,
         copy_text,
+        list_cases,
+        create_case,
+        get_case,
+        update_case,
+        delete_case,
+        pick_files,
+        import_case_files,
+        update_case_file,
+        linkable_profiles,
+        link_case_profile,
+        remove_case_profile,
         list_profiles,
         create_profile,
+        make_profile_global,
         update_profile,
         delete_profile,
         profile_fields,
         save_fields,
         list_templates,
+        make_template_global,
         template_preview,
         delete_template,
         show_template_folder,
@@ -1397,4 +1675,42 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         update_install,
         update_auto_set,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    fn scripts(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .flat_map(|entry| match entry.path() {
+                path if path.is_dir() => scripts(&path),
+                path if path.extension().is_some_and(|e| e == "js") => vec![std::fs::read_to_string(path).unwrap()],
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// The window and the app ship together: a command the window calls that the app lacks is an error on screen.
+    #[test]
+    fn every_command_the_window_calls_is_registered() {
+        let source = include_str!("commands.rs");
+        let list = &source[source.find("tauri::generate_handler![").unwrap()..];
+        let registered: Vec<&str> = list[..list.find(']').unwrap()]
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|word| !word.is_empty())
+            .collect();
+        let called = regex::Regex::new(r#"\b(?:call|invoke)\(\s*"([a-z_]+)""#).unwrap();
+        let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ui/js");
+        let mut missing: Vec<String> = scripts(&ui)
+            .iter()
+            .flat_map(|script| called.captures_iter(script).map(|c| c[1].to_string()).collect::<Vec<_>>())
+            .filter(|command| !registered.contains(&command.as_str()))
+            .collect();
+        missing.sort();
+        missing.dedup();
+        assert!(missing.is_empty(), "the window calls commands the app does not register: {missing:?}");
+    }
 }

@@ -8,16 +8,18 @@ use indexmap::IndexMap;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
+use crate::cases;
 use crate::config::Config;
 use crate::fieldtypes;
 use crate::keychain::SecretStore;
 use crate::library::{self, Library};
+use crate::links::FileOwner;
 use crate::pii;
 use crate::render::pdf_form;
 use crate::render::preview;
 use crate::templates::engine::{self, BindingReport, Rendered};
 use crate::templates::{bindings, docx, fill, Origin, SaveTemplate, StrMap, Template, TemplateKind, TemplateStore};
-use crate::vault::{Bindings, FieldInfo, FieldInput, Profiles, Vault};
+use crate::vault::{Bindings, FieldInfo, FieldInput, NewDocument, Profiles, Vault};
 
 pub const PROFILE_INPUT: &str = "profile_input";
 pub const FILL: &str = "fill";
@@ -39,6 +41,8 @@ pub struct DocxTemplate<'a> {
     pub fields: StrMap,
     pub labels: StrMap,
     pub description: &'a str,
+    /// the case uuid a new template is made in
+    pub case: Option<&'a str>,
 }
 
 /// Something wrong with a typed value: the field's own label (empty for the form as a whole) and an English
@@ -63,15 +67,16 @@ pub enum ProfileSave {
     Saved { profile_id: i64, fields: Vec<Value> },
 }
 
-/// Where typed values go: an existing profile, or a new one with this name and kind.
+/// Where typed values go: an existing profile, or a new one with this name and kind. A new profile made in a case
+/// (its id and the profile's role there) is local to it.
 pub enum Target<'a> {
     Existing(i64),
-    New { name: &'a str, kind: &'a str },
+    New { name: &'a str, kind: &'a str, case: Option<(i64, &'a str)> },
 }
 
 type RequestHook = Box<dyn Fn(i64) + Send + Sync>;
 type UnlockHook = Box<dyn Fn(&str) + Send + Sync>;
-type LibraryHook = Box<dyn Fn() + Send + Sync>;
+type Hook = Box<dyn Fn() + Send + Sync>;
 
 pub struct Blankey {
     pub config: Config,
@@ -81,7 +86,9 @@ pub struct Blankey {
     on_request: RwLock<RequestHook>,
     on_unlock_needed: RwLock<UnlockHook>,
     /// after a scan changed what the library shows
-    on_library_change: RwLock<LibraryHook>,
+    on_library_change: RwLock<Hook>,
+    /// after an AI assistant changed a case
+    on_cases_change: RwLock<Hook>,
     /// the UI language (i18n); MCP output stays English
     language: RwLock<String>,
     /// the language picked in Settings, which the account's language never overrides
@@ -102,6 +109,7 @@ impl Blankey {
             on_request: RwLock::new(Box::new(|_| {})),
             on_unlock_needed: RwLock::new(Box::new(|_| {})),
             on_library_change: RwLock::new(Box::new(|| {})),
+            on_cases_change: RwLock::new(Box::new(|| {})),
             language: RwLock::new(crate::i18n::resolve(device_language.as_deref(), None)),
             device_language: RwLock::new(device_language),
         })
@@ -153,6 +161,15 @@ impl Blankey {
         *self.on_library_change.write().unwrap() = Box::new(hook);
     }
 
+    pub fn set_cases_hook(&self, hook: impl Fn() + Send + Sync + 'static) {
+        *self.on_cases_change.write().unwrap() = Box::new(hook);
+    }
+
+    /// An AI assistant created or changed a case; the app reloads the Cases page.
+    pub fn cases_changed(&self) {
+        (self.on_cases_change.read().unwrap())();
+    }
+
     pub fn wait_for_unlock(&self, reason: &str, timeout: Duration) -> bool {
         if self.vault().unlocked() {
             return true;
@@ -174,8 +191,10 @@ impl Blankey {
 
     // -- requests ----------------------------------------------------------
 
-    /// grant: the relay grant of a remote agent; only that agent sees the request and its uploads.
+    /// grant: the relay grant of a remote agent; only that agent sees the request and its uploads. A `case_id` in
+    /// the payload puts the request in that case.
     pub fn create_request(&self, kind: &str, payload: Value, grant: Option<&str>) -> Result<i64, String> {
+        let in_case = payload.get("case_id").is_some_and(Value::is_i64);
         let id = {
             let vault = self.vault();
             let id = vault.create_request(kind, &payload, grant).map_err(|e| e.to_string())?;
@@ -183,6 +202,9 @@ impl Blankey {
             id
         };
         (self.on_request.read().unwrap())(id);
+        if in_case {
+            self.cases_changed();
+        }
         Ok(id)
     }
 
@@ -218,7 +240,12 @@ impl Blankey {
         let mut vault = self.vault();
         let profile_id = match target {
             Target::Existing(id) => vault.get_profile(id).map_err(|e| e.to_string())?.id,
-            Target::New { name, kind } => vault.create_profile(name.trim(), kind).map_err(|e| e.to_string())?,
+            Target::New { name, kind, case: None } => {
+                vault.create_profile(name.trim(), kind).map_err(|e| e.to_string())?
+            }
+            Target::New { name, kind, case: Some((case_id, role)) } => {
+                vault.create_local_profile(name.trim(), kind, case_id, role.trim()).map_err(|e| e.to_string())?
+            }
         };
         vault.set_values(profile_id, &items).map_err(|e| e.to_string())?;
         let lengths: IndexMap<String, i64> =
@@ -252,9 +279,11 @@ impl Blankey {
         self.uploads_dir().join(owner)
     }
 
-    /// Copies the picked file into uploads and resolves the request with its id and size. The file name stays
-    /// out of the result (it can be personal data); the returned value adds it for the app.
-    pub fn store_upload(&self, request_id: i64, source: &Path) -> Result<Value, String> {
+    /// Copies the picked file into uploads and resolves the request with its id and size. In a case the file is
+    /// imported into it instead, encrypted, with `description` (else the request's reason), and the agent gets its
+    /// `casefile:` handle. The file name stays out of the result (it can be personal data); the returned value adds
+    /// it for the app.
+    pub fn store_upload(&self, request_id: i64, source: &Path, description: Option<&str>) -> Result<Value, String> {
         let request = self.vault().get_request(request_id).map_err(|e| e.to_string())?;
         if request.kind != FILE || request.status != "pending" {
             return Err(format!("Request {request_id} does not wait for a file"));
@@ -268,14 +297,26 @@ impl Blankey {
         if size > UPLOAD_MAX_BYTES {
             return Err(format!("The file is larger than {} MB", UPLOAD_MAX_BYTES / 1024 / 1024));
         }
-        let uuid = uuid::Uuid::new_v4();
-        let dir = self.upload_owner_dir(request.grant_id.as_deref());
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        std::fs::copy(source, dir.join(format!("{uuid}.{kind}"))).map_err(|e| e.to_string())?;
-        let mut result = json!({"outcome": "uploaded", "file_id": format!("file:{uuid}"), "kind": kind, "size": size});
+        let file_id = match request.case_id {
+            Some(case_id) => {
+                let reason = request.payload.get("reason").and_then(Value::as_str).unwrap_or_default();
+                let description = description.map(str::trim).filter(|d| !d.is_empty()).unwrap_or(reason);
+                let ids =
+                    self.keep_files(FileOwner::Case(case_id), &[(source.to_path_buf(), description.to_string())])?;
+                cases::case_file_source(ids[0])
+            }
+            None => {
+                let uuid = uuid::Uuid::new_v4();
+                let dir = self.upload_owner_dir(request.grant_id.as_deref());
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                std::fs::copy(source, dir.join(format!("{uuid}.{kind}"))).map_err(|e| e.to_string())?;
+                format!("file:{uuid}")
+            }
+        };
+        let mut result = json!({"outcome": "uploaded", "file_id": file_id, "kind": kind, "size": size});
         let mut vault = self.vault();
         vault.resolve_request(request_id, "done", result.clone()).map_err(|e| e.to_string())?;
-        let _ = vault.audit("user", "upload", &format!("request={request_id} file={uuid}"));
+        let _ = vault.audit("user", "upload", &format!("request={request_id} file={file_id}"));
         result["name"] = json!(source.file_name().and_then(|n| n.to_str()).unwrap_or_default());
         Ok(result)
     }
@@ -336,6 +377,7 @@ impl Blankey {
                 labels: spec.labels,
                 boxes: Vec::new(),
                 origin,
+                case: spec.case,
             })?;
             Ok((template, report))
         });
@@ -363,27 +405,34 @@ impl Blankey {
             .ok_or_else(unknown)
     }
 
-    /// Lets the agent of a `file` request that names a library file (`source: lib:<id>`) read that file; the user
-    /// approved it in the app. Nothing is copied: the agent gets the `lib:` id back.
-    pub fn share_library_file(&self, request_id: i64) -> Result<Value, String> {
+    /// Lets the agent of a `file` request that names a file it may not read yet (`source`: a library file `lib:<id>`
+    /// or a case file `casefile:<id>`) read that file; the user approved it in the app. Nothing is copied: the agent
+    /// gets the same id back.
+    pub fn share_source(&self, request_id: i64) -> Result<Value, String> {
         let request = self.vault().get_request(request_id).map_err(|e| e.to_string())?;
         let source = request.payload.get("source").and_then(Value::as_str).unwrap_or_default().to_string();
-        if request.kind != FILE || request.status != "pending" || library::parse_source(&source).is_none() {
-            return Err(format!("Request {request_id} does not ask for a library file"));
+        let not_a_file = || format!("Request {request_id} does not ask for a file");
+        if request.kind != FILE || request.status != "pending" {
+            return Err(not_a_file());
         }
-        let path = self.library.path(&source)?;
-        let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+        let size = if library::parse_source(&source).is_some() {
+            std::fs::metadata(self.library.path(&source)?).map_err(|e| e.to_string())?.len()
+        } else if let Some(id) = cases::parse_case_file(&source) {
+            self.vault().get_collected_file(id).map_err(|e| e.to_string())?.size as u64
+        } else {
+            return Err(not_a_file());
+        };
         let kind = request.payload.get("kind").and_then(Value::as_str).unwrap_or_default();
         let result = json!({"outcome": "shared", "file_id": source, "kind": kind, "size": size});
         let mut vault = self.vault();
         vault.resolve_request(request_id, "done", result.clone()).map_err(|e| e.to_string())?;
-        let _ = vault.audit("user", "share_library_file", &format!("request={request_id} file={source}"));
+        let _ = vault.audit("user", "share_file", &format!("request={request_id} file={source}"));
         Ok(result)
     }
 
-    /// Whether the user let this remote agent read the library file `source` (a `lib:<id>`). Needs the vault
+    /// Whether the user let this remote agent read `source` (a `lib:<id>` or `casefile:<id>`). Needs the vault
     /// unlocked: request results are sealed.
-    pub fn library_shared(&self, grant: &str, source: &str) -> bool {
+    pub fn file_shared(&self, grant: &str, source: &str) -> bool {
         self.vault().list_requests(Some("done")).unwrap_or_default().iter().any(|r| {
             r.kind == FILE
                 && r.grant_id.as_deref() == Some(grant)
@@ -512,19 +561,27 @@ impl Blankey {
         rendered
             .into_iter()
             .map(|(template, output)| {
-                self.store(template, &output, &info.profiles, &format!("{} ({})", template.name, info.name))
+                let title = format!("{} ({})", template.name, info.name);
+                self.store(template, &output, &info.profiles, &title, info.case_id)
             })
             .collect()
     }
 
-    fn store(&self, template: &Template, rendered: &Rendered, profiles: &Profiles, title: &str) -> Result<i64, String> {
+    /// In the fill set's case, when it has one.
+    fn store(
+        &self,
+        template: &Template,
+        rendered: &Rendered,
+        profiles: &Profiles,
+        title: &str,
+        case_id: Option<i64>,
+    ) -> Result<i64, String> {
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M");
         let pages = if rendered.is_pdf() { preview::page_count(&rendered.content).unwrap_or(0) as i64 } else { 0 };
         let filename = format!("{}-{stamp}.{}", template.id, rendered.extension);
+        let doc = NewDocument { template_id: &template.id, title, profiles, pages, filename: &filename, case_id };
         let mut vault = self.vault();
-        let id = vault
-            .store_document(&template.id, title, profiles, pages, &filename, &rendered.content)
-            .map_err(|e| e.to_string())?;
+        let id = vault.store_document(&doc, &rendered.content).map_err(|e| e.to_string())?;
         let _ = vault.audit("user", "generate", &format!("template={} document={id}", template.id));
         Ok(id)
     }

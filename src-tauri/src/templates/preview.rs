@@ -209,6 +209,7 @@ mod tests {
                 labels,
                 boxes: vec![],
                 origin: None,
+                case: None,
             })
             .unwrap()
     }
@@ -256,6 +257,7 @@ mod tests {
                 labels: StrMap::new(),
                 boxes: vec![],
                 origin: None,
+                case: None,
             })
             .unwrap();
         let values: Values = [("name".to_string(), json!("Ана"))].into_iter().collect();

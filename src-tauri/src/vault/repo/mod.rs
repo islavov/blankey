@@ -2,6 +2,7 @@
 //! plain data with their encrypted columns as bytes; the repository never holds a key.
 
 mod audit;
+mod cases;
 mod documents;
 mod links;
 mod meta;
@@ -14,6 +15,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, Row};
 
+pub use cases::CaseCounts;
 pub use documents::NewDocument;
 pub use links::StoredCollected;
 pub use profiles::FieldRow;
@@ -80,6 +82,7 @@ mod tests {
             ("relay.rs", include_str!("../relay.rs")),
             ("links.rs", include_str!("../links.rs")),
             ("audit.rs", include_str!("../audit.rs")),
+            ("cases.rs", include_str!("../cases.rs")),
         ];
         let banned = ["rusqlite", ".execute(", ".prepare(", "query_row", "query_map", "Connection"];
         for (name, source) in sources {
