@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "../vendor/preact-htm.js";
 import { invoke, refreshStatus } from "./api.js";
+import { seedChat } from "./chat.js";
 import { t, tn } from "./i18n.js";
 import { html, reload, state, update, useStore } from "./lib.js";
 import { processRequests } from "./requests.js";
@@ -13,6 +14,7 @@ export async function enterApp() {
   update({ gateReason: "", recoveryKey: null, page: status.pending ? "activity" : state.page });
   reload();
   processRequests();
+  seedChat();
 }
 
 // Touch ID / keychain is tried once per lock, and only while the window is in front (never from a hidden window).

@@ -3,6 +3,7 @@
 
 mod audit;
 mod cases;
+mod chat;
 mod documents;
 mod links;
 mod meta;
@@ -83,6 +84,7 @@ mod tests {
             ("links.rs", include_str!("../links.rs")),
             ("audit.rs", include_str!("../audit.rs")),
             ("cases.rs", include_str!("../cases.rs")),
+            ("chat.rs", include_str!("../chat.rs")),
         ];
         let banned = ["rusqlite", ".execute(", ".prepare(", "query_row", "query_map", "Connection"];
         for (name, source) in sources {

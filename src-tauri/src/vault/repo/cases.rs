@@ -76,7 +76,7 @@ impl Repo {
         Ok(())
     }
 
-    /// The case, its links, files, documents and fill sets, in one transaction; its requests stay as activity
+    /// The case, its links, files, documents, fill sets and chat, in one transaction; its requests stay as activity
     /// without a case. Returns the ids of the files removed, whose blobs the caller deletes.
     pub fn delete_case(&mut self, id: i64) -> Result<Vec<i64>> {
         let tx = self.conn.transaction()?;
@@ -90,6 +90,8 @@ impl Repo {
         tx.execute("DELETE FROM fill_sets WHERE case_id = ?1", [id])?;
         tx.execute("UPDATE requests SET case_id = NULL WHERE case_id = ?1", [id])?;
         tx.execute("DELETE FROM case_profiles WHERE case_id = ?1", [id])?;
+        tx.execute("DELETE FROM case_messages WHERE case_id = ?1", [id])?;
+        tx.execute("DELETE FROM case_summaries WHERE case_id = ?1", [id])?;
         tx.execute("DELETE FROM cases WHERE id = ?1", [id])?;
         tx.commit()?;
         Ok(files)

@@ -174,3 +174,13 @@ pub struct CaseLink {
     pub profile_id: i64,
     pub role: String,
 }
+
+/// One message of a case's chat, opened.
+#[derive(Debug, Clone, Serialize)]
+pub struct StoredMessage {
+    /// its place in the case's chat, from 1
+    pub seq: i64,
+    pub created_at: String,
+    /// the message JSON as the chat loop stored it
+    pub message: Value,
+}

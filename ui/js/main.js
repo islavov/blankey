@@ -1,6 +1,7 @@
 import { html, render } from "../vendor/preact-htm.js";
 import { applyLanguage, invoke, listen, refreshRelay, refreshStatus } from "./api.js";
 import { App } from "./app.js";
+import { chatEvent, resetChat } from "./chat.js";
 import { enterApp, Gate, resetQuickUnlock } from "./gate.js";
 import { t } from "./i18n.js";
 import { reload, state, update, useStore } from "./lib.js";
@@ -53,6 +54,7 @@ window.addEventListener("keydown", (e) => {
 
 listen("vault-locked", async () => {
   resetQuickUnlock();
+  resetChat();
   closeSheet();
   hidePopup();
   closeDialog();
@@ -90,6 +92,8 @@ listen("show-page", ({ payload }) => update({ page: payload, search: "" }));
 listen("cases-changed", () => {
   if (state.page === "cases") reload();
 });
+// a case chat turn streaming in the backend; it goes on whichever case or page is open
+listen("chat-event", ({ payload }) => chatEvent(payload));
 // files dragged from the desktop onto the window: Tauri gives their paths, the open case imports them
 listen("tauri://drag-enter", () => update({ dragging: true }));
 listen("tauri://drag-leave", () => update({ dragging: false }));

@@ -239,7 +239,15 @@ fn update_case(state: State<AppState>, id: i64, title: Option<String>, notes: Op
 }
 
 #[tauri::command]
-fn delete_case(handle: AppHandle, state: State<AppState>, id: i64) -> CmdResult<crate::cases::DeletedCase> {
+fn delete_case(
+    handle: AppHandle,
+    state: State<AppState>,
+    chat: ChatState,
+    id: i64,
+) -> CmdResult<crate::cases::DeletedCase> {
+    if chat.running().contains(&id) {
+        return Err(t(&state.app.language(), "The assistant is working on this case. Stop it first."));
+    }
     let deleted = state.app.delete_case(id)?;
     tray::refresh(&handle);
     let _ = handle.emit("requests-changed", ());
@@ -1468,6 +1476,7 @@ fn fill_close(handle: AppHandle, state: State<AppState>, args: fill::CloseArgs) 
 
 type RelayState<'a> = State<'a, std::sync::Arc<crate::relay::Relay>>;
 type TelemetryState<'a> = State<'a, std::sync::Arc<crate::telemetry::Telemetry>>;
+type ChatState<'a> = State<'a, std::sync::Arc<crate::chat::Chat>>;
 
 #[tauri::command]
 fn telemetry_status(telemetry: TelemetryState) -> bool {
@@ -1549,6 +1558,30 @@ fn focused(relay: RelayState) {
 #[tauri::command]
 fn relay_summary(relay: RelayState) -> crate::relay::Summary {
     relay.summary()
+}
+
+/// The case's chat thread as stored, and whether a turn is running.
+#[tauri::command]
+fn case_chat(chat: ChatState, case_id: i64) -> CmdResult<crate::chat::Thread> {
+    chat.thread(case_id)
+}
+
+/// Starts a turn of the case's chat; its progress arrives as `chat-event`s.
+#[tauri::command]
+fn send_chat_message(chat: ChatState, case_id: i64, text: String) -> CmdResult<String> {
+    chat.send(case_id, &text)
+}
+
+/// Stops the case's running turn.
+#[tauri::command]
+async fn stop_chat(chat: ChatState<'_>, case_id: i64) -> CmdResult<()> {
+    chat.stop(case_id).await
+}
+
+/// The cases whose chat turn is running.
+#[tauri::command]
+fn chat_running(chat: ChatState) -> Vec<i64> {
+    chat.running()
 }
 
 #[tauri::command]
@@ -1659,6 +1692,10 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         fill_close,
         relay_status,
         relay_summary,
+        case_chat,
+        send_chat_message,
+        stop_chat,
+        chat_running,
         focused,
         catalog,
         language_set,

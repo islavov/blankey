@@ -1,5 +1,6 @@
 mod app;
 pub mod cases;
+pub mod chat;
 pub mod config;
 pub mod core;
 pub mod crypto;

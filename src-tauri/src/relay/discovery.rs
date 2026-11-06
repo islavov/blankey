@@ -27,6 +27,9 @@ pub struct Discovery {
     /// The account's profile for the app (its UI language); optional.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_profile: Option<String>,
+    /// Where the case chat posts its turns; optional, relays without an assistant leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_url: Option<String>,
 }
 
 impl Discovery {
@@ -41,8 +44,9 @@ impl Discovery {
             check_url(url, "https", "http")?;
         }
         check_url(&self.device_connect, "wss", "ws")?;
-        for url in
-            [&self.device_resource, &self.device_links, &self.device_inbox, &self.device_profile].into_iter().flatten()
+        for url in [&self.device_resource, &self.device_links, &self.device_inbox, &self.device_profile, &self.chat_url]
+            .into_iter()
+            .flatten()
         {
             check_url(url, "https", "http")?;
         }
@@ -97,6 +101,7 @@ pub(crate) mod tests {
             device_links: Some(format!("{base}/device/links")),
             device_inbox: Some(format!("{base}/device/inbox")),
             device_profile: Some(format!("{base}/device/profile")),
+            chat_url: Some(format!("{base}/device/chat")),
         }
     }
 

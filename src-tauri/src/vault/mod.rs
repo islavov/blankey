@@ -8,6 +8,7 @@
 
 mod audit;
 mod cases;
+mod chat;
 mod documents;
 mod encrypt;
 mod error;

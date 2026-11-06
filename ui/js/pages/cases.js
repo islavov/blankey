@@ -1,5 +1,6 @@
 import { useEffect, useState } from "../../vendor/preact-htm.js";
 import { call } from "../api.js";
+import { CaseChat, Spinner, useRunning } from "../chat.js";
 import { openFill } from "../fill/form.js";
 import { HelpNote } from "../help.js";
 import { t, tn } from "../i18n.js";
@@ -29,6 +30,7 @@ export function dropFiles(paths) {
 
 export function Cases() {
   const { caseId, dragging } = useStore();
+  const running = useRunning();
   const cases = useLoad(() => call("list_cases"), []);
   if (!cases) return null;
 
@@ -82,9 +84,10 @@ export function Cases() {
               <div class="list" data-help="cases.list">
                 ${visible.map(
                   (c) => html`
-                    <div key=${c.id} class=${`list-item case-item ${c.id === current?.id ? "active" : ""}`} onMouseDown=${keepText}
+                    <div key=${c.id} class=${`list-item case-item ${c.id === current?.id ? "active" : ""} ${running.has(c.id) ? "running" : ""}`} onMouseDown=${keepText}
                       onClick=${() => update({ caseId: c.id })}>
                       <div class="title">${c.title}</div>
+                      ${running.has(c.id) && html`<${Spinner} />`}
                       ${c.profiles.length > 0 && html`<div class="muted small line">${c.profiles.join(", ")}</div>`}
                       <div class="muted small line">${tn(c.files, "{n} file", "{n} files")} · ${when(c.updated_at)}</div>
                     </div>`
@@ -105,19 +108,25 @@ export function Cases() {
 }
 
 function CaseDetail({ caseId }) {
-  const { caseTab } = useStore();
+  const { caseTab, relay } = useStore();
+  const running = useRunning();
   const info = useLoad(() => call("get_case", { id: caseId }), [caseId]);
   if (!info) return null;
 
+  // the chat only while the relay offers it
+  const chat = relay?.chat === true;
+  const tab = caseTab === "chat" && !chat ? "files" : caseTab;
   const tabs = [
+    chat && ["chat", t("Chat"), running.has(caseId) ? html`<${Spinner} />` : null, "case.chat"],
     ["files", t("Files"), info.counts.files],
     ["profiles", t("Profiles"), info.counts.profiles],
     ["templates", t("Templates"), info.counts.templates],
     ["fillsets", t("Fill sets"), info.counts.fill_sets],
     ["documents", t("Documents"), info.counts.documents],
     ["activity", t("Activity"), info.counts.activity],
-  ];
+  ].filter(Boolean);
   const content = {
+    chat: () => html`<${CaseChat} caseId=${info.id} />`,
     files: () => html`<${CaseFiles} info=${info} />`,
     profiles: () => html`<${CaseProfiles} info=${info} />`,
     templates: () => html`<${CaseTemplates} info=${info} />`,
@@ -128,12 +137,12 @@ function CaseDetail({ caseId }) {
   return html`
     <${CaseHead} info=${info} />
     <div class="filters case-tabs" data-help="case.tabs">
-      ${tabs.map(([id, label, n]) => html`
-        <button class=${`chip ${caseTab === id ? "active" : ""}`} onClick=${() => update({ caseTab: id })}>
-          ${label} <span class="count">${n}</span>
+      ${tabs.map(([id, label, n, help]) => html`
+        <button class=${`chip ${tab === id ? "active" : ""}`} data-help=${help} onClick=${() => update({ caseTab: id })}>
+          ${label} ${n != null && html`<span class="count">${n}</span>`}
         </button>`)}
     </div>
-    <div class="case-tab">${(content[caseTab] || content.files)()}</div>`;
+    <div class=${`case-tab ${tab === "chat" ? "chat-tab" : ""}`}>${(content[tab] || content.files)()}</div>`;
 }
 
 /** What the user pastes to the AI assistant to name a case; the assistant passes the number as case_id. */

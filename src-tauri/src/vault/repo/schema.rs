@@ -17,6 +17,7 @@ pub const MIGRATIONS: &[fn(&Connection) -> rusqlite::Result<()>] = &[
     link_submissions,
     field_keys,
     cases,
+    case_chat,
 ];
 
 /// The Python app's DDL (peewee): NOT NULL without SQL defaults, so every insert names all its columns.
@@ -112,6 +113,17 @@ CREATE INDEX IF NOT EXISTS "documents_case_id" ON "documents" ("case_id");
 CREATE INDEX IF NOT EXISTS "requests_case_id" ON "requests" ("case_id");
 DROP INDEX IF EXISTS "fillsetrow_name";
 CREATE UNIQUE INDEX IF NOT EXISTS "fill_sets_case_name" ON "fill_sets" (coalesce("case_id", 0), "name");
+"#,
+    )
+}
+
+/// A case's chat with the AI: each message as JSON under the DEK, numbered from 1 by `seq`, and one summary of the
+/// older messages per case, `upto` being the last seq it covers.
+fn case_chat(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS "case_messages" ("case_id" INTEGER NOT NULL, "seq" INTEGER NOT NULL, "created_at" TEXT NOT NULL, "nonce" BLOB NOT NULL, "ciphertext" BLOB NOT NULL, PRIMARY KEY ("case_id", "seq"), FOREIGN KEY ("case_id") REFERENCES "cases" ("id") ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS "case_summaries" ("case_id" INTEGER NOT NULL PRIMARY KEY, "upto" INTEGER NOT NULL, "nonce" BLOB NOT NULL, "ciphertext" BLOB NOT NULL, FOREIGN KEY ("case_id") REFERENCES "cases" ("id") ON DELETE CASCADE);
 "#,
     )
 }

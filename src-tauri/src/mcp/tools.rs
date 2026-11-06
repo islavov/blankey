@@ -36,8 +36,8 @@ request_fill with a source for every var; wait_request returns the documents. co
 another party. request_profile_input only to keep data in a profile for later.
 
 New template, named for the kind of document and party (not these parties): inspect_pdf, then save_template (form)
-or save_pdf_overlay_template (flat); inspect_docx, then save_docx_template; or save_template with Typst
-source_text. Bindings are Jinja in {{ }}: "{{ applicant.address.city }}", "{{ loan.amount | money }}".
+or save_pdf_overlay_template (flat); inspect_docx, then save_docx_template (a blank ⟦blank:n⟧ alone as find);
+or save_template with Typst source_text. Bindings are Jinja in {{ }}: "{{ applicant.address.city }}", "{{ loan.amount | money }}".
 Check it with render_example and check_bindings.
 find_templates also lists the user's own files (status candidate, source lib:<id>): templatize one only when a fill
 needs it, passing lib:<id> as path and source_path (remote sessions: request_file with source lib:<id> first).
@@ -1062,14 +1062,14 @@ impl Tools {
     }
 
     #[tool(
-        description = "Paragraphs of a local .docx (body and table cells) with their run texts and existing {{ }} tags.\nUse the run texts to pick spans for save_docx_template: a span cannot cross a run boundary. Values that look\npersonal are masked by shape, like \u{27e6}pii:1 ##########\u{27e7} or \u{27e6}pii:2 Xxxx Xxxxxx\u{27e7} (letters X/x,\ndigits #); the text around a value tells what it is and whose. pii lists each with its length and occurrences.\nPass a placeholder (or just \u{27e6}pii:1\u{27e7}) as find in save_docx_template (alone: every occurrence; with\noccurrence: the n-th) or inside a longer find."
+        description = "Paragraphs of a local .docx (body and table cells) with their run texts and existing {{ }} tags.\nUse the run texts to pick spans for save_docx_template: a span cannot cross a run boundary. Fill-in blanks (rows\nof dots or underscores) show as \u{27e6}blank:1\u{27e7}, numbered across the document; the label before one and a\nhint in brackets after it or on the next line (\"(трите имена)\") tell what goes there. Values that look\npersonal are masked by shape, like \u{27e6}pii:1 ##########\u{27e7} or \u{27e6}pii:2 Xxxx Xxxxxx\u{27e7} (letters X/x,\ndigits #); the text around a value tells what it is and whose. pii lists each with its length and occurrences.\nPass a placeholder (or just \u{27e6}pii:1\u{27e7}) as find in save_docx_template (alone: every occurrence; with\noccurrence: the n-th) or inside a longer find."
     )]
     async fn inspect_docx(&self, Parameters(a): Parameters<PathArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
         self.run(move |app| {
             let path = source_path(app, remote.as_ref(), &a.path)?;
             if !app.config.pii_redaction {
-                return text(&json!({"paragraphs": docx::inspect(&path)?, "pii": []}));
+                return text(&json!({"paragraphs": pii::blank_paragraphs(&docx::inspect(&path)?), "pii": []}));
             }
             let doc = pii::Document::docx(&path, &app.pii_corrections(&a.path, &path)?)?;
             text(&json!({"paragraphs": doc.redacted_paragraphs(), "pii": doc.entities()}))
@@ -1078,7 +1078,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Create a docx template from a filled .docx: each replacement {find, var, occurrence?} replaces the\ntext with {{ var }} (occurrence is 1-based across the document; omit it to replace all). Replace the value, not\nits label (\"ЕГН ......\": find the dots, with occurrence); a span must sit inside one run. Replacements apply in\norder, so put longer spans first (\".......2026\" before \"......\"). fields maps var -> default Jinja expression\nover roles; labels maps var -> label shown in the fill form. Use generic var names (counterparty_name, amount,\nsigning_date), the same across related documents so one fill covers them all."
+        description = "Create a docx template from a .docx: each replacement {find, var, occurrence?} replaces the text\nwith {{ var }} (occurrence is 1-based across the document; omit it to replace all). A blank: {\"find\":\n\"\u{27e6}blank:3\u{27e7}\", \"var\": \"seller_name\"} replaces exactly that whole blank, even across runs, and the\nlabel and hints around it stay; blanks are replaced first. Replace the value, not its label; other spans must sit\ninside one run. Text replacements apply in order, so put longer spans first. fields maps var -> default Jinja\nexpression over roles; labels maps var -> label shown in the fill form. Use generic var names\n(counterparty_name, amount, signing_date), the same across related documents so one fill covers them all."
     )]
     async fn save_docx_template(&self, Parameters(a): Parameters<SaveDocxArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
@@ -1621,58 +1621,9 @@ impl Tools {
     async fn get_case(&self, Parameters(a): Parameters<CaseArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
         self.run(move |app| {
-            let scope = app.scope(Some(a.case_id))?;
-            let info = scope.case.clone().ok_or("Unknown case")?;
-            let profiles: Vec<Value> = app
-                .case_profiles(a.case_id)?
-                .into_iter()
-                .map(|(p, role, _)| json!({"id": p.id, "name": p.name, "kind": p.kind, "role": role, "global": p.global}))
-                .collect();
-            let templates: Vec<Value> = app
-                .case_templates(&scope)
-                .iter()
-                .map(|t| json!({"id": t.id, "name": t.name, "kind": t.kind.as_str()}))
-                .collect();
-            let (notes, files, sets, documents, requests) = {
-                let vault = app.vault();
-                let held = |case: Option<i64>| case == Some(a.case_id);
-                (
-                    vault.case_notes(a.case_id).map_err(string)?,
-                    vault.list_collected_files().map_err(string)?.into_iter().filter(|f| held(f.case_id)).collect::<Vec<_>>(),
-                    vault.list_fill_sets().map_err(string)?.into_iter().filter(|f| held(f.case_id)).collect::<Vec<_>>(),
-                    vault.list_documents().map_err(string)?.into_iter().filter(|d| held(d.case_id)).collect::<Vec<_>>(),
-                    vault.list_requests(Some("pending")).map_err(string)?.into_iter().filter(|r| held(r.case_id)).collect::<Vec<_>>(),
-                )
-            };
-            let files: Vec<Value> = files
-                .iter()
-                .map(|f| {
-                    let source = cases::case_file_source(f.id);
-                    let mut item = json!({"file_id": source, "description": f.description, "type": f.file_type,
-                                          "size": f.size, "readable": cases::readable_kind(&f.file_type).is_some()});
-                    if let Some(r) = &remote {
-                        item["shared"] = json!(app.file_shared(&r.grant, &source));
-                    }
-                    item
-                })
-                .collect();
-            let requests: Vec<Value> = requests
-                .into_iter()
-                .filter_map(|r| visible(r, remote.as_ref()).ok())
-                .map(|r| json!({"id": r.id, "kind": r.kind, "created_at": r.created_at}))
-                .collect();
+            let overview = app.case_overview(a.case_id, remote.as_ref().map(|r| r.grant.as_str()))?;
             app.audit("mcp", "get_case", &a.case_id.to_string());
-            text(&json!({
-                "id": info.id, "title": info.title, "notes": notes, "created_at": info.created_at,
-                "updated_at": info.updated_at, "profiles": profiles, "files": files, "templates": templates,
-                "fill_sets": sets.iter().map(|f| json!({"id": f.id, "name": f.name, "templates": f.templates,
-                                                         "profiles": f.profiles, "updated_at": f.updated_at}))
-                    .collect::<Vec<_>>(),
-                "documents": documents.iter().map(|d| json!({"id": d.id, "title": d.title, "template_id": d.template_id,
-                                                              "created_at": d.created_at}))
-                    .collect::<Vec<_>>(),
-                "pending_requests": requests,
-            }))
+            text(&overview)
         })
         .await
     }

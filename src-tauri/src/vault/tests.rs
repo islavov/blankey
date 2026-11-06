@@ -191,14 +191,20 @@ fn migrations_rerun_safely() {
     let mut vault = Vault::open(&path, Box::new(MemoryStore::default())).unwrap();
     vault.initialize(PASSWORD, false).unwrap();
     vault.create_profile("John", "person").unwrap();
+    let case = vault.create_case("Sale").unwrap();
+    vault.append_case_messages(case, &[json!({"role": "user", "content": "Hello"})]).unwrap();
+    vault.set_case_summary(case, "Greeting", 1).unwrap();
     vault.repo.raw().pragma_update(None, "user_version", 0).unwrap();
     drop(vault);
 
-    let vault = Vault::open(&path, Box::new(MemoryStore::default())).unwrap();
+    let mut vault = Vault::open(&path, Box::new(MemoryStore::default())).unwrap();
     let version: i64 = vault.repo.raw().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
     assert_eq!(version, MIGRATIONS.len() as i64);
     let profiles = vault.list_profiles().unwrap();
     assert_eq!((profiles[0].name.as_str(), profiles[0].global), ("John", true));
+    vault.unlock(PASSWORD).unwrap();
+    assert_eq!(vault.case_messages(case).unwrap()[0].message["content"], "Hello");
+    assert_eq!(vault.case_summary(case).unwrap(), Some(("Greeting".to_string(), 1)));
 }
 
 fn file<'a>(case_id: Option<i64>, profile_id: Option<i64>, name: &'a str, description: &'a str) -> NewFile<'a> {
@@ -309,8 +315,19 @@ fn deleting_a_case_removes_its_rows_and_blobs() {
     assert_eq!(vault.get_request(request).unwrap().case_id, Some(case));
     let counts = vault.case_counts(case).unwrap();
     assert_eq!((counts.files, counts.documents, counts.fill_sets, counts.requests), (1, 1, 1, 1));
+    for id in [case, other] {
+        vault.append_case_messages(id, &[json!({"role": "user", "content": "Hi"})]).unwrap();
+        vault.set_case_summary(id, "Hi", 1).unwrap();
+    }
 
     vault.delete_case(case).unwrap();
+    let chat_rows = |vault: &Vault, table: &str, id: i64| -> i64 {
+        let sql = format!("SELECT count(*) FROM {table} WHERE case_id = ?1");
+        vault.repo.raw().query_row(&sql, [id], |r| r.get(0)).unwrap()
+    };
+    assert_eq!((chat_rows(&vault, "case_messages", case), chat_rows(&vault, "case_summaries", case)), (0, 0));
+    assert_eq!(vault.case_messages(other).unwrap().len(), 1);
+    assert!(vault.case_summary(other).unwrap().is_some());
     assert!(vault.get_case(case).is_err());
     let files: Vec<i64> = vault.list_collected_files().unwrap().iter().map(|f| f.id).collect();
     assert_eq!(files, [kept]);
@@ -334,6 +351,82 @@ fn deleting_a_profile_keeps_case_files() {
     vault.delete_profile(profile).unwrap();
     let files: Vec<i64> = vault.list_collected_files().unwrap().iter().map(|f| f.id).collect();
     assert_eq!(files, [in_case]);
+}
+
+fn message(content: &str) -> Value {
+    json!({"role": "user", "content": content})
+}
+
+#[test]
+fn case_chat_round_trips_encrypted() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(dir.path());
+    let (case, other) = (vault.create_case("Sale").unwrap(), vault.create_case("Lease").unwrap());
+    vault.repo.raw().execute("UPDATE cases SET updated_at = '2000-01-01T00:00:00+00:00'", []).unwrap();
+    let first =
+        [message("Buyer Sentinel pays in two parts"), json!({"role": "assistant", "content": [{"type": "text"}]})];
+    assert_eq!(vault.append_case_messages(case, &first).unwrap(), [1, 2]);
+    assert_eq!(vault.list_cases().unwrap()[0].id, case, "the chat moves the case to the top");
+    assert_eq!(vault.append_case_messages(other, &[message("Lease")]).unwrap(), [1]);
+    assert_eq!(vault.append_case_messages(case, &[message("And the deposit?")]).unwrap(), [3]);
+    assert!(vault.append_case_messages(case, &[]).unwrap().is_empty());
+
+    let stored = vault.case_messages(case).unwrap();
+    let seqs: Vec<i64> = stored.iter().map(|m| m.seq).collect();
+    assert_eq!(seqs, [1, 2, 3]);
+    assert_eq!((&stored[0].message, &stored[1].message), (&first[0], &first[1]));
+    assert_eq!(stored[2].message["content"], "And the deposit?");
+    let others: Vec<Value> = vault.case_messages(other).unwrap().into_iter().map(|m| m.message).collect();
+    assert_eq!(others, [message("Lease")]);
+
+    assert_eq!(vault.case_summary(case).unwrap(), None);
+    vault.set_case_summary(case, "Sentinel buys", 2).unwrap();
+    vault.set_case_summary(case, "Sentinel buys, asks about the deposit", 3).unwrap();
+    assert_eq!(vault.case_summary(case).unwrap(), Some(("Sentinel buys, asks about the deposit".to_string(), 3)));
+    assert_eq!(vault.case_summary(other).unwrap(), None);
+
+    let raw: Vec<Vec<u8>> = {
+        let mut stmt = vault
+            .repo
+            .raw()
+            .prepare("SELECT ciphertext FROM case_messages UNION ALL SELECT ciphertext FROM case_summaries")
+            .unwrap();
+        let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+        rows.map(|row| row.unwrap()).collect()
+    };
+    assert_eq!(raw.len(), 5);
+    assert!(raw.iter().all(|c| !String::from_utf8_lossy(c).contains("Sentinel")));
+
+    assert!(matches!(vault.append_case_messages(999, &first), Err(VaultError::NotFound(_))));
+    assert!(matches!(vault.case_messages(999), Err(VaultError::NotFound(_))));
+    assert!(matches!(vault.set_case_summary(999, "x", 1), Err(VaultError::NotFound(_))));
+
+    vault.lock();
+    assert!(matches!(vault.case_messages(case), Err(VaultError::Locked)));
+    assert!(matches!(vault.case_summary(case), Err(VaultError::Locked)));
+    assert!(matches!(vault.append_case_messages(case, &first), Err(VaultError::Locked)));
+}
+
+#[test]
+fn chat_ciphertext_cannot_be_moved() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(dir.path());
+    let (case, other) = (vault.create_case("Sale").unwrap(), vault.create_case("Lease").unwrap());
+    vault.append_case_messages(case, &[message("a"), message("b")]).unwrap();
+    vault.set_case_summary(case, "a and b", 2).unwrap();
+    vault
+        .repo
+        .raw()
+        .execute_batch(&format!(
+            "INSERT INTO case_messages SELECT {other}, seq, created_at, nonce, ciphertext FROM case_messages;
+             INSERT INTO case_summaries SELECT {other}, upto, nonce, ciphertext FROM case_summaries;"
+        ))
+        .unwrap();
+    assert!(vault.case_messages(other).is_err(), "bound to the case");
+    assert!(vault.case_summary(other).is_err());
+
+    vault.repo.raw().execute("UPDATE case_messages SET seq = 3 WHERE case_id = ?1 AND seq = 2", [case]).unwrap();
+    assert!(vault.case_messages(case).is_err(), "bound to the seq");
 }
 
 #[test]

@@ -28,7 +28,11 @@ pub fn shape(value: &str) -> String {
         .collect()
 }
 
+/// What stands in for a span: `⟦id shape⟧` for a value, `⟦blank:n⟧` for a fill-in blank, whose dots say nothing.
 pub fn placeholder(id: &str, value: &str) -> String {
+    if id.starts_with("blank:") {
+        return format!("⟦{id}⟧");
+    }
     format!("⟦{id} {}⟧", shape(value))
 }
 

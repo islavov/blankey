@@ -249,6 +249,73 @@ impl Blankey {
             .collect())
     }
 
+    /// What MCP `get_case` returns and the chat's case block shows: metadata only, never profile values. With a
+    /// grant, files say whether that agent may read them and pending requests are only that agent's.
+    pub fn case_overview(&self, case_id: i64, grant: Option<&str>) -> Result<serde_json::Value, String> {
+        let scope = self.scope(Some(case_id))?;
+        let info = scope.case.clone().ok_or("Unknown case")?;
+        let profiles: Vec<serde_json::Value> = self
+            .case_profiles(case_id)?
+            .into_iter()
+            .map(|(p, role, _)| json!({"id": p.id, "name": p.name, "kind": p.kind, "role": role, "global": p.global}))
+            .collect();
+        let templates: Vec<serde_json::Value> = self
+            .case_templates(&scope)
+            .iter()
+            .map(|t| json!({"id": t.id, "name": t.name, "kind": t.kind.as_str()}))
+            .collect();
+        let (notes, files, sets, documents, requests) = {
+            let vault = self.vault();
+            let held = |case: Option<i64>| case == Some(case_id);
+            (
+                vault.case_notes(case_id).map_err(string)?,
+                vault
+                    .list_collected_files()
+                    .map_err(string)?
+                    .into_iter()
+                    .filter(|f| held(f.case_id))
+                    .collect::<Vec<_>>(),
+                vault.list_fill_sets().map_err(string)?.into_iter().filter(|f| held(f.case_id)).collect::<Vec<_>>(),
+                vault.list_documents().map_err(string)?.into_iter().filter(|d| held(d.case_id)).collect::<Vec<_>>(),
+                vault
+                    .list_requests(Some("pending"))
+                    .map_err(string)?
+                    .into_iter()
+                    .filter(|r| held(r.case_id))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let files: Vec<serde_json::Value> = files
+            .iter()
+            .map(|f| {
+                let source = case_file_source(f.id);
+                let mut item = json!({"file_id": source, "description": f.description, "type": f.file_type,
+                                      "size": f.size, "readable": readable_kind(&f.file_type).is_some()});
+                if let Some(grant) = grant {
+                    item["shared"] = json!(self.file_shared(grant, &source));
+                }
+                item
+            })
+            .collect();
+        let requests: Vec<serde_json::Value> = requests
+            .into_iter()
+            .filter(|r| r.kind != crate::links::LINK_SUBMISSION)
+            .filter(|r| grant.is_none() || r.grant_id.as_deref() == grant)
+            .map(|r| json!({"id": r.id, "kind": r.kind, "created_at": r.created_at}))
+            .collect();
+        Ok(json!({
+            "id": info.id, "title": info.title, "notes": notes, "created_at": info.created_at,
+            "updated_at": info.updated_at, "profiles": profiles, "files": files, "templates": templates,
+            "fill_sets": sets.iter().map(|f| json!({"id": f.id, "name": f.name, "templates": f.templates,
+                                                     "profiles": f.profiles, "updated_at": f.updated_at}))
+                .collect::<Vec<_>>(),
+            "documents": documents.iter().map(|d| json!({"id": d.id, "title": d.title, "template_id": d.template_id,
+                                                          "created_at": d.created_at}))
+                .collect::<Vec<_>>(),
+            "pending_requests": requests,
+        }))
+    }
+
     /// The templates made in the case and not made global since.
     pub fn case_templates(&self, scope: &Scope) -> Vec<Template> {
         match scope.case_id() {
