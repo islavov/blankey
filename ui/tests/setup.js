@@ -95,3 +95,4 @@ export async function submit(form) {
 
 export const goTo = (title) => click($$(".nav-item").find((el) => el.textContent.trim().startsWith(title)));
 export const action = (label) => click(byText("#page-actions button", label));
+export const tabAction = (label) => click(byText(".tab-actions button", label));

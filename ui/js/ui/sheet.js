@@ -1,4 +1,4 @@
-import { html, render } from "../../vendor/preact-htm.js";
+import { html, render, useEffect, useRef } from "../../vendor/preact-htm.js";
 import { Icon } from "../lib.js";
 
 const root = () => document.getElementById("sheet-root");
@@ -11,6 +11,30 @@ export function openSheet(content) {
     resolveOpen = resolve;
     render(html`<div class="sheet"><div class="sheet-drag" data-tauri-drag-region></div>${content(closeSheet)}</div>`, root());
   });
+}
+
+export const isSheetOpen = () => resolveOpen !== null;
+
+// the open sheet's Cancel, run on Escape
+let onEscape = null;
+
+/** Escape in this sheet does what its Cancel does: cancels a request, asks about unsaved changes. */
+export function useSheetEscape(handler) {
+  const latest = useRef(handler);
+  latest.current = handler;
+  useEffect(() => {
+    onEscape = () => latest.current();
+    return () => {
+      onEscape = null;
+    };
+  }, []);
+}
+
+/** Escape: the open sheet's Cancel, or just closing it. False when no sheet is open. */
+export function escapeSheet() {
+  if (!isSheetOpen()) return false;
+  (onEscape || closeSheet)();
+  return true;
 }
 
 export function closeSheet() {

@@ -5,7 +5,7 @@ import { t, tn } from "../i18n.js";
 import { html, matches, megabytes, reload, state, useLoad, useRemembered, useStore, when } from "../lib.js";
 import { openSubmission } from "../submission.js";
 import { confirmDialog, toast } from "../ui/feedback.js";
-import { openSheet, SheetHead } from "../ui/sheet.js";
+import { openSheet, SheetHead, useSheetEscape } from "../ui/sheet.js";
 import { Empty, Page } from "../ui/page.js";
 import { Select } from "../ui/select.js";
 import { Table, useSelection } from "../ui/table.js";
@@ -275,6 +275,7 @@ function LinkSheet({ draft, requestId, close }) {
     if (requestId) await invoke("cancel_request", { id: requestId });
     close();
   };
+  useSheetEscape(cancel);
 
   const create = async () => {
     const fields = [

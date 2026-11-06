@@ -5,6 +5,7 @@ import { html, matches, megabytes, placeholder, reload, state, useLoad, useRemem
 import { confirmDialog, dialog, toast } from "../ui/feedback.js";
 import { Page } from "../ui/page.js";
 import { Select } from "../ui/select.js";
+import { openSheet, SheetHead, useSheetEscape } from "../ui/sheet.js";
 import { keepText, useSelection } from "../ui/table.js";
 
 export function Profiles() {
@@ -106,6 +107,31 @@ export function Profiles() {
         </div>
       </div>
     </${Page}>`;
+}
+
+/** A profile in a sheet of its own: the profiles of a case are edited from the case. Resolves when it closes. */
+export const openProfileSheet = (profile) => openSheet((close) => html`<${ProfileSheet} profile=${profile} close=${close} />`);
+
+function ProfileSheet({ profile, close }) {
+  const [dirty, setDirty] = useState(false);
+  const [version, setVersion] = useState(0);
+  const done = async () => {
+    if (dirty && !(await confirmDialog(t("Discard unsaved changes?"), t("The fields of this profile were edited."), t("Discard")))) return;
+    close();
+  };
+  useSheetEscape(done);
+  const saved = () => {
+    setDirty(false);
+    setVersion(version + 1);
+  };
+  return html`
+    <div class="sheet-head"><${SheetHead} icon="person" title=${profile.name} reason=${profile.kind} /></div>
+    <div class="sheet-body">
+      <div class="detail profile-sheet">
+        <${ProfileDetail} key=${version} profile=${profile} onDirty=${() => setDirty(true)} onSaved=${saved} />
+      </div>
+    </div>
+    <div class="sheet-foot"><span class="spacer"></span><button class="primary" onClick=${done}>${t("Close")}</button></div>`;
 }
 
 let nextRow = 0;
@@ -213,7 +239,7 @@ function ProfileFiles({ profile }) {
     <div class="profile-files" data-help="profiles.files">
       ${mine.map(
         (f) => html`
-          <div class="file-row" key=${f.id}>
+          <div class="file-row" key=${f.id} onDblClick=${() => call("open_collected_files", { ids: [f.id] })}>
             <span class="name" title=${f.name}>${f.name}</span>
             <span class="muted small">${[f.link_title, when(f.created_at), megabytes(f.size)].filter(Boolean).join(" · ")}</span>
             <button class="link" onClick=${() => call("open_collected_files", { ids: [f.id] })}>${t("Open")}</button>

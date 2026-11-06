@@ -269,7 +269,7 @@ function FileDetail({ file, onReveal }) {
         <h3>${fileName(f)}</h3>
         <div class="muted small"><span class="mono selectable">${f.rel_path}</span>${info.map((part) => ` \u00a0·\u00a0 ${part}`)}</div>
       </div>
-      <button class="check-pii" data-help="folders.pii" onClick=${() => openReview(f)}>${t("Personal data…")}</button>
+      <button class="check-pii" data-help="folders.pii" onClick=${() => openReview({ source: `lib:${f.id}`, title: fileName(f) })}>${t("Personal data…")}</button>
       <button data-help="folders.open" onClick=${() => call("open_library_file", { id: f.id })}>${t("Open")}</button>
       <button data-help="folders.reveal" onClick=${onReveal}>${t("Show in Finder")}</button>
     </div>

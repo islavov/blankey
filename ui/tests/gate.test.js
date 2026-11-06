@@ -16,6 +16,6 @@ test("unlock: Touch ID is tried once, a wrong password is refused, the right one
   await type($("input[name=password]", form), "pw");
   await submit(form);
   assert.ok($(".app"));
-  assert.equal(text(".toolbar h2"), "Activity");
+  assert.equal(text(".toolbar h2"), "Cases");
   assert.equal(backend.called("unlock_quick").length, 1);
 });

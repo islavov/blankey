@@ -4,6 +4,7 @@ import { t } from "./i18n.js";
 import { HelpBox, helpEnabled } from "./help.js";
 import { html, Icon, update, useStore } from "./lib.js";
 import { Activity } from "./pages/activity.js";
+import { Cases } from "./pages/cases.js";
 import { Documents } from "./pages/documents.js";
 import { FillSets } from "./pages/fillsets.js";
 import { Links } from "./pages/links.js";
@@ -14,6 +15,7 @@ import { currentTheme, setTheme } from "./theme.js";
 
 // titles are functions: they are read at render time, in the current language
 const PAGES = {
+  cases: { title: () => t("Cases"), component: Cases },
   activity: { title: () => t("Activity"), component: Activity },
   fillsets: { title: () => t("Fill sets"), component: FillSets },
   documents: { title: () => t("Documents"), component: Documents },
@@ -36,7 +38,9 @@ export function App() {
     <div class="app">
       <aside class="sidebar">
         <div class="sidebar-top" data-tauri-drag-region></div>
-        <nav id="nav">${SECTIONS.map(([section, ids]) => html`
+        <nav id="nav">
+          <${NavItem} id="cases" active=${page === "cases"} />
+          ${SECTIONS.map(([section, ids]) => html`
           <div class="nav-section">${section()}</div>
           ${ids.map((id) => html`<${NavItem} id=${id} active=${id === page} pending=${id === "activity" && status.pending} />`)}`)}
         </nav>

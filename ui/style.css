@@ -316,6 +316,42 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .file-row .thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 4px; flex: none; background: var(--hover); }
 .file-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.split.cases { grid-template-columns: 260px minmax(0, 1fr); }
+.split.cases > .detail { padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.case-head { padding: 12px 20px 8px; display: grid; gap: 6px; }
+.case-title-row { display: flex; gap: 10px; align-items: center; }
+.case-title-row .case-title { flex: 1; min-width: 0; }
+input.case-title { font-size: 16px; font-weight: 600; border-color: transparent; background: transparent; padding: 3px 8px; }
+input.case-title:hover { border-color: var(--line); }
+input.case-title:focus { background: var(--input); }
+.case-notes { resize: vertical; min-height: 40px; }
+.case-tabs { padding: 8px 20px; }
+.case-tab { flex: 1; min-height: 0; overflow: auto; }
+.case-tab .grid th:first-child, .case-tab .grid td:first-child { padding-left: 20px; }
+.check-grid th.check, .check-grid td.check { width: 1%; padding-right: 0; }
+.check-grid td.check { cursor: pointer; user-select: none; -webkit-user-select: none; }
+/* the cell takes the press, so a drag can start on the box */
+.check-grid td.check input { margin: 2px 0 0; vertical-align: top; pointer-events: none; }
+.check-grid th.check input { margin: 0; vertical-align: middle; }
+/* the button's middle on the middle of the row's first line of text */
+.check-grid th.row-menu, .check-grid td.row-menu { width: 1%; padding: 4px 12px 0 4px; text-align: right; }
+.check-grid .more { padding: 5px 6px; color: var(--muted); line-height: 0; }
+.check-grid .more svg { width: 14px; height: 14px; }
+.check-grid tr:hover .more { color: var(--text); }
+.tab-actions .checked-count { align-self: center; font-weight: 500; margin-right: 4px; }
+.case-item .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 20px; min-height: 50px; box-sizing: border-box; }
+.file-label { font-weight: 500; }
+.case-link { text-align: left; }
+.drop-overlay { position: fixed; inset: 8px; z-index: 4; pointer-events: none; display: grid; place-items: center; background: var(--accent-soft); border: 2px dashed var(--accent); border-radius: 10px; }
+.drop-text { background: var(--bg); padding: 10px 18px; border-radius: 8px; font-weight: 500; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12); }
+.import-list { max-width: 760px; margin: 18px auto; padding: 0 24px; display: grid; gap: 8px; }
+.import-row { display: grid; grid-template-columns: minmax(120px, 220px) 1fr auto; gap: 10px; align-items: center; }
+.import-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-row .remove { padding: 2px 8px; color: var(--muted); }
+.profile-sheet { max-width: 900px; margin: 0 auto; }
+.profile-sheet > h3 { display: none; }
+
 .fill-split { display: grid; grid-template-columns: minmax(380px, 1fr) minmax(360px, 1fr); height: 100%; }
 .fill-rows { overflow: auto; border-right: 1px solid var(--line); }
 .fill-row { display: grid; grid-template-columns: 210px 1fr; border-bottom: 1px solid var(--line); cursor: default; }
@@ -377,6 +413,8 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 }
 .menu-item { padding: 5px 10px 5px 26px; border-radius: 5px; position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 640px; }
 .menu-item:hover { background: var(--accent); color: var(--accent-text); }
+.menu-item.danger { color: var(--danger); }
+.menu-item.danger:hover { background: var(--danger); color: var(--danger-text); }
 .menu-item.checked::before { content: "\2713"; position: absolute; left: 9px; }
 .menu-sep { height: 1px; background: var(--line); margin: 4px 6px; }
 .menu-head { padding: 4px 10px 2px; font-size: 11px; color: var(--muted); font-weight: 600; }

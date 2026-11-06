@@ -68,12 +68,19 @@ test("file request: the user picks the file, checks its personal data, then shar
   assert.equal(backend.db.requests.length, 0);
 });
 
-test("file request: Cancel cancels it", async () => {
+test("file request: Cancel cancels it, and so does Escape", async () => {
   backend.db.requests.push(fileRequest(11));
   backend.emit("request-created", 11);
   await settle(300);
   await click(byText(".sheet-foot button", "Cancel"));
   assert.deepEqual(backend.called("cancel_request").at(-1), { id: 11 });
+  assert.equal($(".sheet"), null);
+
+  backend.db.requests.push(fileRequest(15));
+  backend.emit("request-created", 15);
+  await settle(300);
+  await key("Escape", document.body);
+  assert.deepEqual(backend.called("cancel_request").at(-1), { id: 15 });
   assert.equal($(".sheet"), null);
 });
 

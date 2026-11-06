@@ -8,7 +8,7 @@ import { openLinkSheet } from "./pages/links.js";
 import { openSubmission } from "./submission.js";
 import { toast } from "./ui/feedback.js";
 import { PiiReview } from "./review.js";
-import { openSheet, SheetHead } from "./ui/sheet.js";
+import { openSheet, SheetHead, useSheetEscape } from "./ui/sheet.js";
 
 let processing = false;
 
@@ -50,6 +50,7 @@ export async function processRequests() {
             fill_set_id: p.fill_set_id ?? null,
             copy_fill_set_id: p.copy_fill_set_id ?? null,
             request_id: request.id,
+            case_id: p.case_id ?? null,
           });
         } else {
           await invoke("cancel_request", { id: request.id });
@@ -86,6 +87,7 @@ function ProfileInput({ request, profile_name, existing, close }) {
     await invoke("cancel_request", { id: request.id });
     close();
   };
+  useSheetEscape(cancel);
 
   const save = async (e) => {
     e?.preventDefault();
@@ -169,6 +171,7 @@ function FileRequest({ request, close }) {
     await invoke("cancel_request", { id: request.id });
     close();
   };
+  useSheetEscape(cancel);
 
   const choose = async () => {
     const file = await call("pick_request_file", { id: request.id }).catch(() => null);

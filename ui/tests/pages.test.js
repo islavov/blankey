@@ -9,7 +9,9 @@ before(async () => {
 
 const rows = () => $$(".grid tbody tr").map((tr) => tr.textContent.replace(/\s+/g, " ").trim());
 
-test("activity lists the assistant's requests", async () => {
+test("the app opens on Cases; activity lists the assistant's requests", async () => {
+  assert.equal(text(".toolbar h2"), "Cases");
+  await goTo("Activity");
   assert.equal(text(".toolbar h2"), "Activity");
   assert.equal(text(".toolbar .muted"), "Nothing waiting");
   assert.equal(rows().length, 1);

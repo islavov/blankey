@@ -4,11 +4,12 @@ import { App } from "./app.js";
 import { enterApp, Gate, resetQuickUnlock } from "./gate.js";
 import { t } from "./i18n.js";
 import { reload, state, update, useStore } from "./lib.js";
+import { dropFiles } from "./pages/cases.js";
 import { processRequests } from "./requests.js";
-import { closeDialog } from "./ui/feedback.js";
-import { hidePopup } from "./ui/menu.js";
+import { cancelDialog, closeDialog, isDialogOpen } from "./ui/feedback.js";
+import { hidePopup, isMenuOpen } from "./ui/menu.js";
 import { applyTheme } from "./theme.js";
-import { closeSheet } from "./ui/sheet.js";
+import { closeSheet, escapeSheet } from "./ui/sheet.js";
 
 // script errors go to the app's log, where they can be read when the window comes up blank
 const report = (message) => invoke("log_error", { message: String(message) }).catch(() => {});
@@ -40,6 +41,15 @@ for (const type of ["keydown", "mousedown", "wheel"]) {
     { passive: true }
   );
 }
+
+// Escape closes what is on top: a menu, a dialog, then a sheet through its own Cancel. Runs last (on window), so a
+// part of the page that handles Escape itself prevents it.
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  if (isMenuOpen()) hidePopup();
+  else if (isDialogOpen()) cancelDialog();
+  else escapeSheet();
+});
 
 listen("vault-locked", async () => {
   resetQuickUnlock();
@@ -76,6 +86,17 @@ listen("update-status", () => {
   if (state.page === "settings") reload();
 });
 listen("show-page", ({ payload }) => update({ page: payload, search: "" }));
+// an AI assistant created or changed a case
+listen("cases-changed", () => {
+  if (state.page === "cases") reload();
+});
+// files dragged from the desktop onto the window: Tauri gives their paths, the open case imports them
+listen("tauri://drag-enter", () => update({ dragging: true }));
+listen("tauri://drag-leave", () => update({ dragging: false }));
+listen("tauri://drag-drop", ({ payload }) => {
+  update({ dragging: false });
+  dropFiles(payload?.paths || []);
+});
 
 (async () => {
   const status = await refreshStatus();

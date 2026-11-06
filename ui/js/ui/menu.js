@@ -5,8 +5,8 @@ let open = false;
 
 export const isMenuOpen = () => open;
 
-/** A pop-up menu at (x, y). items: [{label, checked, action}] | "-" | {head} */
-export function popup(x, y, items, minWidth = 0) {
+/** A pop-up menu at (x, y). items: [{label, checked, danger, help, action}] | "-" | {head} */
+export function popup(x, y, items, minWidth = 260) {
   open = true;
   render(html`<${Menu} x=${x} y=${y} items=${items} minWidth=${minWidth} />`, root());
 }
@@ -33,7 +33,7 @@ function Menu({ x, y, items, minWidth }) {
     });
   }, [x, y, items]);
   const style = {
-    minWidth: `${Math.max(260, minWidth)}px`,
+    minWidth: `${minWidth}px`,
     left: `${position?.left ?? x}px`,
     top: `${position?.top ?? y}px`,
     visibility: position ? "visible" : "hidden",
@@ -47,7 +47,8 @@ function Menu({ x, y, items, minWidth }) {
           hidePopup();
           item.action();
         };
-        return html`<div class=${`menu-item${item.checked ? " checked" : ""}`} title=${item.label} onClick=${choose}>${item.label}</div>`;
+        const cls = `menu-item${item.checked ? " checked" : ""}${item.danger ? " danger" : ""}`;
+        return html`<div class=${cls} title=${item.label} data-help=${item.help} onClick=${choose}>${item.label}</div>`;
       })}
     </div>`;
 }
