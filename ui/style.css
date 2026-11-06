@@ -372,6 +372,7 @@ input.case-title:focus { background: var(--input); }
   align-self: flex-end; max-width: 78%; padding: 7px 12px; border-radius: 12px 12px 4px 12px; background: var(--accent-soft);
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
+.chat-time { align-self: flex-end; margin-top: -6px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .chat-text { max-width: 760px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-reasoning, .chat-note { color: var(--muted); font-size: 12px; max-width: 760px; }
 .chat-reasoning > summary, .chat-note > summary { cursor: default; width: fit-content; }

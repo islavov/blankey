@@ -4,9 +4,10 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
@@ -36,6 +37,68 @@ pub struct Thread {
 
 struct Running {
     turn_id: String,
+}
+
+/// A turn on its way to the relay: what `run` streams and stores.
+struct Turn {
+    case_id: i64,
+    turn_id: String,
+    uuid: String,
+    body: Value,
+    seqs: Vec<i64>,
+    user: Value,
+}
+
+/// How long a turn and each of its tool calls took, from the app's side: model, relay and network time together.
+struct Timing {
+    sent_at: String,
+    started: Instant,
+    calls: HashMap<String, Instant>,
+    tools: Map<String, Value>,
+}
+
+impl Timing {
+    fn start() -> Self {
+        let sent_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        Self { sent_at, started: Instant::now(), calls: HashMap::new(), tools: Map::new() }
+    }
+
+    fn ms(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+
+    /// Notes when a `tool_call` arrived, and on its `tool_done` adds how long it ran to the event.
+    fn track(&mut self, event: &str, data: &mut Value) {
+        let Some(id) = data["id"].as_str().map(str::to_owned) else { return };
+        match event {
+            "tool_call" => {
+                self.calls.insert(id, Instant::now());
+            }
+            "tool_done" => {
+                let Some(called) = self.calls.remove(&id) else { return };
+                let ms = called.elapsed().as_millis() as u64;
+                self.tools.insert(id, json!(ms));
+                if let Some(data) = data.as_object_mut() {
+                    data.insert("ms".into(), json!(ms));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// What the turn's user message keeps: when it was sent, the turn's length and each tool call's, in ms.
+    fn record(&self) -> Value {
+        json!({"sent_at": self.sent_at, "ms": self.ms(), "tools": self.tools})
+    }
+}
+
+/// A stored message as the relay takes it: without the app's own `timing`.
+fn for_relay(message: &Value) -> Value {
+    let mut message = message.clone();
+    if let Some(fields) = message.as_object_mut() {
+        fields.remove("timing");
+    }
+    message
 }
 
 type Emit = Box<dyn Fn(Update) + Send + Sync>;
@@ -124,50 +187,53 @@ impl Chat {
         let user = json!({"role": "user", "content": [{"type": "text", "text": text}]});
         let body = json!({
             "turn_id": turn_id, "case": uuid, "context": context, "summary": summary,
-            "messages": history.iter().map(|m| m.message.clone()).collect::<Vec<_>>(),
+            "messages": history.iter().map(|m| for_relay(&m.message)).collect::<Vec<_>>(),
             "user": [{"type": "text", "text": text}],
         });
         let seqs: Vec<i64> = history.iter().map(|m| m.seq).collect();
         self.app.audit("user", "chat_turn", &case_id.to_string());
-        self.update(case_id, &turn_id, "started", json!({"text": text}));
+        let timing = Timing::start();
+        self.update(case_id, &turn_id, "started", json!({"text": text, "sent_at": timing.sent_at}));
         let chat = self.clone();
-        let id = turn_id.clone();
-        self.runtime.spawn(async move { chat.run(case_id, id, uuid, body, seqs, user).await });
+        let turn = Turn { case_id, turn_id: turn_id.clone(), uuid, body, seqs, user };
+        self.runtime.spawn(async move { chat.run(turn, timing).await });
         Ok(turn_id)
     }
 
-    /// Streams the turn to the window and stores what it added once the relay says `done`.
-    async fn run(
-        self: Arc<Self>,
-        case_id: i64,
-        turn_id: String,
-        uuid: String,
-        body: Value,
-        seqs: Vec<i64>,
-        user: Value,
-    ) {
+    /// Streams the turn to the window and stores what it added once the relay says `done`, with its timing.
+    async fn run(self: Arc<Self>, turn: Turn, mut timing: Timing) {
+        let Turn { case_id, turn_id, uuid, body, seqs, mut user } = turn;
         let (events, mut incoming) = mpsc::unbounded_channel();
         let relay = self.relay.clone();
         let post = tokio::spawn(async move { relay.chat_turn(body, events).await });
         let mut done = None;
-        while let Some((event, data)) = incoming.recv().await {
+        while let Some((event, mut data)) = incoming.recv().await {
             if event == "done" {
                 done = Some(data);
             } else {
+                timing.track(&event, &mut data);
                 self.update(case_id, &turn_id, &event, data);
             }
         }
         let result = post.await.unwrap_or_else(|e| Err(ChatRefusal::new("lost", e.to_string())));
+        let record = timing.record();
         let outcome = match done {
-            Some(done) => match self.store(case_id, &seqs, user, &done) {
-                Ok(()) => ("done", json!({"stopped": done["stopped"], "error": done.get("error")})),
-                Err(e) => {
-                    ("error", json!({"code": "internal", "message": format!("The reply could not be saved: {e}")}))
+            Some(done) => {
+                user["timing"] = record.clone();
+                match self.store(case_id, &seqs, user, &done) {
+                    Ok(()) => {
+                        ("done", json!({"stopped": done["stopped"], "error": done.get("error"), "timing": record}))
+                    }
+                    Err(e) => (
+                        "error",
+                        json!({"code": "internal", "message": format!("The reply could not be saved: {e}"),
+                               "ms": record["ms"]}),
+                    ),
                 }
-            },
+            }
             None => {
                 let refusal = result.err().unwrap_or_else(|| ChatRefusal::new("lost", LOST));
-                ("error", json!({"code": refusal.code, "message": refusal.message}))
+                ("error", json!({"code": refusal.code, "message": refusal.message, "ms": record["ms"]}))
             }
         };
         self.turns().remove(&case_id);

@@ -784,5 +784,10 @@
   "Sends the message. The assistant also gets the case's title, people, files and notes, never the values in profiles.": "Изпраща съобщението. Асистентът получава и заглавието, хората, файловете и бележките на казуса, но никога стойностите в профилите.",
   "Stops the assistant. What it did so far is kept.": "Спира асистента. Направеното дотук се запазва.",
   "Something the assistant did in Blankey. Click to see what it passed.": "Действие на асистента в Blankey. Щракнете, за да видите какво е подал.",
-  "The assistant is working on this case. Stop it first.": "Асистентът работи по този казус. Първо го спрете."
+  "The assistant is working on this case. Stop it first.": "Асистентът работи по този казус. Първо го спрете.",
+  "{n} s": "{n} с",
+  "{m} min {s} s": "{m} мин {s} с",
+  "model {time}": "модел {time}",
+  "tools {time}": "инструменти {time}",
+  "after {time}": "след {time}"
 }
