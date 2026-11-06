@@ -194,6 +194,29 @@ test("done fetches the stored thread again and the spinner goes", async () => {
   assert.ok(button("Send"));
 });
 
+test("each message shows when it was sent, how long its turn took, and each tool card how long it ran", async () => {
+  const sentAt = new Date().toISOString();
+  const clock = new Date(sentAt).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const turn = await send("Check the deed");
+  await chatEvent("started", { text: "Check the deed", sent_at: sentAt }, 1, turn);
+  assert.equal($$(".chat-time").at(-1).textContent, clock, "the time it was sent, until it ends");
+  await chatEvent("tool_call", { id: "c20", name: "inspect_docx", input: {} }, 1, turn);
+  assert.equal(text(".tool-state", $$(".chat-tool").at(-1)), "Running");
+  await chatEvent("tool_done", { id: "c20", is_error: false, ms: 1200 }, 1, turn);
+  assert.equal(text(".tool-state", $$(".chat-tool").at(-1)), "Done · 1.2 s");
+
+  const timing = { sent_at: sentAt, ms: 38200, tools: { c20: 1200 } };
+  backend.db.chats[1].messages.push(
+    { ...stored(8, "user", [{ type: "text", text: "Check the deed" }]), message: { role: "user", content: [{ type: "text", text: "Check the deed" }], timing } },
+    stored(9, "assistant", [{ type: "tool-call", toolCallId: "c20", toolName: "inspect_docx", input: {} }, { type: "text", text: "It has three blanks." }]),
+    stored(10, "tool", [{ type: "tool-result", toolCallId: "c20", toolName: "inspect_docx", output: { type: "json", value: {} } }])
+  );
+  await chatEvent("done", { stopped: null, timing }, 1, turn);
+  assert.equal($$(".chat-time").at(-1).textContent, `${clock} · 38 s · model 37 s · tools 1.2 s`, "as stored");
+  assert.equal(text(".tool-state", $$(".chat-tool").at(-1)), "Done · 1.2 s");
+  assert.equal($$(".chat-time").length, 1, "turns stored before timing show none");
+});
+
 test("a turn stopped at the step limit says how to go on", async () => {
   const turn = await send("Go on");
   await chatEvent("started", { text: "Go on" }, 1, turn);
@@ -206,8 +229,8 @@ test("an error says what went wrong and puts the text back in the composer", asy
   let turn = await send("Draft the power of attorney");
   assert.equal(composer().value, "");
   await chatEvent("started", { text: "Draft the power of attorney" }, 1, turn);
-  await chatEvent("error", { code: "chat_budget", message: "The month's budget is used up" }, 1, turn);
-  assert.equal(text(".chat-error"), "This month's assistant budget is used up");
+  await chatEvent("error", { code: "chat_budget", message: "The month's budget is used up", ms: 3200 }, 1, turn);
+  assert.equal(text(".chat-error"), "This month's assistant budget is used up after 3.2 s");
   assert.equal(composer().value, "Draft the power of attorney");
   assert.ok(!userTexts().includes("Draft the power of attorney"), "nothing of it was stored");
   assert.deepEqual(spinning(), []);

@@ -804,24 +804,34 @@ async fn runs_a_case_chat_turn_and_answers_its_grant_only_meanwhile() {
     assert_eq!(ask(&mut socket, mcp_frame("c-2", &other_grant, initialize.clone())).await["status"], 403);
 
     let assistant = json!({"role": "assistant", "content": [{"type": "text", "text": "Ivan Petrov is profile 7."}]});
+    chunks.send(sse("tool_call", json!({"id": "call-1", "name": "find_profiles", "input": {}}))).unwrap();
+    chunks.send(sse("tool_done", json!({"id": "call-1", "is_error": false}))).unwrap();
     chunks.send(sse("text_delta", json!({"text": "Ivan Petrov"}))).unwrap();
     chunks.send(": ping\n\n".into()).unwrap();
     chunks.send(sse("done", json!({"messages": [assistant], "stopped": null, "model": "m", "usage": {}}))).unwrap();
     drop(chunks);
     eventually("the end of the turn", || chat.running().is_empty()).await;
-    assert_eq!(events(&updates), ["started", "text_delta", "done"]);
+    assert_eq!(events(&updates), ["started", "tool_call", "tool_done", "text_delta", "done"]);
     let last = updates.lock().unwrap().last().unwrap().clone();
     assert_eq!(
         (last.case_id, last.turn_id.as_str(), last.data["stopped"].clone()),
         (case_id, turn_id.as_str(), Value::Null)
     );
+    // the turn's timing: when it was sent, how long it and its tool call took
+    let tool_ms = updates.lock().unwrap()[2].data["ms"].as_u64().expect("tool_done carries its ms");
+    let timing = last.data["timing"].clone();
+    let sent_at = timing["sent_at"].as_str().unwrap();
+    assert!(chrono::DateTime::parse_from_rfc3339(sent_at).is_ok(), "{timing}");
+    assert_eq!(updates.lock().unwrap()[0].data["sent_at"], sent_at);
+    assert_eq!(timing["tools"], json!({"call-1": tool_ms}));
+    assert!(timing["ms"].as_u64().unwrap() >= tool_ms, "{timing}");
     let thread = chat.thread(case_id).unwrap();
     assert!(!thread.running);
     let stored: Vec<Value> = thread.messages.iter().map(|m| m.message.clone()).collect();
-    assert_eq!(
-        stored,
-        [json!({"role": "user", "content": [{"type": "text", "text": "Find Ivan"}]}), assistant.clone()]
-    );
+    let user = json!({"role": "user", "content": [{"type": "text", "text": "Find Ivan"}]});
+    let mut kept = user.clone();
+    kept["timing"] = timing;
+    assert_eq!(stored, [kept, assistant.clone()]);
     assert_eq!(ask(&mut socket, mcp_frame("c-3", &case_grant, initialize)).await["status"], 403);
 
     // the next turn sends the thread; the relay folds the first two messages into a summary
@@ -829,7 +839,11 @@ async fn runs_a_case_chat_turn_and_answers_its_grant_only_meanwhile() {
     *stub.state.chat_stream.lock().unwrap() = Some(stream);
     chat.send(case_id, "And the lease?").unwrap();
     eventually("the second turn", || stub.state.chat_turns.lock().unwrap().len() == 2).await;
-    assert_eq!(stub.state.chat_turns.lock().unwrap()[1]["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        stub.state.chat_turns.lock().unwrap()[1]["messages"],
+        json!([user, assistant]),
+        "the timing stays in the app"
+    );
     let reply = json!({"role": "assistant", "content": [{"type": "text", "text": "Not yet."}]});
     chunks
         .send(sse(
@@ -854,6 +868,7 @@ async fn runs_a_case_chat_turn_and_answers_its_grant_only_meanwhile() {
     eventually("the lost third turn", || chat.running().is_empty()).await;
     let last = updates.lock().unwrap().last().unwrap().clone();
     assert_eq!((last.event.as_str(), last.data["code"].as_str()), ("error", Some("lost")));
+    assert!(last.data["ms"].is_u64(), "a failed turn says how long it ran");
     assert_eq!(chat.thread(case_id).unwrap().messages.len(), 4, "a turn without done stores nothing");
 }
 

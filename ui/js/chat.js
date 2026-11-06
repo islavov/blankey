@@ -4,13 +4,13 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "../vendor/preact-htm.js";
 import { call, invoke } from "./api.js";
-import { language, t } from "./i18n.js";
+import { language, number, t } from "./i18n.js";
 import { html } from "./lib.js";
 
 // -- store -------------------------------------------------------------------------------
-// live turn: {turnId, userText, steps: [part], status, done, stopped, error, failed, endedAt}; steps are shaped like
-// the stored assistant parts (text, tool-call with a `state`), except reasoning, which keeps its summary lines as
-// `thoughts`
+// live turn: {turnId, userText, sentAt, steps: [part], status, done, stopped, error, failed, endedAt, ms}; steps are
+// shaped like the stored assistant parts (text, tool-call with a `state` and, once it ran, its `ms`), except
+// reasoning, which keeps its summary lines as `thoughts`
 
 const running = new Set();
 const live = new Map();
@@ -29,8 +29,10 @@ function changed(runningToo = false) {
   listeners.forEach((listener) => listener());
 }
 
-/** A turn that just started; `userText` is null when this window did not see it start. */
-const newTurn = (turnId, userText) => ({ turnId, userText, steps: [], status: null, done: false, stopped: null, error: null, failed: false, endedAt: 0 });
+/** A turn that just started; `userText` and `sentAt` are null when this window did not see it start. */
+const newTurn = (turnId, userText, sentAt = null) => ({
+  turnId, userText, sentAt, steps: [], status: null, done: false, stopped: null, error: null, failed: false, endedAt: 0, ms: null,
+});
 
 /** Appends streamed text to the last step when it is text, else starts a new text step. */
 function append(turn, text) {
@@ -66,7 +68,7 @@ function end(caseId) {
 export function chatEvent({ case_id: caseId, turn_id: turnId, event, data = {} }) {
   if (event === "started") {
     running.add(caseId);
-    live.set(caseId, newTurn(turnId, data.text ?? ""));
+    live.set(caseId, newTurn(turnId, data.text ?? "", data.sent_at ?? null));
     return changed(true);
   }
   const wasRunning = running.has(caseId);
@@ -91,7 +93,7 @@ export function chatEvent({ case_id: caseId, turn_id: turnId, event, data = {} }
     turn.status = null;
   } else if (event === "tool_done") {
     const step = turn.steps.find((s) => s.type === "tool-call" && s.toolCallId === data.id);
-    if (step) step.state = data.is_error ? "failed" : "done";
+    if (step) Object.assign(step, { state: data.is_error ? "failed" : "done", ms: data.ms ?? null });
     turn.status = null;
   } else if (event === "status" && data.state === "thinking") {
     // the step's live line shows it, not the status line
@@ -100,10 +102,10 @@ export function chatEvent({ case_id: caseId, turn_id: turnId, event, data = {} }
   } else if (event === "status") {
     turn.status = data.state;
   } else if (event === "done") {
-    Object.assign(turn, { done: true, status: null, stopped: data.stopped ?? null, error: data.error ?? null, endedAt: end(caseId) });
+    Object.assign(turn, { done: true, status: null, stopped: data.stopped ?? null, error: data.error ?? null, ms: data.timing?.ms ?? null, endedAt: end(caseId) });
   } else if (event === "error") {
     running.delete(caseId);
-    Object.assign(turn, { failed: true, status: null, error: { code: data.code, message: data.message } });
+    Object.assign(turn, { failed: true, status: null, error: { code: data.code, message: data.message }, ms: data.ms ?? null });
     // nothing of the turn was stored: its text goes back into the composer to send again
     if (!drafts.get(caseId)?.trim() && turn.userText) drafts.set(caseId, turn.userText);
   }
@@ -188,6 +190,40 @@ const STATUS = {
   waiting: () => t("Waiting for you in Blankey"),
 };
 
+/** The time of day a message was sent, with its date when that is not today. */
+function clock(iso) {
+  const at = new Date(iso);
+  const time = { hour: "2-digit", minute: "2-digit", second: "2-digit" };
+  return at.toDateString() === new Date().toDateString()
+    ? at.toLocaleTimeString(language(), time)
+    : at.toLocaleString(language(), { day: "numeric", month: "short", ...time });
+}
+
+/** A length of time: tenths of a second under ten seconds, whole seconds under a minute, then minutes and seconds. */
+function duration(ms) {
+  if (ms < 10000) return t("{n} s", { n: number(ms / 1000, 1) });
+  const total = Math.round(ms / 1000);
+  return total < 60 ? t("{n} s", { n: total }) : t("{m} min {s} s", { m: Math.floor(total / 60), s: total % 60 });
+}
+
+const sum = (values) => values.reduce((total, ms) => total + (ms ?? 0), 0);
+
+/** A turn's timing, `{sentAt, ms, tools}`, from what its stored user message keeps. */
+const storedTiming = (timing) => ({ sentAt: timing?.sent_at ?? null, ms: timing?.ms ?? null, tools: sum(Object.values(timing?.tools ?? {})) });
+
+/** When the user sent the message; once the turn ended, how long it took, and how much of that the model and the tools took. */
+function TurnTime({ timing }) {
+  if (!timing.sentAt) return null;
+  const parts = [clock(timing.sentAt)];
+  if (timing.ms != null) {
+    parts.push(duration(timing.ms));
+    if (timing.tools > 0) {
+      parts.push(t("model {time}", { time: duration(Math.max(0, timing.ms - timing.tools)) }), t("tools {time}", { time: duration(timing.tools) }));
+    }
+  }
+  return html`<div class="chat-time">${parts.join(" · ")}</div>`;
+}
+
 /** The parts of a stored message; its content can also be a plain string. */
 const partsOf = (message) => (typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content || []);
 
@@ -201,6 +237,15 @@ function toolStates(messages) {
     }
   }
   return states;
+}
+
+/** How long each tool call ran, by its id, from the timing the turns' user messages keep. */
+function toolTimes(messages) {
+  const times = new Map();
+  for (const { message } of messages) {
+    if (message.role === "user") Object.entries(message.timing?.tools ?? {}).forEach(([id, ms]) => times.set(id, ms));
+  }
+  return times;
 }
 
 /** The Chat tab of a case: the stored thread, the turn streaming now, and the composer. */
@@ -234,10 +279,11 @@ export function CaseChat({ caseId }) {
   const storedView = useMemo(() => {
     if (!thread) return null;
     const states = toolStates(thread.messages);
+    const times = toolTimes(thread.messages);
     return html`
       ${thread.summary &&
       html`<details class="chat-note"><summary>${t("Earlier messages are summarized")}</summary><div>${thread.summary}</div></details>`}
-      ${thread.messages.map(({ seq, message }) => html`<${StoredMessage} key=${seq} message=${message} states=${states} />`)}`;
+      ${thread.messages.map(({ seq, message }) => html`<${StoredMessage} key=${seq} message=${message} states=${states} times=${times} />`)}`;
   }, [thread, language()]);
 
   const { turn } = chat;
@@ -287,28 +333,30 @@ export function CaseChat({ caseId }) {
     </div>`;
 }
 
-/** A stored user message as a bubble, an assistant message as its parts; tool results show on their cards. */
-function StoredMessage({ message, states }) {
+/** A stored user message as a bubble with its turn's timing, an assistant message as its parts; tool results show on their cards. */
+function StoredMessage({ message, states, times }) {
   const parts = partsOf(message);
   if (message.role === "user") {
     const text = parts.filter((p) => p.type === "text").map((p) => p.text).join("\n");
-    return text ? html`<div class="chat-msg user">${text}</div>` : null;
+    return text ? html`<div class="chat-msg user">${text}</div><${TurnTime} timing=${storedTiming(message.timing)} />` : null;
   }
   if (message.role !== "assistant") return null;
-  return parts.map((part, i) => html`<${Part} key=${i} part=${part} state=${states.get(part.toolCallId) || "done"} />`);
+  return parts.map((part, i) => html`<${Part} key=${i} part=${part} state=${states.get(part.toolCallId) || "done"} ms=${times.get(part.toolCallId)} />`);
 }
 
 /** The turn as it streams: the user's message, then the steps; the last one is live while the turn runs. */
 function LiveTurn({ turn }) {
   return html`
     ${turn.userText && html`<div class="chat-msg user">${turn.userText}</div>`}
-    ${turn.steps.map((part, i) => html`<${Part} key=${i} part=${part} state=${part.state} live=${!turn.done && i === turn.steps.length - 1} />`)}`;
+    <${TurnTime} timing=${{ sentAt: turn.sentAt, ms: turn.ms, tools: sum(turn.steps.map((step) => step.ms)) }} />
+    ${turn.steps.map((part, i) => html`<${Part} key=${i} part=${part} state=${part.state} ms=${part.ms} live=${!turn.done && i === turn.steps.length - 1} />`)}`;
 }
 
-/** How a turn ended, when that needs saying: stopped, or an error. */
+/** How a turn ended, when that needs saying: stopped, or an error and how long the turn ran until then. */
 function TurnEnd({ turn }) {
   if (turn.failed || turn.stopped === "error") {
-    return turn.error ? html`<div class="chat-error">${errorText(turn.error)}</div>` : null;
+    const after = turn.failed && turn.ms != null ? html` <span class="muted">${t("after {time}", { time: duration(turn.ms) })}</span>` : null;
+    return turn.error ? html`<div class="chat-error">${errorText(turn.error)}${after}</div>` : null;
   }
   if (turn.stopped === "step_limit") return html`<div class="chat-note muted">${t("The assistant stopped after many steps; ask it to continue")}</div>`;
   if (turn.stopped === "cancelled") return html`<div class="chat-note muted">${t("Stopped")}</div>`;
@@ -316,7 +364,7 @@ function TurnEnd({ turn }) {
 }
 
 /** One assistant part: reasoning (its latest thought while live, else collapsed), text, or a tool call's card. */
-function Part({ part, state, live = false }) {
+function Part({ part, state, ms, live = false }) {
   if (part.type === "reasoning") {
     // live, its summary lines are `thoughts`; stored, they are its text
     const lines = part.thoughts ?? String(part.text ?? "").split("\n").filter((line) => line.trim());
@@ -326,7 +374,7 @@ function Part({ part, state, live = false }) {
       : null;
   }
   if (part.type === "text") return part.text ? html`<div class="chat-text">${part.text}</div>` : null;
-  if (part.type === "tool-call") return html`<${ToolCard} name=${part.toolName} input=${part.input} state=${state} />`;
+  if (part.type === "tool-call") return html`<${ToolCard} name=${part.toolName} input=${part.input} state=${state} ms=${ms} />`;
   return null;
 }
 
@@ -336,13 +384,13 @@ const TOOL_STATES = {
   failed: () => t("Failed"),
 };
 
-/** A tool call: its readable name and whether it ran; open it for what the assistant passed. */
-function ToolCard({ name, input, state }) {
+/** A tool call: its readable name, whether it ran and for how long; open it for what the assistant passed. */
+function ToolCard({ name, input, state, ms }) {
   const args = input && typeof input === "object" && Object.keys(input).length ? JSON.stringify(input, null, 2) : "";
   const head = html`
     <span class="tool-mark">${state === "running" ? html`<${Spinner} />` : state === "failed" ? "✕" : "✓"}</span>
     <span class="tool-name">${String(name ?? "").replace(/[_-]+/g, " ")}</span>
-    <span class="tool-state muted">${TOOL_STATES[state]?.()}</span>`;
+    <span class="tool-state muted">${TOOL_STATES[state]?.()}${ms != null && state !== "running" ? ` · ${duration(ms)}` : ""}</span>`;
   const cls = `chat-tool ${state}`;
   return args
     ? html`<details class=${cls} data-help="chat.tool"><summary>${head}</summary><pre class="mono">${args}</pre></details>`
