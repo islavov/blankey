@@ -15,7 +15,7 @@ mod validate;
 mod tests;
 
 pub use corrections::Corrections;
-pub use document::{Document, EntityView, PageText};
+pub use document::{blank_paragraphs, Document, EntityView, PageText};
 pub use redact::{guard, mask_png};
 pub use types::{Analysis, Block, Detection, Entity, Kind, Occ};
 

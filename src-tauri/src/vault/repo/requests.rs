@@ -19,6 +19,7 @@ pub struct StoredRequest {
     pub sealed_payload: Option<Vec<u8>>,
     pub sealed_result: Option<Vec<u8>>,
     pub grant_id: Option<String>,
+    pub case_id: Option<i64>,
 }
 
 /// A request's payload and result in sealed form, replacing their plaintext.
@@ -29,7 +30,7 @@ pub struct SealedRequest {
 }
 
 const COLUMNS: &str =
-    "id, kind, status, created_at, resolved_at, payload, result, sealed_payload, sealed_result, grant_id";
+    "id, kind, status, created_at, resolved_at, payload, result, sealed_payload, sealed_result, grant_id, case_id";
 
 fn row(r: &Row) -> rusqlite::Result<StoredRequest> {
     Ok(StoredRequest {
@@ -43,15 +44,17 @@ fn row(r: &Row) -> rusqlite::Result<StoredRequest> {
         sealed_payload: r.get(7)?,
         sealed_result: r.get(8)?,
         grant_id: r.get(9)?,
+        case_id: r.get(10)?,
     })
 }
 
 impl Repo {
     /// A pending request with an empty payload; seal it with `set_sealed_payload`, which needs the id.
-    pub fn insert_request(&self, kind: &str, grant: Option<&str>) -> Result<i64> {
+    pub fn insert_request(&self, kind: &str, grant: Option<&str>, case_id: Option<i64>) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO requests (kind, payload, status, created_at, grant_id) VALUES (?1, '{}', 'pending', ?2, ?3)",
-            params![kind, now(), grant],
+            "INSERT INTO requests (kind, payload, status, created_at, grant_id, case_id)
+             VALUES (?1, '{}', 'pending', ?2, ?3, ?4)",
+            params![kind, now(), grant, case_id],
         )?;
         Ok(self.conn.last_insert_rowid())
     }

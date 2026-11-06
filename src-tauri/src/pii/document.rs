@@ -155,19 +155,24 @@ impl Document {
             .collect()
     }
 
+    /// The paragraphs with hidden values and fill-in blanks shown as placeholders. A blank never hides a value: one
+    /// that overlaps a hidden value is left out, and its number stays unused.
     pub fn redacted_paragraphs(&self) -> Vec<ParagraphInfo> {
         let Source::Docx(paragraphs, _) = &self.source else { return Vec::new() };
+        let blanks = blank_spans(paragraphs);
         paragraphs
             .iter()
             .enumerate()
             .map(|(b, p)| {
-                let spans = self.spans(b);
-                let mut p = p.clone();
-                if !spans.is_empty() {
-                    p.runs = redact::redact_pieces(&p.text, &p.run_spans, &spans);
-                    p.text = redact::redact_text(&p.text, &spans);
-                }
-                p
+                let mut spans = self.spans(b);
+                let free: Vec<Span> = blanks[b]
+                    .iter()
+                    .filter(|(s, e, _)| !spans.iter().any(|(vs, ve, _)| vs < e && s < ve))
+                    .map(|(s, e, id)| (*s, *e, id.as_str()))
+                    .collect();
+                spans.extend(free);
+                spans.sort_by_key(|(s, _, _)| *s);
+                with_placeholders(p, &spans)
             })
             .collect()
     }
@@ -344,6 +349,11 @@ impl Document {
                 out.push(r);
                 continue;
             };
+            // tokenize finds a blank by its number itself
+            if docx::BLANK_RE.is_match(find) {
+                out.push(r);
+                continue;
+            }
             let ids: Vec<String> = PLACEHOLDER.captures_iter(find).map(|c| c[1].to_string()).collect();
             if ids.is_empty() {
                 out.push(r);
@@ -388,6 +398,44 @@ impl Document {
         }
         Ok(out)
     }
+}
+
+/// Each paragraph's fill-in blanks, numbered across the document as tokenize numbers them: (start, end, "blank:n").
+fn blank_spans(paragraphs: &[ParagraphInfo]) -> Vec<Vec<(usize, usize, String)>> {
+    let mut n = 0;
+    paragraphs
+        .iter()
+        .map(|p| {
+            docx::blanks(&p.text, &p.run_spans)
+                .into_iter()
+                .map(|(s, e)| {
+                    n += 1;
+                    (s, e, docx::blank_id(n))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The paragraph with each span shown as its placeholder, in its text and in its runs.
+fn with_placeholders(p: &ParagraphInfo, spans: &[Span]) -> ParagraphInfo {
+    let mut p = p.clone();
+    if !spans.is_empty() {
+        p.runs = redact::redact_pieces(&p.text, &p.run_spans, spans);
+        p.text = redact::redact_text(&p.text, spans);
+    }
+    p
+}
+
+/// The paragraphs as read, with each fill-in blank shown as its placeholder: the assistant's view when nothing
+/// is hidden.
+pub fn blank_paragraphs(paragraphs: &[ParagraphInfo]) -> Vec<ParagraphInfo> {
+    let blanks = blank_spans(paragraphs);
+    paragraphs
+        .iter()
+        .zip(&blanks)
+        .map(|(p, b)| with_placeholders(p, &b.iter().map(|(s, e, id)| (*s, *e, id.as_str())).collect::<Vec<_>>()))
+        .collect()
 }
 
 fn escape(text: &str) -> String {

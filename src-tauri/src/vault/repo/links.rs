@@ -15,13 +15,14 @@ pub struct StoredCollected {
     pub link_id: String,
     pub size: i64,
     pub created_at: String,
+    pub case_id: Option<i64>,
     pub meta: Encrypted,
 }
 
 const LINK_COLUMNS: &str = "link_id, relay_url, url, title, spec, profile_id, new_profile, created_at, expires_at, \
                             max_submissions, revoked_at, received";
 const SUBMISSION_COLUMNS: &str = "sid, link_id, request_id, size, received_at, status, handled_at, profile_id";
-const COLLECTED_COLUMNS: &str = "id, profile_id, link_id, size, created_at, nonce, ciphertext";
+const COLLECTED_COLUMNS: &str = "id, profile_id, link_id, size, created_at, case_id, nonce, ciphertext";
 
 fn link_row(r: &Row) -> rusqlite::Result<Link> {
     Ok(Link {
@@ -60,7 +61,8 @@ fn collected_row(r: &Row) -> rusqlite::Result<StoredCollected> {
         link_id: r.get(2)?,
         size: r.get(3)?,
         created_at: r.get(4)?,
-        meta: Encrypted { nonce: r.get(5)?, ciphertext: r.get(6)? },
+        case_id: r.get(5)?,
+        meta: Encrypted { nonce: r.get(6)?, ciphertext: r.get(7)? },
     })
 }
 
@@ -175,14 +177,15 @@ impl Repo {
         &mut self,
         profile_id: Option<i64>,
         link_id: &str,
+        case_id: Option<i64>,
         size: i64,
         finish: impl FnOnce(i64) -> Result<Encrypted>,
     ) -> Result<i64> {
         let tx = self.conn.transaction()?;
         tx.execute(
-            "INSERT INTO collected_files (profile_id, link_id, size, created_at, nonce, ciphertext)
-             VALUES (?1, ?2, ?3, ?4, x'', x'')",
-            params![profile_id, link_id, size, now()],
+            "INSERT INTO collected_files (profile_id, link_id, case_id, size, created_at, nonce, ciphertext)
+             VALUES (?1, ?2, ?3, ?4, ?5, x'', x'')",
+            params![profile_id, link_id, case_id, size, now()],
         )?;
         let id = tx.last_insert_rowid();
         let meta = finish(id)?;
@@ -205,6 +208,14 @@ impl Repo {
     pub fn collected_file(&self, id: i64) -> Result<Option<StoredCollected>> {
         let sql = format!("SELECT {COLLECTED_COLUMNS} FROM collected_files WHERE id = ?1");
         Ok(self.conn.query_row(&sql, [id], collected_row).optional()?)
+    }
+
+    pub fn set_collected_meta(&self, id: i64, meta: &Encrypted) -> Result<()> {
+        self.conn.execute(
+            "UPDATE collected_files SET nonce = ?1, ciphertext = ?2 WHERE id = ?3",
+            params![meta.nonce, meta.ciphertext, id],
+        )?;
+        Ok(())
     }
 
     pub fn delete_collected_file(&self, id: i64) -> Result<()> {

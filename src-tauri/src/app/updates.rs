@@ -193,7 +193,7 @@ impl Updates {
         // Windows exits right after starting the installer
         let handle = self.handle.clone();
         let builder = builder.on_before_exit(move || {
-            state(&handle).app.vault().lock();
+            state(&handle).app.lock();
             super::platform::clear_opened_documents();
         });
         let Some(update) = builder.build().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())? else {
@@ -215,7 +215,7 @@ impl Updates {
         }
         let ready = self.ready.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
         let (update, bytes) = ready.ok_or("No update is ready.")?;
-        state(&self.handle).app.vault().lock();
+        state(&self.handle).app.lock();
         super::platform::clear_opened_documents();
         if let Err(e) = update.install(bytes) {
             self.set_status(Status::Failed { message: e.to_string() });

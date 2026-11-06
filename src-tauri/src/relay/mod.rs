@@ -5,13 +5,14 @@
 //! The user is asked through an `Approver`; state changes go out on a watch channel (`subscribe`), so the core
 //! runs without Tauri.
 
+mod chat;
 mod client;
 pub mod discovery;
 pub mod oauth;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -31,6 +32,7 @@ use crate::i18n::mark;
 use crate::keychain::SecretStore;
 use crate::links::{InboxEntry, LinkDraft};
 use crate::vault::{now, Link, RelayGrant};
+pub use chat::{ChatEvent, ChatRefusal};
 use discovery::Discovery;
 use oauth::{Client, HttpError, Metadata};
 
@@ -121,6 +123,8 @@ pub struct Summary {
     pub signed_in: bool,
     pub state: State,
     pub account: Option<String>,
+    /// the case chat is offered to this account
+    pub chat: bool,
 }
 
 #[derive(Serialize)]
@@ -200,6 +204,10 @@ pub struct Relay {
     status: watch::Sender<Status>,
     /// the account's UI language from its device profile; None when signed out or the relay names none
     language: watch::Sender<Option<String>>,
+    /// the account has the case chat, from its device profile
+    chat: watch::Sender<bool>,
+    /// cases whose chat turn is running here, by uuid: their `case:` grants are answered
+    case_turns: Mutex<HashSet<String>>,
     inner: Mutex<Inner>,
 }
 
@@ -249,6 +257,8 @@ impl Relay {
             callbacks: oauth::Callbacks::default(),
             status: watch::channel(status).0,
             language: watch::channel(language).0,
+            chat: watch::channel(false).0,
+            case_turns: Mutex::new(HashSet::new()),
             inner: Mutex::new(inner),
         }
     }
@@ -285,7 +295,8 @@ impl Relay {
         self.language.send_if_modified(|current| std::mem::replace(current, language.clone()) != language);
     }
 
-    /// Reads the account's UI language from the relay's device profile; a relay without one names none.
+    /// Reads the account's UI language and whether it has the case chat from the relay's device profile; a relay
+    /// without one names no language and offers no chat.
     pub async fn refresh_profile(&self) {
         if !self.signed_in() {
             return;
@@ -295,15 +306,20 @@ impl Relay {
         struct Profile {
             #[serde(default)]
             lang: Option<String>,
+            #[serde(default)]
+            chat: bool,
         }
         let profile = self
             .authorized(move |agent, discovery, token| match discovery.device_profile.as_deref() {
-                None => Ok(Profile { lang: None }),
+                None => Ok(Profile { lang: None, chat: false }),
                 Some(base) => oauth::get_json::<Profile>(agent, &device_url(Some(base), &[], &device)?, token),
             })
             .await;
         match profile {
-            Ok(profile) => self.set_language(profile.lang.filter(|lang| !lang.is_empty())),
+            Ok(profile) => {
+                self.set_language(profile.lang.filter(|lang| !lang.is_empty()));
+                self.set_chat(profile.chat);
+            }
             Err(e) => eprintln!("relay: cannot read the device profile: {}", e.message()),
         }
     }
@@ -431,6 +447,7 @@ impl Relay {
         self.forget_token();
         let _ = self.app.vault().set_relay_account(None);
         self.set_language(None);
+        self.set_chat(false);
         {
             let mut inner = self.inner();
             inner.access_token = None;
@@ -597,7 +614,12 @@ impl Relay {
     }
 
     pub fn summary(&self) -> Summary {
-        Summary { signed_in: self.signed_in(), state: self.status().state, account: self.account() }
+        Summary {
+            signed_in: self.signed_in(),
+            state: self.status().state,
+            account: self.account(),
+            chat: self.chat_available(),
+        }
     }
 
     fn account(&self) -> Option<String> {
@@ -831,6 +853,7 @@ impl Relay {
             vault.set_relay_account(None).map_err(|e| e.to_string())?;
         }
         self.set_language(None);
+        self.set_chat(false);
         self.forget_token();
         {
             let mut inner = self.inner();

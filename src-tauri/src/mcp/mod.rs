@@ -110,12 +110,12 @@ mod tests {
             let (_, tools) = post(port, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), None);
             let names: Vec<&str> =
                 tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-            assert_eq!(names.len(), 18, "collection link tools need a Blankey Online sign-in: {names:?}");
+            assert_eq!(names.len(), 24, "collection link tools need a Blankey Online sign-in: {names:?}");
             assert!(!names.contains(&"create_collection_link"));
             assert!(!reply["result"]["instructions"].as_str().unwrap().contains("create_collection_link"));
             app.vault().set_relay_account(Some("someone@example.com")).unwrap();
             let (_, tools) = post(port, json!({"jsonrpc": "2.0", "id": 5, "method": "tools/list"}), None);
-            assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 20);
+            assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 26);
             let (_, signed_in) = post(port, init.clone(), None);
             assert!(signed_in["result"]["instructions"].as_str().unwrap().contains("create_collection_link"));
             // a find with no arguments at all
@@ -168,7 +168,7 @@ mod tests {
         assert_ne!(reply["result"]["isError"], true, "{reply}");
 
         let id = app.create_request(crate::core::FILE, json!({"kind": "pdf", "reason": "r"}), Some("g1")).unwrap();
-        let file_id = app.store_upload(id, &path).unwrap()["file_id"].clone();
+        let file_id = app.store_upload(id, &path, None).unwrap()["file_id"].clone();
         let reply = call_in_process(app.clone(), remote(), "inspect_pdf", json!({"path": file_id})).await;
         assert_ne!(reply["result"]["isError"], true, "{reply}");
         let other = Some(Remote { grant: "g2".into(), client_name: "Other".into() });

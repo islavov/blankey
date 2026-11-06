@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::encrypt;
 use super::error::{Result, VaultError};
 use super::repo::StoredCollected;
-use super::{CollectedFile, Link, SubmissionInfo, Vault};
+use super::{CollectedFile, Link, NewFile, SubmissionInfo, Vault};
 use crate::crypto::{self, Key};
 
 impl Vault {
@@ -75,35 +75,51 @@ impl Vault {
         self.path.with_file_name("files")
     }
 
-    fn collected_path(&self, id: i64) -> PathBuf {
+    pub(super) fn collected_path(&self, id: i64) -> PathBuf {
         self.files_dir().join(format!("{id}.bin"))
     }
 
-    /// Encrypts the bytes under a fresh key into `files/<id>.bin`; the name, type and key go in the row.
-    pub fn add_collected_file(
-        &mut self,
-        profile_id: Option<i64>,
-        link_id: &str,
-        name: &str,
-        file_type: &str,
-        content: &[u8],
-    ) -> Result<i64> {
+    /// Encrypts the bytes under a fresh key into `files/<id>.bin`; the name, type, description and key go in the
+    /// row.
+    pub fn add_collected_file(&mut self, file: NewFile, content: &[u8]) -> Result<i64> {
         let dek = self.require_dek()?.clone();
         let dir = self.files_dir();
         std::fs::create_dir_all(&dir)?;
-        self.repo.insert_collected_file(profile_id, link_id, content.len() as i64, |id| {
+        let size = content.len() as i64;
+        let id = self.repo.insert_collected_file(file.profile_id, file.link_id, file.case_id, size, |id| {
             let key = crypto::new_key();
-            let meta = serde_json::json!({"name": name, "type": file_type, "key": crypto::encode_b64(key.as_ref())});
+            let meta = serde_json::json!({"name": file.name, "type": file.file_type, "description": file.description,
+                                          "key": crypto::encode_b64(key.as_ref())});
             let sealed = encrypt::collected_meta(&dek, id, &serde_json::to_vec(&meta)?);
             std::fs::write(dir.join(format!("{id}.bin")), encrypt::collected_data(&key, id, content))?;
             Ok(sealed)
-        })
+        })?;
+        self.touch_case(file.case_id)?;
+        Ok(id)
+    }
+
+    /// What the file is and whose; the rest of its metadata stays.
+    pub fn set_file_description(&self, id: i64, description: &str) -> Result<()> {
+        let dek = self.require_dek()?;
+        let row = self.repo.collected_file(id)?.ok_or_else(|| VaultError::NotFound(format!("Unknown file {id}")))?;
+        let case_id = row.case_id;
+        let plain = encrypt::open_collected_meta(dek, id, &row.meta.nonce, &row.meta.ciphertext)?;
+        let mut meta: Value = serde_json::from_slice(&plain)?;
+        meta["description"] = Value::String(description.to_string());
+        self.repo.set_collected_meta(id, &encrypt::collected_meta(dek, id, &serde_json::to_vec(&meta)?))?;
+        self.touch_case(case_id)
     }
 
     /// Newest first; needs the vault unlocked for the names.
     pub fn list_collected_files(&self) -> Result<Vec<CollectedFile>> {
         self.require_dek()?;
         self.repo.collected_files()?.into_iter().map(|row| Ok(self.open_collected(row)?.0)).collect()
+    }
+
+    /// Metadata only, without reading the bytes.
+    pub fn get_collected_file(&self, id: i64) -> Result<CollectedFile> {
+        let row = self.repo.collected_file(id)?.ok_or_else(|| VaultError::NotFound(format!("Unknown file {id}")))?;
+        Ok(self.open_collected(row)?.0)
     }
 
     pub fn load_collected_file(&self, id: i64) -> Result<(CollectedFile, Vec<u8>)> {
@@ -134,6 +150,8 @@ impl Vault {
             created_at: row.created_at,
             name: text("name"),
             file_type: text("type"),
+            case_id: row.case_id,
+            description: text("description"),
         };
         Ok((file, key))
     }

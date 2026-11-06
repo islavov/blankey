@@ -52,6 +52,17 @@ struct StubState {
     /// the account's language in the device profile; no `device_profile` in discovery when false
     profile: AtomicBool,
     lang: Mutex<Option<String>>,
+    /// the account has the case chat; no `chat_url` in discovery when `chat_offered` is false
+    chat: AtomicBool,
+    chat_offered: AtomicBool,
+    /// bodies of POST /device/chat
+    chat_turns: Mutex<Vec<Value>>,
+    /// what the next turn streams, chunk by chunk, until the sender is dropped
+    chat_stream: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<String>>>,
+    /// the next turn is refused with this status and JSON body
+    chat_refusal: Mutex<Option<(u16, Value)>>,
+    /// turn ids of DELETE /device/chat/{turn}
+    chat_cancelled: Mutex<Vec<String>>,
 }
 
 struct Stub {
@@ -77,6 +88,12 @@ impl Stub {
             lose_delete_reply: AtomicBool::new(false),
             profile: AtomicBool::new(true),
             lang: Mutex::default(),
+            chat: AtomicBool::new(false),
+            chat_offered: AtomicBool::new(true),
+            chat_turns: Mutex::default(),
+            chat_stream: Mutex::default(),
+            chat_refusal: Mutex::default(),
+            chat_cancelled: Mutex::default(),
         });
         let routes = Router::new()
             .route("/.well-known/blankey-relay", get(discovery))
@@ -95,6 +112,8 @@ impl Stub {
             .route("/device/inbox/{sid}", delete(delete_submission))
             .route("/blob/{sid}", get(blob))
             .route("/device/profile", get(profile))
+            .route("/device/chat", post(chat_turn))
+            .route("/device/chat/{turn}", delete(cancel_chat_turn))
             .with_state(state.clone());
         tokio::spawn(async move { axum::serve(http, routes).await });
         Self { state, sockets }
@@ -136,6 +155,9 @@ async fn discovery(Shared(stub): Shared<Arc<StubState>>) -> Json<Value> {
     if !stub.profile.load(Ordering::SeqCst) {
         doc.as_object_mut().unwrap().remove("device_profile");
     }
+    if !stub.chat_offered.load(Ordering::SeqCst) {
+        doc.as_object_mut().unwrap().remove("chat_url");
+    }
     Json(doc)
 }
 
@@ -144,7 +166,42 @@ async fn profile(
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, StatusCode> {
     own_device(&query)?;
-    Ok(Json(json!({"account": "you@example.com", "lang": *stub.lang.lock().unwrap()})))
+    Ok(Json(json!({"account": "you@example.com", "lang": *stub.lang.lock().unwrap(),
+                   "chat": stub.chat.load(Ordering::SeqCst)})))
+}
+
+/// POST /device/chat: records the turn, then refuses it or streams what the test sends.
+async fn chat_turn(
+    Shared(stub): Shared<Arc<StubState>>,
+    Query(query): Query<HashMap<String, String>>,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Err(status) = own_device(&query) {
+        return status.into_response();
+    }
+    stub.chat_turns.lock().unwrap().push(body);
+    if let Some((status, error)) = stub.chat_refusal.lock().unwrap().take() {
+        return (StatusCode::from_u16(status).unwrap(), Json(error)).into_response();
+    }
+    let Some(chunks) = stub.chat_stream.lock().unwrap().take() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let stream = futures_util::stream::unfold(chunks, |mut chunks| async move {
+        chunks.recv().await.map(|chunk| (Ok::<_, std::io::Error>(chunk), chunks))
+    });
+    ([("content-type", "text/event-stream")], axum::body::Body::from_stream(stream)).into_response()
+}
+
+async fn cancel_chat_turn(
+    Shared(stub): Shared<Arc<StubState>>,
+    UrlPath(turn): UrlPath<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> StatusCode {
+    if let Err(status) = own_device(&query) {
+        return status;
+    }
+    stub.chat_cancelled.lock().unwrap().push(turn);
+    StatusCode::NO_CONTENT
 }
 
 async fn metadata(Shared(stub): Shared<Arc<StubState>>) -> Json<Value> {
@@ -674,4 +731,184 @@ async fn a_relay_without_profiles_names_no_language() {
     relay.refresh_profile().await;
     assert_eq!(relay.language(), None);
     assert_eq!(app.vault().relay_language().unwrap(), None);
+}
+
+fn sse(event: &str, data: Value) -> String {
+    format!("event: {event}\ndata: {data}\n\n")
+}
+
+/// Polls until `check` holds, for state that changes on other tasks.
+async fn eventually(what: &str, check: impl Fn() -> bool) {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while !check() {
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for {what}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// An app signed in to a relay that offers the chat to the account, and a chat service recording its updates.
+async fn chat_app(
+    dir: &Path,
+    stub: &Stub,
+) -> (Arc<Relay>, Arc<Blankey>, Arc<crate::chat::Chat>, Arc<Mutex<Vec<crate::chat::Update>>>, WebSocketStream<TcpStream>)
+{
+    stub.state.chat.store(true, Ordering::SeqCst);
+    let (relay, app) = signed_in_app(dir, stub).await;
+    let socket = stub.accept().await;
+    wait_for(&relay, State::Connected).await;
+    eventually("the chat flag from the profile", || relay.chat_available()).await;
+    let updates = Arc::new(Mutex::new(Vec::new()));
+    let seen = updates.clone();
+    let chat = crate::chat::Chat::new(app.clone(), relay.clone(), Handle::current(), move |update| {
+        seen.lock().unwrap().push(update);
+    });
+    (relay, app, chat, updates, socket)
+}
+
+fn events(updates: &Mutex<Vec<crate::chat::Update>>) -> Vec<String> {
+    updates.lock().unwrap().iter().map(|u| u.event.clone()).collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn runs_a_case_chat_turn_and_answers_its_grant_only_meanwhile() {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = Stub::start(1).await;
+    let (relay, app, chat, updates, mut socket) = chat_app(dir.path(), &stub).await;
+    assert!(relay.summary().chat);
+    let case_id = app.create_case("Sale of an apartment").unwrap();
+    let other = app.create_case("Lease").unwrap();
+    let uuid = app.vault().get_case(case_id).unwrap().uuid;
+    let other_uuid = app.vault().get_case(other).unwrap().uuid;
+    let initialize = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "agent", "version": "1"}}});
+    let case_grant = format!("case:{uuid}");
+    assert_eq!(ask(&mut socket, mcp_frame("c-0", &case_grant, initialize.clone())).await["status"], 403);
+
+    let (chunks, stream) = tokio::sync::mpsc::unbounded_channel();
+    *stub.state.chat_stream.lock().unwrap() = Some(stream);
+    let turn_id = chat.send(case_id, "  Find Ivan  ").unwrap();
+    assert_eq!(chat.running(), [case_id]);
+    assert!(chat.send(case_id, "Again").is_err(), "one turn per case at a time");
+    eventually("the turn on the relay", || stub.state.chat_turns.lock().unwrap().len() == 1).await;
+    let posted = stub.state.chat_turns.lock().unwrap()[0].clone();
+    assert_eq!((posted["turn_id"].as_str(), posted["case"].as_str()), (Some(turn_id.as_str()), Some(uuid.as_str())));
+    assert_eq!(posted["user"], json!([{"type": "text", "text": "Find Ivan"}]));
+    assert_eq!((posted["messages"].clone(), posted["summary"].clone()), (json!([]), Value::Null));
+    let context = posted["context"].as_str().unwrap();
+    assert!(context.contains(&format!("case_id {case_id}")) && context.contains("Sale of an apartment"), "{context}");
+
+    // the relay's agent reaches the app's tools under the case's grant while the turn runs, and only that case's
+    let reply = ask(&mut socket, mcp_frame("c-1", &case_grant, initialize.clone())).await;
+    assert_eq!(reply["status"], 200, "{reply}");
+    let other_grant = format!("case:{other_uuid}");
+    assert_eq!(ask(&mut socket, mcp_frame("c-2", &other_grant, initialize.clone())).await["status"], 403);
+
+    let assistant = json!({"role": "assistant", "content": [{"type": "text", "text": "Ivan Petrov is profile 7."}]});
+    chunks.send(sse("text_delta", json!({"text": "Ivan Petrov"}))).unwrap();
+    chunks.send(": ping\n\n".into()).unwrap();
+    chunks.send(sse("done", json!({"messages": [assistant], "stopped": null, "model": "m", "usage": {}}))).unwrap();
+    drop(chunks);
+    eventually("the end of the turn", || chat.running().is_empty()).await;
+    assert_eq!(events(&updates), ["started", "text_delta", "done"]);
+    let last = updates.lock().unwrap().last().unwrap().clone();
+    assert_eq!(
+        (last.case_id, last.turn_id.as_str(), last.data["stopped"].clone()),
+        (case_id, turn_id.as_str(), Value::Null)
+    );
+    let thread = chat.thread(case_id).unwrap();
+    assert!(!thread.running);
+    let stored: Vec<Value> = thread.messages.iter().map(|m| m.message.clone()).collect();
+    assert_eq!(
+        stored,
+        [json!({"role": "user", "content": [{"type": "text", "text": "Find Ivan"}]}), assistant.clone()]
+    );
+    assert_eq!(ask(&mut socket, mcp_frame("c-3", &case_grant, initialize)).await["status"], 403);
+
+    // the next turn sends the thread; the relay folds the first two messages into a summary
+    let (chunks, stream) = tokio::sync::mpsc::unbounded_channel();
+    *stub.state.chat_stream.lock().unwrap() = Some(stream);
+    chat.send(case_id, "And the lease?").unwrap();
+    eventually("the second turn", || stub.state.chat_turns.lock().unwrap().len() == 2).await;
+    assert_eq!(stub.state.chat_turns.lock().unwrap()[1]["messages"].as_array().unwrap().len(), 2);
+    let reply = json!({"role": "assistant", "content": [{"type": "text", "text": "Not yet."}]});
+    chunks
+        .send(sse(
+            "done",
+            json!({"messages": [reply], "stopped": null, "model": "m", "usage": {},
+                                    "compaction": {"summary": "Ivan Petrov is the seller.", "folded": 2}}),
+        ))
+        .unwrap();
+    drop(chunks);
+    eventually("the end of the second turn", || chat.running().is_empty()).await;
+    let thread = chat.thread(case_id).unwrap();
+    assert_eq!((thread.messages.len(), thread.summary.as_deref()), (4, Some("Ivan Petrov is the seller.")));
+
+    let (chunks, stream) = tokio::sync::mpsc::unbounded_channel();
+    *stub.state.chat_stream.lock().unwrap() = Some(stream);
+    chat.send(case_id, "Thanks").unwrap();
+    eventually("the third turn", || stub.state.chat_turns.lock().unwrap().len() == 3).await;
+    let third = stub.state.chat_turns.lock().unwrap()[2].clone();
+    assert_eq!(third["summary"], "Ivan Petrov is the seller.");
+    assert_eq!(third["messages"].as_array().unwrap().len(), 2, "only what the summary does not cover");
+    drop(chunks);
+    eventually("the lost third turn", || chat.running().is_empty()).await;
+    let last = updates.lock().unwrap().last().unwrap().clone();
+    assert_eq!((last.event.as_str(), last.data["code"].as_str()), ("error", Some("lost")));
+    assert_eq!(chat.thread(case_id).unwrap().messages.len(), 4, "a turn without done stores nothing");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_turns_are_refused_without_the_chat_and_can_be_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = Stub::start(1).await;
+    let (relay, app, chat, updates, _socket) = chat_app(dir.path(), &stub).await;
+    let case_id = app.create_case("Power of attorney").unwrap();
+
+    stub.state.chat.store(false, Ordering::SeqCst);
+    relay.refresh_profile().await;
+    assert!(!relay.chat_available() && !relay.summary().chat);
+    assert!(chat.send(case_id, "Hello").is_err());
+    assert!(stub.state.chat_turns.lock().unwrap().is_empty());
+    stub.state.chat.store(true, Ordering::SeqCst);
+    relay.refresh_profile().await;
+    assert!(relay.chat_available());
+
+    *stub.state.chat_refusal.lock().unwrap() = Some((
+        429,
+        json!({"error": "chat_budget", "error_description": "Used up", "resets_at": "2026-12-01T00:00:00Z"}),
+    ));
+    chat.send(case_id, "Hello").unwrap();
+    eventually("the refusal", || chat.running().is_empty()).await;
+    let last = updates.lock().unwrap().last().unwrap().clone();
+    assert_eq!(
+        (last.event.as_str(), last.data["code"].as_str(), last.data["message"].as_str()),
+        ("error", Some("chat_budget"), Some("Used up"))
+    );
+    assert!(chat.thread(case_id).unwrap().messages.is_empty());
+
+    let (chunks, stream) = tokio::sync::mpsc::unbounded_channel();
+    *stub.state.chat_stream.lock().unwrap() = Some(stream);
+    let turn_id = chat.send(case_id, "Draft the power of attorney").unwrap();
+    eventually("the turn on the relay", || stub.state.chat_turns.lock().unwrap().len() == 2).await;
+    chat.stop(case_id).await.unwrap();
+    assert_eq!(*stub.state.chat_cancelled.lock().unwrap(), [turn_id]);
+    chunks.send(sse("done", json!({"messages": [], "stopped": "cancelled", "model": null, "usage": {}}))).unwrap();
+    drop(chunks);
+    eventually("the stopped turn", || chat.running().is_empty()).await;
+    let last = updates.lock().unwrap().last().unwrap().clone();
+    assert_eq!((last.event.as_str(), last.data["stopped"].as_str()), ("done", Some("cancelled")));
+    assert_eq!(chat.thread(case_id).unwrap().messages.len(), 1, "the user's message stays with a stopped turn");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relay_without_chat_url_offers_no_chat() {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = Stub::start(1).await;
+    stub.state.chat.store(true, Ordering::SeqCst);
+    stub.state.chat_offered.store(false, Ordering::SeqCst);
+    let (relay, _app) = signed_in_app(dir.path(), &stub).await;
+    let _socket = stub.accept().await;
+    wait_for(&relay, State::Connected).await;
+    relay.refresh_profile().await;
+    assert!(!relay.chat_available());
 }

@@ -8,18 +8,12 @@ use super::{Bindings, DocumentInfo, FillSetInfo, Profiles, Vault};
 impl Vault {
     // -- documents -----------------------------------------------------------
 
-    pub fn store_document(
-        &mut self,
-        template_id: &str,
-        title: &str,
-        profiles: &Profiles,
-        pages: i64,
-        filename: &str,
-        content: &[u8],
-    ) -> Result<i64> {
+    /// In a case: the case moves to the top of the list.
+    pub fn store_document(&mut self, doc: &NewDocument, content: &[u8]) -> Result<i64> {
         let dek = self.require_dek()?.clone();
-        let doc = NewDocument { template_id, title, profiles, pages, filename };
-        self.repo.insert_document(&doc, |id| encrypt::document(&dek, id, content))
+        let id = self.repo.insert_document(doc, |id| encrypt::document(&dek, id, content))?;
+        self.touch_case(doc.case_id)?;
+        Ok(id)
     }
 
     pub fn list_documents(&self) -> Result<Vec<DocumentInfo>> {
@@ -40,6 +34,7 @@ impl Vault {
 
     // -- fill sets -----------------------------------------------------------
 
+    /// `case_id` applies to a new fill set; an existing one stays in its case.
     pub fn save_fill_set(
         &mut self,
         name: &str,
@@ -47,10 +42,16 @@ impl Vault {
         profiles: &Profiles,
         bindings: &Bindings,
         fill_set_id: Option<i64>,
+        case_id: Option<i64>,
     ) -> Result<i64> {
         let dek = self.require_dek()?.clone();
         let plain = serde_json::to_vec(bindings)?;
-        self.repo.save_fill_set(fill_set_id, name, templates, profiles, |id| encrypt::fill_set(&dek, id, &plain))
+        let id = self
+            .repo
+            .save_fill_set(fill_set_id, case_id, name, templates, profiles, |id| encrypt::fill_set(&dek, id, &plain))?;
+        let case_id = self.list_fill_sets()?.into_iter().find(|f| f.id == id).and_then(|f| f.case_id);
+        self.touch_case(case_id)?;
+        Ok(id)
     }
 
     pub fn list_fill_sets(&self) -> Result<Vec<FillSetInfo>> {
@@ -66,8 +67,9 @@ impl Vault {
         Ok((info, serde_json::from_slice(&plain)?))
     }
 
-    pub fn find_fill_set(&self, name: &str) -> Result<Option<i64>> {
-        self.repo.fill_set_id(name)
+    /// By name within a case, or among the fill sets without one.
+    pub fn find_fill_set(&self, case_id: Option<i64>, name: &str) -> Result<Option<i64>> {
+        self.repo.fill_set_id(case_id, name)
     }
 
     pub fn delete_fill_set(&self, id: i64) -> Result<()> {

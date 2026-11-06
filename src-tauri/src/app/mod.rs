@@ -68,7 +68,8 @@ pub fn notify(handle: &AppHandle, title: &str, body: &str) {
 }
 
 pub fn lock(handle: &AppHandle) {
-    state(handle).app.vault().lock();
+    stop_chats(handle);
+    state(handle).app.lock();
     platform::clear_opened_documents();
     let _ = handle.emit("vault-locked", ());
     tray::refresh(handle);
@@ -174,7 +175,7 @@ fn start_auto_lock(handle: &AppHandle) {
         let limit = Duration::from_secs(state.app.config.auto_lock_minutes as u64 * 60);
         let idle = state.last_activity.lock().unwrap().elapsed();
         let unlocked = state.app.vault().unlocked();
-        if unlocked && idle > limit && !state.busy.load(Ordering::SeqCst) {
+        if unlocked && idle > limit && !state.busy.load(Ordering::SeqCst) && !chat_running(&handle) {
             lock(&handle);
         } else {
             tray::refresh(&handle);
@@ -182,8 +183,21 @@ fn start_auto_lock(handle: &AppHandle) {
     });
 }
 
+/// Every chat turn ends when the vault locks.
+fn stop_chats(handle: &AppHandle) {
+    if let Some(chat) = handle.try_state::<Arc<crate::chat::Chat>>() {
+        chat.stop_all();
+    }
+}
+
+/// A chat turn is the user's work going on: auto-lock waits for it.
+fn chat_running(handle: &AppHandle) -> bool {
+    handle.try_state::<Arc<crate::chat::Chat>>().is_some_and(|chat| !chat.running().is_empty())
+}
+
 pub fn quit(handle: &AppHandle) {
-    state(handle).app.vault().lock();
+    stop_chats(handle);
+    state(handle).app.lock();
     platform::clear_opened_documents();
     handle.exit(0);
 }
@@ -203,6 +217,7 @@ pub fn run() {
     }
     let secrets = OsKeyring::for_data_dir(&config.data_dir, &Config::default_data_dir());
     let app = Arc::new(Blankey::new(config, Box::new(secrets)).expect("cannot open the vault"));
+    app.clear_scratch();
     let profile = app.vault().relay_language().ok().flatten();
     app.set_language(&app.resolve_language(profile.as_deref()));
     tauri::Builder::default()
@@ -233,6 +248,16 @@ pub fn run() {
                 return Ok(());
             }
             let relay = online::init(&handle, &app);
+            let chat_handle = handle.clone();
+            let chat = crate::chat::Chat::new(
+                app.clone(),
+                relay.clone(),
+                tauri::async_runtime::handle().inner().clone(),
+                move |update| {
+                    let _ = chat_handle.emit("chat-event", update);
+                },
+            );
+            handle.manage(chat);
             tray::build(&handle)?;
             let hook_handle = handle.clone();
             app.set_request_hook(move |id| on_request(&hook_handle, id));
@@ -254,6 +279,10 @@ pub fn run() {
             let library_handle = handle.clone();
             app.set_library_hook(move || {
                 let _ = library_handle.emit("library-changed", ());
+            });
+            let cases_handle = handle.clone();
+            app.set_cases_hook(move || {
+                let _ = cases_handle.emit("cases-changed", ());
             });
             crate::library::watch::start(app.clone(), crate::core::LIBRARY_POLL);
             if let Some(old) = moved_from {

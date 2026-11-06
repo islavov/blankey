@@ -226,6 +226,43 @@ fn placeholders_resolve_to_tokenize_finds() {
 }
 
 #[test]
+fn blanks_are_numbered_placeholders_that_keep_their_hints() {
+    let dir = tempfile::tempdir().unwrap();
+    let seller = seller();
+    let path = docx_with(
+        dir.path(),
+        &[
+            &["Аз, долуподписаният ", "..........", "..........", " (трите имена)"],
+            &["ЕГН ", "__________", ", гр. ", "……………"],
+            &[&seller],
+        ],
+    );
+    let doc = Document::docx(&path, &Corrections::default()).unwrap();
+    let paragraphs = doc.redacted_paragraphs();
+    assert_eq!(paragraphs[0].runs, ["Аз, долуподписаният ", "⟦blank:1⟧", "", " (трите имена)"]);
+    assert_eq!(paragraphs[1].text, "ЕГН ⟦blank:2⟧, гр. ⟦blank:3⟧");
+    assert!(paragraphs[2].text.contains("ЕГН ⟦pii:2 ##########⟧"), "{}", paragraphs[2].text);
+    let plain = document::blank_paragraphs(&docx_file::inspect(&path).unwrap());
+    assert_eq!(plain[1].text, paragraphs[1].text, "the numbers do not depend on redaction");
+
+    let finds = doc
+        .resolve_finds(vec![
+            json!({"find": "⟦blank:1⟧", "var": "declarant_name"}),
+            json!({"find": "⟦blank:2⟧", "var": "declarant_egn"}),
+            json!({"find": "⟦blank:3⟧", "var": "declarant_city"}),
+            json!({"find": "⟦pii:2⟧", "var": "seller_egn"}),
+        ])
+        .unwrap();
+    assert_eq!(finds[0], json!({"find": "⟦blank:1⟧", "var": "declarant_name"}), "blanks pass unchanged");
+    let target = dir.path().join("t.docx");
+    docx_file::tokenize(&path, &target, &finds).unwrap();
+    let text = all_text(&target);
+    assert!(text.contains("Аз, долуподписаният {{ declarant_name }} (трите имена)"), "{text}");
+    assert!(text.contains("ЕГН {{ declarant_egn }}, гр. {{ declarant_city }}"), "{text}");
+    assert!(text.contains("ЕГН {{ seller_egn }}"), "{text}");
+}
+
+#[test]
 fn values_across_runs_are_redacted_in_the_first_run() {
     let dir = tempfile::tempdir().unwrap();
     let path = docx_with(dir.path(), &[&["ЕГН 8503", "151235"]]);

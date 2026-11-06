@@ -32,6 +32,11 @@ fn collected_data_aad(id: i64) -> Vec<u8> {
     format!("collected:{id}|data").into_bytes()
 }
 
+/// A chat message's place: its case and seq.
+fn message_aad(case_id: i64, seq: i64) -> Vec<u8> {
+    format!("message:{case_id}|{seq}").into_bytes()
+}
+
 /// The meta key a secret is stored under, also its AAD.
 pub fn secret_key(name: &str) -> String {
     format!("secret:{name}")
@@ -71,6 +76,40 @@ pub fn fill_set(dek: &Key, id: i64, bindings: &[u8]) -> Encrypted {
 
 pub fn open_fill_set(dek: &Key, id: i64, nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
     Ok(crypto::decrypt(dek.as_ref(), nonce, ciphertext, format!("fillset:{id}").as_bytes())?)
+}
+
+// -- cases -------------------------------------------------------------------------
+// The title is plaintext; what the user writes about the case is JSON {"notes"} under the DEK.
+
+pub fn case_private(dek: &Key, id: i64, private: &[u8]) -> Encrypted {
+    encrypt(dek, private, format!("case:{id}").as_bytes())
+}
+
+pub fn open_case_private(dek: &Key, id: i64, nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
+    Ok(crypto::decrypt(dek.as_ref(), nonce, ciphertext, format!("case:{id}").as_bytes())?)
+}
+
+// -- case chat ---------------------------------------------------------------------
+// Each message is its JSON, bound to its case and seq; the summary is text, one per case.
+
+/// Seals one chat message as `seq` of the case.
+pub fn case_message(dek: &Key, case_id: i64, seq: i64, message: &[u8]) -> Encrypted {
+    encrypt(dek, message, &message_aad(case_id, seq))
+}
+
+/// Opens a chat message stored as `seq` of the case.
+pub fn open_case_message(dek: &Key, case_id: i64, seq: i64, nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
+    Ok(crypto::decrypt(dek.as_ref(), nonce, ciphertext, &message_aad(case_id, seq))?)
+}
+
+/// Seals the case's chat summary.
+pub fn case_summary(dek: &Key, case_id: i64, summary: &[u8]) -> Encrypted {
+    encrypt(dek, summary, format!("summary:{case_id}").as_bytes())
+}
+
+/// Opens the case's chat summary.
+pub fn open_case_summary(dek: &Key, case_id: i64, nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
+    Ok(crypto::decrypt(dek.as_ref(), nonce, ciphertext, format!("summary:{case_id}").as_bytes())?)
 }
 
 // -- requests ------------------------------------------------------------------

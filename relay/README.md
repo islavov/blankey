@@ -295,13 +295,18 @@ Before the stream, the relay may answer with JSON `{"error", "error_description"
 
 Otherwise `200 text/event-stream`, with these events (`event:` name, `data:` JSON) and `: ping` comments every 20 s:
 
-- `reasoning_delta {text}` and `text_delta {text}`: the model's reasoning and its answer as they stream.
+- `thinking {text}`: a short summary, made by the relay, of what the model is thinking now: one line of at most about
+  12 words, in the user's language. Each replaces the previous one as the live line; a step can have several, a few
+  seconds apart, and one can come after the step's text has started. The raw reasoning never leaves the relay.
+- `text_delta {text}`: the model's answer as it streams.
 - `tool_call {id, name, input}` and `tool_done {id, is_error}`: one pair per tool call, for the tool cards.
-- `status {state}`: `compacting` while earlier turns are folded into the summary, `waiting` while a request waits for
-  the user (the relay polls `wait_request` itself, in calls of at most 40 s).
+- `status {state}`: `thinking` when the model starts thinking in a step, `compacting` while earlier turns are folded
+  into the summary, `waiting` while a request waits for the user (the relay polls `wait_request` itself, in calls of at
+  most 40 s).
 - `done {messages, stopped, error?, compaction?, model, usage}`, always last:
   - `messages`: the assistant and tool messages the turn added, in order, to append to the thread. Never the user
-    message, which the app stores itself, and never a tool call without its result.
+    message, which the app stores itself, and never a tool call without its result. A `reasoning` part holds its
+    step's `thinking` summaries, one per line, not the raw reasoning.
   - `stopped`: `null` when the model finished; `step_limit`, `cancelled` or `error` otherwise. The messages are kept
     in every case, since their tools already ran.
   - `error {code, message}`: `device_offline`, `not_allowed` (the app refused the grant), `model_unavailable` or

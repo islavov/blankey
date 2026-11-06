@@ -74,6 +74,8 @@ pub struct Template {
     pub origin: Option<Origin>,
     /// why the template no longer matches its library file; it keeps working from its own copy
     pub stale: String,
+    /// the uuid of the case it was made in, until the user makes it global
+    pub case: Option<String>,
 }
 
 /// A template made from a library file: Blankey owns the recipe, the user owns the file. The source in the
@@ -103,6 +105,8 @@ struct ManifestOut<'a> {
     origin: Option<&'a Origin>,
     #[serde(skip_serializing_if = "str::is_empty")]
     stale: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    case: Option<&'a str>,
 }
 
 impl Template {
@@ -130,6 +134,7 @@ impl Template {
             boxes: &self.boxes,
             origin: self.origin.as_ref(),
             stale: &self.stale,
+            case: self.case.as_deref(),
         }
     }
 }
@@ -179,6 +184,8 @@ pub struct SaveTemplate<'a> {
     pub boxes: Vec<Value>,
     /// the library file the source came from; see `Origin`
     pub origin: Option<Origin>,
+    /// the case uuid a new template is made in; a template saved again keeps its own
+    pub case: Option<&'a str>,
 }
 
 impl TemplateStore {
@@ -241,6 +248,7 @@ impl TemplateStore {
             boxes,
             origin: data.get("origin").and_then(|o| serde_yaml::from_value(o.clone()).ok()),
             stale: data.get("stale").map(scalar_text).unwrap_or_default(),
+            case: data.get("case").map(scalar_text).filter(|c| !c.is_empty()),
         })
     }
 
@@ -258,6 +266,10 @@ impl TemplateStore {
         if !bare.is_empty() {
             return Err(format!("Bindings must be Jinja expressions. {}", bare.join("; ")));
         }
+        let case = match self.get(spec.id) {
+            Ok(existing) => existing.case,
+            Err(_) => spec.case.map(str::to_string),
+        };
         let template = Template {
             id: spec.id.to_string(),
             name: spec.name.to_string(),
@@ -270,6 +282,7 @@ impl TemplateStore {
             boxes: spec.boxes,
             origin: spec.origin,
             stale: String::new(),
+            case,
         };
         std::fs::create_dir_all(&template.directory).map_err(|e| e.to_string())?;
         let target = template.source_path();
@@ -301,6 +314,24 @@ impl TemplateStore {
         template.stale = stale.to_string();
         self.write_manifest(&template)?;
         Ok(template)
+    }
+
+    /// Moves the template to a case (its uuid) or, with None, makes it global.
+    pub fn set_case(&self, id: &str, case: Option<&str>) -> Result<Template, String> {
+        let mut template = self.get(id)?;
+        template.case = case.map(str::to_string);
+        self.write_manifest(&template)?;
+        Ok(template)
+    }
+
+    /// `base`, or the first of base-2, base-3... that no template uses.
+    pub fn free_id(&self, base: &str) -> String {
+        let taken = |id: &str| self.root.join(id).join("manifest.yaml").exists();
+        if !taken(base) {
+            return base.to_string();
+        }
+        let stem: String = base.chars().take(60).collect();
+        (2..).map(|n| format!("{stem}-{n}")).find(|id| !taken(id)).expect("a free id")
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
@@ -368,6 +399,7 @@ mod tests {
                 labels: StrMap::new(),
                 boxes: vec![],
                 origin: None,
+                case: None,
             })
             .unwrap();
         let loaded = store.get("t").unwrap();
@@ -394,6 +426,7 @@ mod tests {
                 labels: StrMap::new(),
                 boxes: vec![],
                 origin: None,
+                case: None,
             })
             .unwrap_err();
         assert!(error.contains("{{ applicant.name }}"), "{error}");
@@ -404,6 +437,39 @@ mod tests {
         store.set_origin("t", Some(origin.clone()), "changed").unwrap();
         let loaded = store.get("t").unwrap();
         assert_eq!((loaded.origin, loaded.stale.as_str()), (Some(origin), "changed"));
+    }
+
+    #[test]
+    fn templates_keep_the_case_they_were_made_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TemplateStore::new(dir.path().to_path_buf());
+        let save = |case: Option<&str>| {
+            store.save(SaveTemplate {
+                id: "lease",
+                name: "Lease",
+                kind: TemplateKind::Typst,
+                roles: StrMap::new(),
+                fields: StrMap::new(),
+                description: "",
+                source_file: None,
+                source_bytes: None,
+                source_text: Some("x"),
+                labels: StrMap::new(),
+                boxes: vec![],
+                origin: None,
+                case,
+            })
+        };
+        assert_eq!(save(Some("uuid-a")).unwrap().case.as_deref(), Some("uuid-a"));
+        assert_eq!(store.get("lease").unwrap().case.as_deref(), Some("uuid-a"));
+        assert_eq!(save(None).unwrap().case.as_deref(), Some("uuid-a"), "a save never moves a template");
+
+        store.set_case("lease", None).unwrap();
+        assert_eq!(store.get("lease").unwrap().case, None);
+        assert!(!std::fs::read_to_string(dir.path().join("lease/manifest.yaml")).unwrap().contains("case"));
+
+        assert_eq!(store.free_id("lease"), "lease-2");
+        assert_eq!(store.free_id("deed"), "deed");
     }
 
     #[test]

@@ -53,6 +53,17 @@ pub fn init(handle: &AppHandle, app: &Arc<Blankey>) -> Arc<Relay> {
             tray::refresh(&status_handle);
         }
     });
+    // the sidebar and the case chat read `chat` from `relay_summary`
+    let mut chat = relay.subscribe_chat();
+    let chat_handle = handle.clone();
+    tauri::async_runtime::spawn(async move {
+        while chat.changed().await.is_ok() {
+            let current = chat_handle.try_state::<Arc<Relay>>().map(|relay| relay.status());
+            if let Some(status) = current {
+                let _ = chat_handle.emit("relay-status", status);
+            }
+        }
+    });
     let mut language = relay.subscribe_language();
     let (handle, app) = (handle.clone(), app.clone());
     tauri::async_runtime::spawn(async move {

@@ -1,8 +1,12 @@
 // Invented data for looking at the UI in a browser: three cases with their profiles, files and documents, on top of
-// the test seed.
+// the test seed, and a case chat on the first case.
+
+import { seed, stored } from "../backend.js";
 
 export function demo() {
   return {
+    relay: { ...seed().relay, chat: true },
+    chats: { 1: saleChat() },
     profiles: [
       { id: 1, name: "John", kind: "person" },
       { id: 2, name: "Acme", kind: "company" },
@@ -75,6 +79,38 @@ export function demo() {
     ],
   };
 }
+
+const saleChat = () => ({
+  summary: "The seller's ID card and the 2019 title deed were imported. The bank confirmed the mortgage release in October.",
+  messages: [
+    stored(1, "user", [{ type: "text", text: "Prepare the sale contract for the deed on 14 November." }]),
+    stored(2, "assistant", [
+      { type: "reasoning", text: "Looking for the sale contract template in this case\nChecking which of the parties' fields are filled" },
+      { type: "tool-call", toolCallId: "c1", toolName: "find_templates", input: { query: "sale contract" } },
+      { type: "tool-call", toolCallId: "c2", toolName: "find_profiles", input: { keys: ["name", "egn", "address.city"] } },
+    ]),
+    stored(3, "tool", [
+      { type: "tool-result", toolCallId: "c1", toolName: "find_templates", output: { type: "json", value: [{ id: "oak-sale-contract", blanks: 9 }] } },
+      { type: "tool-result", toolCallId: "c2", toolName: "find_profiles", output: { type: "json", value: [{ id: 3, name: "Maria Example" }, { id: 4, name: "Peter Sample" }] } },
+    ]),
+    stored(4, "assistant", [
+      { type: "tool-call", toolCallId: "c3", toolName: "check_bindings", input: { template_id: "oak-sale-contract", profiles: { seller: 3, buyer: 4 } } },
+    ]),
+    stored(5, "tool", [{ type: "tool-result", toolCallId: "c3", toolName: "check_bindings", output: { type: "json", value: { empty: ["buyer.egn"] } } }]),
+    stored(6, "assistant", [
+      { type: "tool-call", toolCallId: "c4", toolName: "request_profile_input", input: { profile_id: 4, fields: [{ key: "egn", label: "EGN", type: "egn" }] } },
+    ]),
+    stored(7, "tool", [{ type: "tool-result", toolCallId: "c4", toolName: "request_profile_input", output: { type: "error-text", value: "The user cancelled the request." } }]),
+    stored(8, "assistant", [
+      {
+        type: "text",
+        text: "The contract template is ready, and its blanks are bound to Maria Example as the seller and Peter Sample as the buyer.\n\nPeter Sample's EGN is still empty, and the request for it was cancelled. Once it is in his profile, ask me to fill the contract and confirm the fill in Blankey.",
+      },
+    ]),
+    stored(9, "user", [{ type: "text", text: "He brings his ID card on Monday. Remind me what else is missing." }]),
+    stored(10, "assistant", [{ type: "text", text: "Only his EGN. Everything else the contract needs is in the two profiles and the case notes." }]),
+  ],
+});
 
 const file = (id, caseId, name, type, mb, description, created_at) => ({
   id,

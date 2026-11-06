@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use crate::core::{Blankey, Problem, ProfileSave, Target};
 use crate::crypto;
 use crate::fieldtypes;
-use crate::vault::{Link, SubmissionInfo};
+use crate::vault::{Link, NewFile, SubmissionInfo};
 
 /// Same value as MAX_FILE_BYTES in the relay and its collect page.
 pub const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
@@ -469,10 +469,15 @@ impl Blankey {
         let mut kept = Vec::new();
         for (index, (file, bytes)) in header.files.iter().zip(&contents).enumerate() {
             if keep.contains(&index) {
-                let id = self
-                    .vault()
-                    .add_collected_file(Some(profile_id), &link.link_id, &file.name, &file.file_type, bytes)
-                    .map_err(|e| e.to_string())?;
+                let new = NewFile {
+                    profile_id: Some(profile_id),
+                    link_id: &link.link_id,
+                    case_id: None,
+                    name: &file.name,
+                    file_type: &file.file_type,
+                    description: "",
+                };
+                let id = self.vault().add_collected_file(new, bytes).map_err(|e| e.to_string())?;
                 kept.push(json!({"file_id": id, "size": file.size}));
             }
         }
@@ -514,25 +519,52 @@ impl Blankey {
         Ok(())
     }
 
-    /// Files the user keeps with a profile, encrypted like the ones a collection link brings in (with no link). Each
-    /// is checked against the size limit before any is added.
-    pub fn add_profile_files(&self, profile_id: i64, paths: &[PathBuf]) -> Result<usize, String> {
-        self.vault().get_profile(profile_id).map_err(|e| e.to_string())?;
+    /// Files the user keeps, encrypted like the ones a collection link brings in (with no link), each with its
+    /// description. Every file is checked against the size limit before any is added. Returns their ids.
+    pub fn keep_files(&self, owner: FileOwner, files: &[(PathBuf, String)]) -> Result<Vec<i64>, String> {
+        let (profile_id, case_id) = match owner {
+            FileOwner::Profile(id) => {
+                self.vault().get_profile(id).map_err(|e| e.to_string())?;
+                (Some(id), None)
+            }
+            FileOwner::Case(id) => {
+                self.vault().get_case(id).map_err(|e| e.to_string())?;
+                (None, Some(id))
+            }
+        };
         let name = |path: &PathBuf| path.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
-        for path in paths {
+        for (path, _) in files {
             if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > MAX_FILE_BYTES {
                 return Err(format!("{} is larger than 50 MB", name(path)));
             }
         }
-        for path in paths {
+        let mut ids = Vec::new();
+        for (path, description) in files {
             let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-            let id = self
-                .vault()
-                .add_collected_file(Some(profile_id), "", &name(path), file_type(&name(path)), &bytes)
-                .map_err(|e| e.to_string())?;
-            self.audit("user", "add_profile_file", &format!("profile={profile_id} file={id}"));
+            let name = name(path);
+            let new =
+                NewFile { profile_id, link_id: "", case_id, name: &name, file_type: file_type(&name), description };
+            let id = self.vault().add_collected_file(new, &bytes).map_err(|e| e.to_string())?;
+            match owner {
+                FileOwner::Profile(profile) => {
+                    self.audit("user", "add_profile_file", &format!("profile={profile} file={id}"))
+                }
+                FileOwner::Case(case) => self.audit("user", "import_case_file", &format!("case={case} file={id}")),
+            }
+            ids.push(id);
         }
-        Ok(paths.len())
+        Ok(ids)
+    }
+
+    /// Files the user keeps with a profile.
+    pub fn add_profile_files(&self, profile_id: i64, paths: &[PathBuf]) -> Result<usize, String> {
+        let files: Vec<(PathBuf, String)> = paths.iter().map(|p| (p.clone(), String::new())).collect();
+        Ok(self.keep_files(FileOwner::Profile(profile_id), &files)?.len())
+    }
+
+    /// Files dropped on or picked for a case, each with what it is and whose.
+    pub fn import_case_files(&self, case_id: i64, files: &[(PathBuf, String)]) -> Result<usize, String> {
+        Ok(self.keep_files(FileOwner::Case(case_id), files)?.len())
     }
 
     pub fn export_collected_file(&self, id: i64, target: &std::path::Path) -> Result<(), String> {
@@ -543,11 +575,19 @@ impl Blankey {
     }
 }
 
+/// Who keeps a file the user adds.
+#[derive(Clone, Copy)]
+pub enum FileOwner {
+    Profile(i64),
+    Case(i64),
+}
+
 /// The media type of a file the user adds, by its extension.
 fn file_type(name: &str) -> &'static str {
     let extension = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
     match extension.as_str() {
         "pdf" => "application/pdf",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -694,7 +734,7 @@ pub(crate) mod tests {
 
         let mut values = opened.values.clone();
         values["email"] = "not an email".into();
-        let jane = || Target::New { name: "Jane", kind: "person" };
+        let jane = || Target::New { name: "Jane", kind: "person", case: None };
         let problems = app.resolve_submission("sub-1", jane(), &values, &[0]).unwrap();
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(app.vault().list_profiles().unwrap().is_empty());
@@ -794,7 +834,7 @@ pub(crate) mod tests {
         submit(&app, "Ab3dE9z", &public, &plain, "sub-saved");
         let waiting = submit(&app, "Ab3dE9z", &public, &plain, "sub-waiting");
         let values = app.open_submission("sub-saved").unwrap().values;
-        let jane = Target::New { name: "Jane", kind: "person" };
+        let jane = Target::New { name: "Jane", kind: "person", case: None };
         assert!(app.resolve_submission("sub-saved", jane, &values, &[0]).unwrap().is_empty());
         let other = stored_link(&app, "XchaBj2");
         submit(&app, "XchaBj2", &other, &plain, "sub-other");

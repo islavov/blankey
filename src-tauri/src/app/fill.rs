@@ -31,6 +31,8 @@ pub struct OpenArgs {
     /// start from this fill set but save a new one
     pub copy_fill_set_id: Option<i64>,
     pub request_id: Option<i64>,
+    /// the case a new fill set goes in; a saved one stays in its own
+    pub case_id: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -50,20 +52,29 @@ pub struct Session {
     roles: IndexMap<String, String>,
     profiles: Profiles,
     all_profiles: Vec<Profile>,
+    case_id: Option<i64>,
     vars: Vec<FillVar>,
     bindings: Map<String, Value>,
     suggested_values: IndexMap<String, String>,
     ask: IndexMap<String, String>,
 }
 
+/// The case of the fill set when there is one, else the one the form is opened in.
+fn fill_case(app: &Blankey, fill_set_id: Option<i64>, case_id: Option<i64>) -> Result<Option<i64>, String> {
+    let Some(id) = fill_set_id else { return Ok(case_id) };
+    let sets = app.vault().list_fill_sets().map_err(|e| e.to_string())?;
+    Ok(sets.into_iter().find(|f| f.id == id).ok_or_else(|| format!("Unknown fill set {id}"))?.case_id)
+}
+
 pub fn open(app: &Blankey, args: OpenArgs) -> Result<Session, String> {
     let mut templates = args.templates;
     let mut profiles = args.profiles;
     let mut name = args.name;
+    let case_id = fill_case(app, args.fill_set_id, args.case_id)?;
     let vault_fill_set = match args.fill_set_id {
         Some(id) => Some(id),
         None if !name.is_empty() && args.copy_fill_set_id.is_none() => {
-            app.vault().find_fill_set(&name).map_err(|e| e.to_string())?
+            app.vault().find_fill_set(case_id, &name).map_err(|e| e.to_string())?
         }
         None => None,
     };
@@ -122,7 +133,8 @@ pub fn open(app: &Blankey, args: OpenArgs) -> Result<Session, String> {
             .collect(),
         roles,
         profiles,
-        all_profiles: app.vault().list_profiles().map_err(|e| e.to_string())?,
+        all_profiles: app.visible_profiles(&app.scope(case_id)?)?,
+        case_id,
         vars: vars.into_values().collect(),
         bindings,
         suggested_values: args.values,
@@ -252,6 +264,8 @@ pub struct SaveArgs {
     pub profiles: Profiles,
     pub bindings: Map<String, Value>,
     pub generate: bool,
+    #[serde(default)]
+    pub case_id: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -274,7 +288,9 @@ pub fn save(app: &Blankey, args: SaveArgs) -> Result<Saved, String> {
         missing.sort();
         problems.push(format!("Choose profiles for: {}", missing.join(", ")));
     }
-    let existing = if name.is_empty() { None } else { app.vault().find_fill_set(&name).map_err(|e| e.to_string())? };
+    let case_id = fill_case(app, args.fill_set_id, args.case_id)?;
+    let existing =
+        if name.is_empty() { None } else { app.vault().find_fill_set(case_id, &name).map_err(|e| e.to_string())? };
     if existing.is_some() && existing != args.fill_set_id {
         problems.push(format!("A fill set named {name:?} already exists"));
     }
@@ -284,7 +300,7 @@ pub fn save(app: &Blankey, args: SaveArgs) -> Result<Saved, String> {
     let fill_set_id = {
         let mut vault = app.vault();
         let id = vault
-            .save_fill_set(&name, &args.templates, &args.profiles, &args.bindings, args.fill_set_id)
+            .save_fill_set(&name, &args.templates, &args.profiles, &args.bindings, args.fill_set_id, case_id)
             .map_err(|e| e.to_string())?;
         let _ = vault.audit("user", "save_fill_set", &id.to_string());
         id
@@ -326,4 +342,63 @@ pub fn close(app: &Blankey, args: CloseArgs) -> Result<(), String> {
         None => ("cancelled", json!({"outcome": "cancelled"})),
     };
     app.vault().resolve_request(args.request_id, status, result).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::tools::tests::app;
+    use crate::templates::{SaveTemplate, StrMap, TemplateKind};
+    use crate::vault::Bindings;
+
+    #[test]
+    fn fill_sets_reopen_by_name_within_their_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let template = SaveTemplate {
+            id: "deed",
+            name: "Deed",
+            kind: TemplateKind::Typst,
+            roles: StrMap::new(),
+            fields: [("price".to_string(), String::new())].into_iter().collect(),
+            description: "",
+            source_file: None,
+            source_bytes: None,
+            source_text: Some("x"),
+            labels: StrMap::new(),
+            boxes: vec![],
+            origin: None,
+            case: None,
+        };
+        app.templates.save(template).unwrap();
+        let case = app.create_case("Sale").unwrap();
+        let none = Profiles::new();
+        let save =
+            |case_id| app.vault().save_fill_set("Sale", &["deed".into()], &none, &Bindings::new(), None, case_id);
+        let (global, in_case) = (save(None).unwrap(), save(Some(case)).unwrap());
+
+        let open =
+            |case_id| super::open(&app, OpenArgs { name: "Sale".into(), case_id, ..Default::default() }).unwrap();
+        assert_eq!((open(None).fill_set_id, open(None).case_id), (Some(global), None));
+        assert_eq!((open(Some(case)).fill_set_id, open(Some(case)).case_id), (Some(in_case), Some(case)));
+        // a saved fill set reopens in its own case, whatever the form was opened in
+        let reopened = super::open(&app, OpenArgs { fill_set_id: Some(in_case), ..Default::default() }).unwrap();
+        assert_eq!(reopened.case_id, Some(case));
+
+        let args = |fill_set_id, case_id| SaveArgs {
+            request_id: None,
+            fill_set_id,
+            name: "Sale".into(),
+            templates: vec!["deed".into()],
+            profiles: Profiles::new(),
+            bindings: Map::new(),
+            generate: false,
+            case_id,
+        };
+        let other = app.create_case("Lease").unwrap();
+        assert!(super::save(&app, args(None, Some(case))).err().unwrap().contains("already exists"));
+        let made = super::save(&app, args(None, Some(other))).unwrap().fill_set_id;
+        assert_eq!(app.vault().list_fill_sets().unwrap().iter().find(|f| f.id == made).unwrap().case_id, Some(other));
+        assert_eq!(super::save(&app, args(Some(in_case), None)).unwrap().fill_set_id, in_case);
+    }
 }

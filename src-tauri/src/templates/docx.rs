@@ -22,6 +22,11 @@ const BLANK: &str = "[____]";
 pub static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{\s*([A-Za-z_]\w*)[^}]*\}\}").unwrap());
 static VAR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z_]\w*$").unwrap());
 static ANY_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)\{\{.*?\}\}").unwrap());
+/// `⟦blank:3⟧`: the document's 3rd fill-in blank, as inspect shows it and a replacement's find names it.
+pub static BLANK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"⟦blank:(\d+)(?: [^⟧]*)?⟧").unwrap());
+const FILLER: [char; 3] = ['.', '…', '_'];
+/// How long a row of filler must be to count as a blank; "…" counts as three.
+const BLANK_MIN: usize = 3;
 
 #[derive(Serialize, Debug, Clone)]
 pub struct ParagraphInfo {
@@ -195,6 +200,22 @@ fn with_body<T>(path: &Path, f: impl FnOnce(&Body) -> T) -> Result<T, String> {
     Ok(f(&read_body(&doc)))
 }
 
+/// Byte range of each direct run in the paragraph's text, in the order of `Para::runs`.
+fn run_spans(body: &Body, p: &Para) -> Vec<(usize, usize)> {
+    let (mut spans, mut at) = (Vec::new(), 0);
+    for segment in &p.segments {
+        let len = match segment {
+            Segment::Run(i) => body.runs[*i].text.len(),
+            Segment::Fixed(t) => t.len(),
+        };
+        if let Segment::Run(_) = segment {
+            spans.push((at, at + len));
+        }
+        at += len;
+    }
+    spans
+}
+
 pub fn inspect(path: &Path) -> Result<Vec<ParagraphInfo>, String> {
     with_body(path, |body| {
         body.paragraphs
@@ -207,22 +228,137 @@ pub fn inspect(path: &Path) -> Result<Vec<ParagraphInfo>, String> {
                 }
                 let tags = TAG_RE.captures_iter(&text).map(|c| c[1].to_string()).collect();
                 let runs = p.runs.iter().map(|&i| body.runs[i].text.clone()).collect();
-                let mut run_spans = Vec::new();
-                let mut at = 0;
-                for segment in &p.segments {
-                    let len = match segment {
-                        Segment::Run(i) => body.runs[*i].text.len(),
-                        Segment::Fixed(t) => t.len(),
-                    };
-                    if let Segment::Run(_) = segment {
-                        run_spans.push((at, at + len));
-                    }
-                    at += len;
-                }
+                let run_spans = run_spans(body, p);
                 Some(ParagraphInfo { index, location: p.location.clone(), text, runs, tags, run_spans })
             })
             .collect()
     })
+}
+
+/// The placeholder id of the n-th blank of a document, from 1.
+pub fn blank_id(n: usize) -> String {
+    format!("blank:{n}")
+}
+
+/// Fill-in blanks in a paragraph's text, as byte ranges: rows of dots, ellipses or underscores, spaced
+/// (". . . .") or not, at least `BLANK_MIN` long and inside the paragraph's runs (`runs`, byte ranges in `text`,
+/// in order). A dot right after a letter ends an abbreviation ("гр.......") and stays out of the blank.
+pub fn blanks(text: &str, runs: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let filler = |i: usize| chars.get(i).is_some_and(|(_, c)| FILLER.contains(c));
+    let space = |i: usize| chars.get(i).is_some_and(|(_, c)| matches!(c, ' ' | '\u{a0}'));
+    let (mut out, mut i) = (Vec::new(), 0);
+    while i < chars.len() {
+        if !filler(i) {
+            i += 1;
+            continue;
+        }
+        let abbreviation = chars[i].1 == '.' && i > 0 && chars[i - 1].1.is_alphabetic();
+        let start = if abbreviation { i + 1 } else { i };
+        let mut end = i;
+        loop {
+            let group = end;
+            while filler(end) {
+                end += 1;
+            }
+            // ". . . ." is one blank: single fillers joined by single spaces
+            if end - group == 1 && space(end) && filler(end + 1) && !filler(end + 2) {
+                end += 1;
+                continue;
+            }
+            break;
+        }
+        let weight: usize = chars[start..end]
+            .iter()
+            .map(|&(_, c)| match c {
+                '…' => 3,
+                c if FILLER.contains(&c) => 1,
+                _ => 0,
+            })
+            .sum();
+        if weight >= BLANK_MIN {
+            let (s, (last, c)) = (chars[start].0, chars[end - 1]);
+            let span = (s, last + c.len_utf8());
+            if in_runs(runs, span) {
+                out.push(span);
+            }
+        }
+        i = end;
+    }
+    out
+}
+
+/// The span lies in runs that follow each other, with no hyperlink text in between.
+fn in_runs(runs: &[(usize, usize)], (start, end): (usize, usize)) -> bool {
+    let mut at = start;
+    for &(s, e) in runs {
+        if s <= at && at < e {
+            at = e;
+        }
+        if at >= end {
+            return true;
+        }
+    }
+    false
+}
+
+/// Every blank of the document in order (blank n is at n - 1): the runs it covers, with its byte range in each.
+fn blank_places(body: &Body) -> Vec<Vec<(usize, Range<usize>)>> {
+    let mut places = Vec::new();
+    for p in &body.paragraphs {
+        let spans = run_spans(body, p);
+        for (start, end) in blanks(&body.text(p), &spans) {
+            places.push(
+                p.runs
+                    .iter()
+                    .zip(&spans)
+                    .filter(|(_, &(s, e))| s < end && start < e)
+                    .map(|(&run, &(s, e))| (run, start.max(s) - s..end.min(e) - s))
+                    .collect(),
+            );
+        }
+    }
+    places
+}
+
+/// Replaces whole blanks (finds like `⟦blank:3⟧`) with their tags, before any text replacement and on the
+/// document's own numbering. A blank over several runs gets its tag in the first and is removed from the rest.
+fn fill_blanks(body: &mut Body, items: &[&Value], report: &mut Vec<String>, errors: &mut Vec<String>) {
+    let places = blank_places(body);
+    let mut taken: HashMap<usize, String> = HashMap::new();
+    let mut edits: Vec<(usize, Range<usize>, String)> = Vec::new();
+    for item in items {
+        let find = item.get("find").and_then(Value::as_str).unwrap_or("");
+        let var = item.get("var").and_then(Value::as_str).unwrap_or("");
+        if !VAR_RE.is_match(var) {
+            errors.push(format!("{item}: needs non-empty 'find' and an identifier 'var'"));
+            continue;
+        }
+        let Some(m) = BLANK_RE.captures(find).filter(|m| m[0].len() == find.len()) else {
+            errors.push(format!("{var}: {find:?}: a blank goes alone in find, as \"⟦blank:3⟧\""));
+            continue;
+        };
+        let n: usize = m[1].parse().unwrap_or(0);
+        let Some(runs) = n.checked_sub(1).and_then(|i| places.get(i)) else {
+            errors.push(format!("{var}: there is no blank {n}; the document has {}", places.len()));
+            continue;
+        };
+        if let Some(other) = taken.get(&n) {
+            errors.push(format!("{var}: blank {n} is already replaced by {other}"));
+            continue;
+        }
+        taken.insert(n, var.to_string());
+        for (i, (run, range)) in runs.iter().enumerate() {
+            let text = if i == 0 { format!("{{{{ {var} }}}}") } else { String::new() };
+            edits.push((*run, range.clone(), text));
+        }
+        report.push(format!("{var}: replaced blank {n}"));
+    }
+    edits.sort_by_key(|(run, range, _)| (*run, std::cmp::Reverse(range.start)));
+    for (run, range, text) in edits {
+        body.runs[run].text.replace_range(range, &text);
+        body.runs[run].changed = true;
+    }
 }
 
 /// Tag names in document order, without duplicates.
@@ -322,8 +458,9 @@ fn w_prefix(xml: &str, doc: &Document) -> String {
 }
 
 /// Replaces text spans with {{ var }} tags. Each replacement: {find, var, occurrence?} with occurrence 1-based
-/// over the whole document (omit to replace all). A span must sit inside one run. Returns a report line per
-/// replacement; fails listing every replacement that did not apply.
+/// over the whole document (omit to replace all). A span must sit inside one run; a whole blank (`⟦blank:n⟧`)
+/// may cross runs and is replaced first. Returns a report line per replacement; fails listing every replacement
+/// that did not apply.
 pub fn tokenize(source: &Path, target: &Path, replacements: &[Value]) -> Result<Vec<String>, String> {
     let bytes = std::fs::read(source).map_err(|e| format!("{}: {e}", source.display()))?;
     let xml = read_part(source, BODY_PART)?;
@@ -332,7 +469,11 @@ pub fn tokenize(source: &Path, target: &Path, replacements: &[Value]) -> Result<
     let original: Vec<String> = body.paragraphs.iter().map(|p| body.text(p)).collect();
     let original = original.join("\n");
     let (mut report, mut errors) = (Vec::new(), Vec::new());
-    for item in replacements {
+    let (blank_items, text_items): (Vec<&Value>, Vec<&Value>) = replacements
+        .iter()
+        .partition(|item| item.get("find").and_then(Value::as_str).is_some_and(|find| BLANK_RE.is_match(find)));
+    fill_blanks(&mut body, &blank_items, &mut report, &mut errors);
+    for item in text_items {
         let find = item.get("find").and_then(Value::as_str).unwrap_or("");
         let var = item.get("var").and_then(Value::as_str).unwrap_or("");
         let occurrence = item.get("occurrence").and_then(Value::as_u64).map(|o| o as usize);
@@ -704,6 +845,47 @@ mod tests {
         assert!(error.contains("b: \"LTD, Company\" spans several runs"), "{error}");
         assert!(error.contains("c: \"John Smith\" occurs 2x in runs, no occurrence 5"), "{error}");
         assert!(error.contains("identifier 'var'"), "{error}");
+    }
+
+    #[test]
+    fn blanks_are_rows_of_filler() {
+        let found = |text: &str| {
+            let spans = blanks(text, &[(0, text.len())]);
+            spans.into_iter().map(|(s, e)| text[s..e].to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(found("Аз, ............ (трите имена), ЕГН __________"), ["............", "__________"]);
+        assert_eq!(found("гр.......... и т.н..."), ["........."], "abbreviation dots stay, so does an ellipsis");
+        assert_eq!(found("на 20...г. в . . . . ."), ["...", ". . . . ."]);
+        assert_eq!(found("договор. .......... „……“"), ["..........", "……"]);
+        assert!(found("т.е. 1.2.3. и др..").is_empty());
+        let text = ".....__.....";
+        assert_eq!(blanks(text, &[(0, 5), (5, 12)]), [(0, 12)], "over adjacent runs");
+        assert!(blanks(text, &[(0, 5), (7, 12)]).is_empty(), "not through hyperlink text");
+    }
+
+    #[test]
+    fn tokenize_replaces_whole_blanks() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("template.docx");
+        let replacements = serde_json::json!([
+            {"find": "⟦blank:2⟧", "var": "contract_date"},
+            {"find": "⟦blank:1⟧", "var": "contract_no"},
+            {"find": "John Smith", "var": "manager_name"},
+        ]);
+        tokenize(&fixture(), &target, replacements.as_array().unwrap()).unwrap();
+        let text = inspect(&target).unwrap()[0].text.clone();
+        assert_eq!(text, "Contract No {{ contract_no }} / {{ contract_date }}2026");
+
+        let bad = serde_json::json!([
+            {"find": "⟦blank:99⟧", "var": "a"},
+            {"find": "⟦blank:1⟧", "var": "b"},
+            {"find": "⟦blank:1⟧", "var": "c"},
+            {"find": "No ⟦blank:2⟧", "var": "d"},
+        ]);
+        let error = tokenize(&fixture(), &dir.path().join("t.docx"), bad.as_array().unwrap()).unwrap_err();
+        assert!(error.contains("a: there is no blank 99; the document has"), "{error}");
+        assert!(error.contains("c: blank 1 is already replaced by b"), "{error}");
+        assert!(error.contains("d: \"No ⟦blank:2⟧\": a blank goes alone in find"), "{error}");
     }
 
     #[test]

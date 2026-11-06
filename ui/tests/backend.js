@@ -20,6 +20,27 @@ export const reviewText = "Tenant Jane Example, card 77-ABC, rent 30 days. Signe
 // what detection finds: one name, at both its places
 const detected = [{ id: "pii:1", value: "Jane Example" }];
 
+/** A message of a case's thread as case_chat returns it: the AI SDK message as stored. */
+export const stored = (seq, role, content) => ({ seq, created_at: "2026-11-02T10:00:00", message: { role, content } });
+
+/** A stored thread: a question, the assistant's reasoning and two tool calls (one failed), then its answer. */
+export const chatThread = () => ({
+  summary: null,
+  messages: [
+    stored(1, "user", [{ type: "text", text: "Who sells and who buys?" }]),
+    stored(2, "assistant", [
+      { type: "reasoning", text: "The case has two profiles; their roles say it." },
+      { type: "tool-call", toolCallId: "call-1", toolName: "find_profiles", input: { query: "Mary" } },
+      { type: "tool-call", toolCallId: "call-2", toolName: "get_template", input: { id: "deed" } },
+    ]),
+    stored(3, "tool", [
+      { type: "tool-result", toolCallId: "call-1", toolName: "find_profiles", output: { type: "json", value: [{ id: 3, name: "Mary Example" }] } },
+      { type: "tool-result", toolCallId: "call-2", toolName: "get_template", output: { type: "error-text", value: "Unknown template deed" } },
+    ]),
+    stored(4, "assistant", [{ type: "text", text: "Mary Example sells, John buys.\nThere is no deed template yet." }]),
+  ],
+});
+
 export function seed() {
   return {
     initialized: true,
@@ -80,6 +101,10 @@ export function seed() {
       { sid: "s-1", link_id: "XchaBj2", request_id: 11, size: 2048, received_at: "2026-10-16T10:00:00+00:00", status: "saved", handled_at: "2026-10-16T10:05:00+00:00", profile_id: 1, profile_name: "John" },
     ],
     collected: [],
+    // case id -> {messages, summary}, as case_chat returns them
+    chats: { 1: chatThread() },
+    // the cases with a turn in progress
+    chatRunning: [],
     submissions: {},
     previewDelay: 0,
     telemetry: true,
@@ -92,6 +117,8 @@ export function seed() {
       state: "connected",
       message: "",
       account_url: "https://relay.blankey.io/account",
+      // the relay offers the case chat and the account has it
+      chat: false,
       mcp_url: "https://relay.blankey.io/mcp",
       grants: [
         { grant_id: "g-1", relay_url: "https://relay.blankey.io", client_name: "Claude", redirect_host: "claude.ai", accepted_at: "2026-10-11T09:30:00+00:00", on_relay: true },
@@ -583,7 +610,15 @@ export function createBackend(db = seed()) {
       db.update.auto = enabled;
     },
     relay_status: () => db.relay,
-    relay_summary: () => ({ signed_in: db.relay.signed_in, state: db.relay.state, account: db.relay.account }),
+    relay_summary: () => ({ signed_in: db.relay.signed_in, state: db.relay.state, account: db.relay.account, chat: db.relay.chat ?? false }),
+    case_chat: ({ caseId }) => ({ messages: [], summary: null, ...db.chats[caseId], running: db.chatRunning.includes(caseId) }),
+    // the turn's events are the test's to emit
+    send_chat_message: () => {
+      if (!db.relay.chat) throw "The assistant is not available";
+      return `turn-${calls.filter(([cmd]) => cmd === "send_chat_message").length}`;
+    },
+    stop_chat: () => null,
+    chat_running: () => db.chatRunning,
     relay_login: () => {
       db.relay.state = "signing_in";
     },

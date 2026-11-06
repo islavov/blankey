@@ -238,7 +238,9 @@ async fn mcp(relay: Arc<Relay>, frame: Value) -> Option<Value> {
 
 /// Runs the request against the local MCP router in process, as if it came over HTTP without an Origin.
 async fn forward(relay: &Relay, frame: McpFrame) -> HttpReply {
-    let allowed = relay.app.vault().relay_grant_allowed(&frame.grant, &relay.url()).unwrap_or(false);
+    // the relay's own agent, for a chat turn this app started; any other grant needs the user's approval
+    let allowed = relay.case_turn_running(&frame.grant)
+        || relay.app.vault().relay_grant_allowed(&frame.grant, &relay.url()).unwrap_or(false);
     if !allowed {
         let message = "This agent is not allowed on this computer. Connect it to Blankey again to ask for access.";
         return rpc_error(403, &frame.body, message);
