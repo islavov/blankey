@@ -32,7 +32,8 @@ only profiles' field keys, labels, types and value lengths: work from profile id
 A locked vault: tools wait up to 50 s for the user to unlock it; if still locked, ask them to and retry.
 
 Filling, in one request_fill if you can: find_templates, find_profiles with the keys the template needs, then
-request_fill with a source for every var; wait_request returns the documents. copy_fill_set_id repeats a fill for
+request_fill with a source for every var, suggesting values for the non-personal ones; wait_request returns the
+documents. copy_fill_set_id repeats a fill for
 another party. request_profile_input only to keep data in a profile for later.
 
 New template, named for the kind of document and party (not these parties): inspect_pdf, then save_template (form)
@@ -542,13 +543,14 @@ pub struct RequestFillArgs {
     profiles: Profiles,
     /// Name of the fill set.
     name: String,
-    /// Non-personal literals per var.
+    /// Suggested non-personal values per var; the user checks them in the form.
     #[serde(default, deserialize_with = "lenient::str_map")]
     values: StrMap,
     /// Vault fields per var: "role.key" for a role's profile, or "profile:ID.key" for any profile.
     #[serde(default, deserialize_with = "lenient::str_map")]
     paths: StrMap,
-    /// var -> short hint: the user types these in the form; the value stays in this fill set only.
+    /// var -> short hint, for personal data no profile holds or a value you are unsure of: the user types it in the
+    /// form; it stays in this fill set only.
     #[serde(default, deserialize_with = "lenient::str_map")]
     ask: StrMap,
     /// Reopen this fill set and save over it.
@@ -1218,7 +1220,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Open the fill form; the user checks it and generates the documents. profiles maps each role the bindings\nread to a profile id: pick them yourself instead of asking. Give every var a source:\n- values: non-personal data you know (amounts, dates, listing details).\n- paths: data already in a profile, \"role.key\", or \"profile:ID.key\" for any profile. Not needed when the\n  template default is exactly \"{{ role.key }}\".\n- ask: {var: hint} for the rest; the user types it in the form and it stays in this fill set only. Never put\n  personal data in values.\nSpeed beats a perfect guess: the user can change any source. A var left on a default that gives no vault value is\nrefused unless allow_defaults. fill_set_id reopens a fill set and saves over it; copy_fill_set_id starts from one\nand saves a new fill set under name. Returns a request id; call wait_request."
+        description = "Open the fill form; the user checks it and generates the documents. profiles maps each role the bindings\nread to a profile id: pick them yourself instead of asking. Give every var a source:\n- paths: data already in a profile, \"role.key\", or \"profile:ID.key\" for any profile. Not needed when the\n  template default is exactly \"{{ role.key }}\".\n- values: suggest a value for every other var that is not personal data: from the chat or the case, else a\n  sensible one (today's date, the case's city, the usual term or currency). The user checks it in the form.\n- ask: {var: hint} only for personal data no profile holds, or when you are in doubt about a value; the user\n  types it in the form and it stays in this fill set only. Never put personal data in values.\nSpeed beats a perfect guess: the user can change any source. A var left on a default that gives no vault value is\nrefused unless allow_defaults. fill_set_id reopens a fill set and saves over it; copy_fill_set_id starts from one\nand saves a new fill set under name. Returns a request id; call wait_request."
     )]
     async fn request_fill(&self, Parameters(a): Parameters<RequestFillArgs>, ext: Extensions) -> ToolResult {
         let grant = remote(&ext).map(|r| r.grant);
