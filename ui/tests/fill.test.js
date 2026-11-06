@@ -15,6 +15,8 @@ before(async () => {
 const row = (name) => $(`.fill-row[data-var="${name}"]`);
 const lastBindings = () => backend.called("fill_evaluate").at(-1).args.bindings;
 const openSource = (name) => click($(".source", row(name)));
+const input = (name) => $(".source input", row(name));
+const picks = (name) => $$(".source-pick", row(name)).map((el) => el.textContent.replace(/\s+/g, " ").trim());
 
 test("shows the request with one row per blank and the summary", async () => {
   assert.equal(text(".sheet h2"), "Your AI assistant wants to fill in 2 documents");
@@ -36,14 +38,15 @@ test("the preview shows the first document with the active field highlighted", a
   assert.ok($('.box[data-var="name"]').classList.contains("active"));
 });
 
-test("picking the suggested value from the source menu binds it", async () => {
+test("one click on a blank opens it to type, with its sources listed under it; a pick binds it", async () => {
   await openSource("amount");
-  const items = $$(".menu-item").map((el) => el.textContent);
-  assert.ok(items.includes("Suggested by the assistant  —  34 000"));
-  assert.ok(items.includes("applicant.name  —  John Watson"));
+  assert.equal(document.activeElement, input("amount"));
+  assert.ok(picks("amount").includes("Suggested by the assistant — 34 000"));
+  assert.ok(picks("amount").includes("applicant.name — John Watson"));
+  assert.ok(!picks("amount").includes("Type a value…"), "the input is there already");
 
-  await click(byText(".menu-item", "Suggested by the assistant — 34 000"));
-  assert.equal($(".menu"), null);
+  await click(byText(".source-pick", "Suggested by the assistant — 34 000"));
+  assert.equal($(".source-list"), null);
   assert.deepEqual(lastBindings().amount, { value: "34 000" });
   assert.equal(text(".chip", row("amount")), "Suggested");
   assert.equal(text(".sheet-summary"), "4 fields · 1 empty");
@@ -70,17 +73,14 @@ test("arrow keys move between blanks", async () => {
 
 test("typing a value: Enter keeps it, Escape does not", async () => {
   await openSource("egn");
-  await click(byText(".menu-item", "Type a value…"));
-  const input = $(".source input", row("egn"));
-  assert.equal(document.activeElement, input);
-  await type(input, "8001010000");
-  await key("Enter", input);
+  assert.equal(document.activeElement, input("egn"));
+  await type(input("egn"), "8001010000");
+  await key("Enter", input("egn"));
   assert.deepEqual(lastBindings().egn, { value: "8001010000" });
   assert.equal(text(".chip", row("egn")), "Value");
 
   await openSource("egn");
-  await click(byText(".menu-item", "Type a value…"));
-  const again = $(".source input", row("egn"));
+  const again = input("egn");
   assert.equal(again.value, "8001010000");
   await type(again, "something else");
   await key("Escape", again);
@@ -88,10 +88,26 @@ test("typing a value: Enter keeps it, Escape does not", async () => {
   assert.ok($(".sheet"), "Escape in the input does not close the form");
 });
 
-test("a vault field can be picked as the source", async () => {
+test("typing narrows the list; arrows and Enter pick a vault field", async () => {
   await openSource("who");
-  await click(byText(".menu-item", "applicant.name — John Watson"));
+  await type(input("who"), "watson");
+  assert.deepEqual(picks("who"), ["Template default {{ applicant.name }} — John Watson", "applicant.name — John Watson"]);
+  await key("ArrowDown", input("who"));
+  await key("ArrowDown", input("who"));
+  assert.equal(text(".source-pick.active", row("who")), "applicant.name — John Watson");
+  await key("Enter", input("who"));
   assert.deepEqual(lastBindings().who, { path: "applicant.name" });
+  assert.equal(text(".chip", row("who")), "Vault");
+});
+
+test("opening a blank and leaving it unchanged keeps its source", async () => {
+  const shown = text(".val", row("who"));
+  await openSource("who");
+  assert.equal(input("who").value, shown, "the current value, ready to overwrite");
+  input("who").blur();
+  await settle();
+  assert.equal($(".source input", row("who")), null);
+  assert.deepEqual(lastBindings().who, { path: "applicant.name" }, "not turned into a typed value");
   assert.equal(text(".chip", row("who")), "Vault");
 });
 

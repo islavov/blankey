@@ -37,7 +37,7 @@ test("Enter keeps the value in the fill set and moves to the next asked blank", 
 
 test("a blank can read a field of any profile, not only the role's", async () => {
   await click($(".source", row("name")));
-  await click(byText(".menu-item", "From another profile…"));
+  await click(byText(".source-pick", "From another profile…"));
   await click(byText(".menu-item", "Acme (company)"));
   await settle();
   await click(byText(".menu-item", "name — profile 2 name"));
@@ -46,6 +46,6 @@ test("a blank can read a field of any profile, not only the role's", async () =>
   assert.equal(text(".path", row("name")), "Acme › name");
 
   await click($(".source", row("who")));
-  assert.ok(byText(".menu-head", "Acme"), "a profile already in use is offered directly");
-  await key("Escape", document.body);
+  assert.ok(byText(".source-head", "Acme"), "a profile already in use is offered directly");
+  await key("Escape", document.activeElement);
 });

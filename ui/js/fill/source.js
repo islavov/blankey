@@ -34,11 +34,12 @@ export function describe(v, binding = { default: true }, row = { value: "", empt
   return { kind: "Empty", path, text: t("Choose a source…"), empty: true };
 }
 
-/** Items for the source pop-up of one blank; `choose(binding)` and `type()` apply the pick. */
-export function sourceItems({ v, binding, evaluation, suggested, hasRoles, choose, type, otherProfile, profileName = String }) {
+/** The sources one blank can take, for the list under its input; `choose(binding)` applies a pick. */
+export function sourceItems({ v, binding, evaluation, suggested, hasRoles, choose, otherProfile, profileName = String }) {
   const current = keyOf(binding || { default: true });
   const option = (label, pick) => ({ label, checked: keyOf(pick) === current, action: () => choose(pick) });
-  const items = [{ label: t("Type a value…"), action: type }, "-"];
+  const items = [];
+  const separate = () => items.length && items.at(-1) !== "-" && items.push("-");
 
   const expression = defaultExpression(v);
   if (expression.any) {
@@ -54,7 +55,7 @@ export function sourceItems({ v, binding, evaluation, suggested, hasRoles, choos
 
   for (const [group, entries] of Object.entries(evaluation.sources)) {
     if (!entries.length) continue;
-    if (items[items.length - 1] !== "-") items.push("-");
+    separate();
     items.push({ head: sourceHead(group, profileName) });
     for (const entry of entries) {
       const pick = entry.profile ? { path: entry.path, profile: entry.profile } : { path: entry.path };
@@ -62,8 +63,12 @@ export function sourceItems({ v, binding, evaluation, suggested, hasRoles, choos
     }
   }
   if (!Object.keys(evaluation.sources).length && hasRoles) {
-    items.push("-", { head: t("Choose profiles above to pick vault fields") });
+    separate();
+    items.push({ head: t("Choose profiles above to pick vault fields") });
   }
-  if (otherProfile) items.push("-", { label: t("From another profile…"), action: otherProfile });
+  if (otherProfile) {
+    separate();
+    items.push({ label: t("From another profile…"), action: otherProfile });
+  }
   return items;
 }

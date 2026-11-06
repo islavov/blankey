@@ -141,20 +141,25 @@ function FillForm({ session: s, close }) {
       }))
     );
 
-  const sourceMenu = (field, anchor) => {
-    const v = s.vars.find((x) => x.name === field);
-    const items = sourceItems({
-      v,
+  /** The sources a blank can take, for the list under its input. */
+  const itemsFor = (field) => {
+    const anchor = () => document.querySelector(`.fill-row[data-var="${CSS.escape(field)}"] .source`);
+    return sourceItems({
+      v: s.vars.find((x) => x.name === field),
       binding: bindings[field],
       evaluation,
       suggested: s.suggested_values[field],
       hasRoles: Object.keys(s.roles).length > 0,
       choose: (binding) => bind(field, binding),
-      type: () => setTyping(field),
-      otherProfile: s.all_profiles.length ? () => otherProfileMenu(field, anchor) : null,
+      otherProfile: s.all_profiles.length ? () => otherProfileMenu(field, anchor()) : null,
       profileName,
     });
-    at(anchor, items);
+  };
+
+  /** Selects the blank and opens its input, with its sources listed under it. */
+  const edit = (field) => {
+    select(field);
+    setTyping(field);
   };
 
   const save = async (generate) => {
@@ -204,8 +209,7 @@ function FillForm({ session: s, close }) {
       if (next) select(next);
     } else if ((e.key === "Enter" || e.key === " ") && active) {
       e.preventDefault();
-      const source = document.querySelector(`.fill-row[data-var="${CSS.escape(active)}"] .source`);
-      if (source) sourceMenu(active, source);
+      edit(active);
     }
   };
   useDocumentKeys(onKey);
@@ -260,12 +264,10 @@ function FillForm({ session: s, close }) {
               ask=${s.ask[v.name]}
               profileName=${profileName}
               active=${v.name === active}
-              typing=${v.name === typing}
+              editing=${v.name === typing}
+              items=${v.name === typing ? itemsFor(v.name) : null}
               onSelect=${() => select(v.name)}
-              onMenu=${(anchor) => {
-                select(v.name);
-                sourceMenu(v.name, anchor);
-              }}
+              onEdit=${() => edit(v.name)}
               onTyped=${(value, enter) => {
                 const next = value !== null ? { ...bindings, [v.name]: { value } } : bindings;
                 if (value !== null) setBindings(next);
