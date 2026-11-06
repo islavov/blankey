@@ -124,10 +124,13 @@ enum Segment {
 }
 
 struct Para {
+    node: roxmltree::NodeId,
     location: String,
     segments: Vec<Segment>,
     /// direct runs, as indexes into the run list
     runs: Vec<usize>,
+    /// a replacement removes the whole paragraph
+    removed: bool,
 }
 
 struct Body {
@@ -165,7 +168,7 @@ fn read_body(doc: &Document) -> Body {
     let mut body = Body { paragraphs: Vec::new(), runs: Vec::new() };
     let Some(root) = doc.root_element().children().find(|c| is_w(c, "body")) else { return body };
     let add = |p: Node, location: String, body: &mut Body| {
-        let mut para = Para { location, segments: Vec::new(), runs: Vec::new() };
+        let mut para = Para { node: p.id(), location, segments: Vec::new(), runs: Vec::new(), removed: false };
         for child in p.children() {
             if is_w(&child, "r") {
                 let index = body.runs.len();
@@ -302,57 +305,106 @@ fn in_runs(runs: &[(usize, usize)], (start, end): (usize, usize)) -> bool {
     false
 }
 
-/// Every blank of the document in order (blank n is at n - 1): the runs it covers, with its byte range in each.
-fn blank_places(body: &Body) -> Vec<Vec<(usize, Range<usize>)>> {
+/// A blank's paragraph, and the runs it covers with its byte range in each.
+type BlankPlace = (usize, Vec<(usize, Range<usize>)>);
+
+/// Every blank of the document in order (blank n is at n - 1).
+fn blank_places(body: &Body) -> Vec<BlankPlace> {
     let mut places = Vec::new();
-    for p in &body.paragraphs {
+    for (index, p) in body.paragraphs.iter().enumerate() {
         let spans = run_spans(body, p);
         for (start, end) in blanks(&body.text(p), &spans) {
-            places.push(
-                p.runs
-                    .iter()
-                    .zip(&spans)
-                    .filter(|(_, &(s, e))| s < end && start < e)
-                    .map(|(&run, &(s, e))| (run, start.max(s) - s..end.min(e) - s))
-                    .collect(),
-            );
+            let runs = p
+                .runs
+                .iter()
+                .zip(&spans)
+                .filter(|(_, &(s, e))| s < end && start < e)
+                .map(|(&run, &(s, e))| (run, start.max(s) - s..end.min(e) - s))
+                .collect();
+            places.push((index, runs));
         }
     }
     places
 }
 
-/// Replaces whole blanks (finds like `⟦blank:3⟧`) with their tags, before any text replacement and on the
-/// document's own numbering. A blank over several runs gets its tag in the first and is removed from the rest.
+/// What a replacement does with what it finds: puts a tag there, or removes the text or its whole paragraph.
+enum Action {
+    Tag(String),
+    RemoveText,
+    RemoveParagraph,
+}
+
+impl Action {
+    /// A replacement's `var`, or its `remove`: "text" or "paragraph".
+    fn of(item: &Value) -> Result<Self, String> {
+        let var = item.get("var").and_then(Value::as_str);
+        match (var, item.get("remove").and_then(Value::as_str)) {
+            (Some(var), None) if VAR_RE.is_match(var) => Ok(Self::Tag(var.to_string())),
+            (None, Some("text")) => Ok(Self::RemoveText),
+            (None, Some("paragraph")) => Ok(Self::RemoveParagraph),
+            _ => Err(format!(
+                "{item}: needs non-empty 'find' and either an identifier 'var' or 'remove': \"text\" or \"paragraph\""
+            )),
+        }
+    }
+
+    /// How errors and the report name the replacement.
+    fn name(&self) -> &str {
+        match self {
+            Self::Tag(var) => var,
+            Self::RemoveText | Self::RemoveParagraph => "remove",
+        }
+    }
+}
+
+/// Replaces whole blanks (finds like `⟦blank:3⟧`) with their tags, or removes them or their paragraphs, before any
+/// text replacement and on the document's own numbering. A blank over several runs gets its tag in the first and is
+/// removed from the rest.
 fn fill_blanks(body: &mut Body, items: &[&Value], report: &mut Vec<String>, errors: &mut Vec<String>) {
     let places = blank_places(body);
     let mut taken: HashMap<usize, String> = HashMap::new();
     let mut edits: Vec<(usize, Range<usize>, String)> = Vec::new();
     for item in items {
         let find = item.get("find").and_then(Value::as_str).unwrap_or("");
-        let var = item.get("var").and_then(Value::as_str).unwrap_or("");
-        if !VAR_RE.is_match(var) {
-            errors.push(format!("{item}: needs non-empty 'find' and an identifier 'var'"));
-            continue;
-        }
+        let action = match Action::of(item) {
+            Ok(action) => action,
+            Err(e) => {
+                errors.push(e);
+                continue;
+            }
+        };
+        let name = action.name();
         let Some(m) = BLANK_RE.captures(find).filter(|m| m[0].len() == find.len()) else {
-            errors.push(format!("{var}: {find:?}: a blank goes alone in find, as \"⟦blank:3⟧\""));
+            errors.push(format!("{name}: {find:?}: a blank goes alone in find, as \"⟦blank:3⟧\""));
             continue;
         };
         let n: usize = m[1].parse().unwrap_or(0);
-        let Some(runs) = n.checked_sub(1).and_then(|i| places.get(i)) else {
-            errors.push(format!("{var}: there is no blank {n}; the document has {}", places.len()));
+        let Some((paragraph, runs)) = n.checked_sub(1).and_then(|i| places.get(i)) else {
+            errors.push(format!("{name}: there is no blank {n}; the document has {}", places.len()));
             continue;
         };
         if let Some(other) = taken.get(&n) {
-            errors.push(format!("{var}: blank {n} is already replaced by {other}"));
+            errors.push(format!("{name}: blank {n} is already replaced by {other}"));
             continue;
         }
-        taken.insert(n, var.to_string());
-        for (i, (run, range)) in runs.iter().enumerate() {
-            let text = if i == 0 { format!("{{{{ {var} }}}}") } else { String::new() };
-            edits.push((*run, range.clone(), text));
+        taken.insert(n, name.to_string());
+        match &action {
+            Action::RemoveParagraph => {
+                body.paragraphs[*paragraph].removed = true;
+                report.push(format!("removed the paragraph of blank {n}"));
+            }
+            Action::Tag(var) => {
+                for (i, (run, range)) in runs.iter().enumerate() {
+                    let text = if i == 0 { format!("{{{{ {var} }}}}") } else { String::new() };
+                    edits.push((*run, range.clone(), text));
+                }
+                report.push(format!("{var}: replaced blank {n}"));
+            }
+            Action::RemoveText => {
+                edits.extend(runs.iter().map(|(run, range)| (*run, range.clone(), String::new())));
+                report.push(format!("removed blank {n}"));
+            }
         }
-        report.push(format!("{var}: replaced blank {n}"));
     }
     edits.sort_by_key(|(run, range, _)| (*run, std::cmp::Reverse(range.start)));
     for (run, range, text) in edits {
@@ -458,9 +510,10 @@ fn w_prefix(xml: &str, doc: &Document) -> String {
 }
 
 /// Replaces text spans with {{ var }} tags. Each replacement: {find, var, occurrence?} with occurrence 1-based
-/// over the whole document (omit to replace all). A span must sit inside one run; a whole blank (`⟦blank:n⟧`)
-/// may cross runs and is replaced first. Returns a report line per replacement; fails listing every replacement
-/// that did not apply.
+/// over the whole document (omit to replace all), or {find, remove: "text" | "paragraph", occurrence?} to delete
+/// the text or each paragraph that has it. A span must sit inside one run, except for a removed paragraph; a whole
+/// blank (`⟦blank:n⟧`) may cross runs and is handled first. Returns a report line per replacement; fails listing
+/// every replacement that did not apply.
 pub fn tokenize(source: &Path, target: &Path, replacements: &[Value]) -> Result<Vec<String>, String> {
     let bytes = std::fs::read(source).map_err(|e| format!("{}: {e}", source.display()))?;
     let xml = read_part(source, BODY_PART)?;
@@ -475,13 +528,27 @@ pub fn tokenize(source: &Path, target: &Path, replacements: &[Value]) -> Result<
     fill_blanks(&mut body, &blank_items, &mut report, &mut errors);
     for item in text_items {
         let find = item.get("find").and_then(Value::as_str).unwrap_or("");
-        let var = item.get("var").and_then(Value::as_str).unwrap_or("");
         let occurrence = item.get("occurrence").and_then(Value::as_u64).map(|o| o as usize);
-        if find.is_empty() || !VAR_RE.is_match(var) {
-            errors.push(format!("{item}: needs non-empty 'find' and an identifier 'var'"));
+        let action = if find.is_empty() { Err(format!("{item}: needs non-empty 'find'")) } else { Action::of(item) };
+        let action = match action {
+            Ok(action) => action,
+            Err(e) => {
+                errors.push(e);
+                continue;
+            }
+        };
+        let var = action.name();
+        if let Action::RemoveParagraph = action {
+            match remove_paragraphs(&mut body, find, occurrence) {
+                Ok(n) => report.push(format!("removed {n} paragraph(s) with {find:?}")),
+                Err(e) => errors.push(format!("remove: {find:?} {e}")),
+            }
             continue;
         }
-        let tag = format!("{{{{ {var} }}}}");
+        let tag = match &action {
+            Action::Tag(var) => format!("{{{{ {var} }}}}"),
+            _ => String::new(),
+        };
         let (mut seen, mut replaced) = (0, 0);
         for p in 0..body.paragraphs.len() {
             for &r in &body.paragraphs[p].runs.clone() {
@@ -510,7 +577,10 @@ pub fn tokenize(source: &Path, target: &Path, replacements: &[Value]) -> Result<
             }
         }
         if replaced > 0 {
-            report.push(format!("{var}: replaced {replaced}x {find:?}"));
+            report.push(match &action {
+                Action::Tag(_) => format!("{var}: replaced {replaced}x {find:?}"),
+                _ => format!("removed {replaced}x {find:?}"),
+            });
             continue;
         }
         let split: Vec<usize> =
@@ -529,7 +599,8 @@ pub fn tokenize(source: &Path, target: &Path, replacements: &[Value]) -> Result<
         return Err(format!("Tokenizing failed:\n{}", errors.join("\n")));
     }
     let prefix = w_prefix(&xml, &doc);
-    let edits = rewrite_runs(&xml, &doc, &body, &prefix);
+    let mut edits = drop_paragraphs(&doc, &mut body);
+    edits.extend(rewrite_runs(&xml, &doc, &body, &prefix));
     let updated = apply_edits(&xml, edits);
     let package = write_package(&bytes, &HashMap::from([(BODY_PART.to_string(), updated)]))?;
     if let Some(parent) = target.parent() {
@@ -537,6 +608,60 @@ pub fn tokenize(source: &Path, target: &Path, replacements: &[Value]) -> Result<
     }
     std::fs::write(target, package).map_err(|e| e.to_string())?;
     Ok(report)
+}
+
+/// Marks each paragraph whose text has `find`, or only the one with its `occurrence`-th match; how many it marked.
+fn remove_paragraphs(body: &mut Body, find: &str, occurrence: Option<usize>) -> Result<usize, String> {
+    let mut seen = 0;
+    let mut marked = 0;
+    for i in 0..body.paragraphs.len() {
+        let matches = body.text(&body.paragraphs[i]).matches(find).count();
+        let hit = match occurrence {
+            None => matches > 0,
+            Some(n) => seen < n && n <= seen + matches,
+        };
+        seen += matches;
+        if hit {
+            body.paragraphs[i].removed = true;
+            marked += 1;
+        }
+    }
+    match (marked, occurrence) {
+        (0, Some(n)) if seen > 0 => Err(format!("occurs {seen}x, no occurrence {n}")),
+        (0, _) => Err("not found".into()),
+        (n, _) => Ok(n),
+    }
+}
+
+/// Edits that delete the removed paragraphs. A table cell needs a paragraph, so one whose paragraphs all go keeps its
+/// first, emptied.
+fn drop_paragraphs(doc: &Document, body: &mut Body) -> Vec<(Range<usize>, String)> {
+    let mut edits = Vec::new();
+    let mut kept: Vec<String> = Vec::new();
+    for i in 0..body.paragraphs.len() {
+        if !body.paragraphs[i].removed {
+            continue;
+        }
+        let location = body.paragraphs[i].location.clone();
+        let emptied_cell = location != "body"
+            && !kept.contains(&location)
+            && body.paragraphs.iter().filter(|p| p.location == location).all(|p| p.removed);
+        let runs = body.paragraphs[i].runs.clone();
+        if emptied_cell {
+            kept.push(location);
+            for r in runs {
+                body.runs[r].text.clear();
+                body.runs[r].changed = true;
+            }
+            continue;
+        }
+        for r in runs {
+            body.runs[r].changed = false;
+        }
+        let node = doc.get_node(body.paragraphs[i].node).expect("paragraph is in the document");
+        edits.push((node.range(), String::new()));
+    }
+    edits
 }
 
 /// Edits for changed runs: their text children are replaced by the new text, other children stay.
@@ -886,6 +1011,52 @@ mod tests {
         assert!(error.contains("a: there is no blank 99; the document has"), "{error}");
         assert!(error.contains("c: blank 1 is already replaced by b"), "{error}");
         assert!(error.contains("d: \"No ⟦blank:2⟧\": a blank goes alone in find"), "{error}");
+    }
+
+    #[test]
+    fn tokenize_removes_text_and_paragraphs() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("template.docx");
+        let replacements = serde_json::json!([
+            {"find": "“ACME HOLDINGS” ", "remove": "text"},
+            {"find": "John Smith", "remove": "paragraph", "occurrence": 2},
+            {"find": "⟦blank:1⟧", "remove": "paragraph"},
+            {"find": "34 000", "var": "amount"},
+        ]);
+        let report = tokenize(&fixture(), &target, replacements.as_array().unwrap()).unwrap();
+        assert_eq!(
+            report,
+            [
+                "removed the paragraph of blank 1",
+                "removed 1x \"“ACME HOLDINGS” \"",
+                "removed 1 paragraph(s) with \"John Smith\"",
+                "amount: replaced 1x \"34 000\""
+            ]
+        );
+        let paragraphs = inspect(&target).unwrap();
+        assert!(
+            paragraphs[0].text.starts_with("1. LTD, Company ID 999000111, represented by John Smith"),
+            "{:?}",
+            paragraphs[0]
+        );
+        assert_eq!(paragraphs[1].text, "Loan in the amount of {{ amount }} EUR.");
+        assert!(!paragraphs.iter().any(|p| p.location.starts_with("table")), "the cell's text is gone");
+        let xml = read_part(&target, BODY_PART).unwrap();
+        let table = &xml[xml.find("<w:tbl>").unwrap()..xml.find("</w:tbl>").unwrap()];
+        let cells: Vec<&str> = table.split("<w:tc>").skip(1).collect();
+        assert_eq!(cells.len(), 2);
+        assert!(cells.iter().all(|cell| cell.contains("<w:p>") || cell.contains("<w:p/>")), "a cell keeps a paragraph");
+
+        let bad = serde_json::json!([
+            {"find": "nowhere", "remove": "paragraph"},
+            {"find": "John Smith", "remove": "paragraph", "occurrence": 3},
+            {"find": "LTD", "remove": "line"},
+            {"find": "LTD", "var": "a", "remove": "text"},
+        ]);
+        let error = tokenize(&fixture(), &dir.path().join("t.docx"), bad.as_array().unwrap()).unwrap_err();
+        assert!(error.contains("remove: \"nowhere\" not found"), "{error}");
+        assert!(error.contains("remove: \"John Smith\" occurs 2x, no occurrence 3"), "{error}");
+        assert_eq!(error.matches("either an identifier 'var' or 'remove'").count(), 2, "{error}");
     }
 
     #[test]
