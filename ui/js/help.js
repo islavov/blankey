@@ -47,7 +47,6 @@ const HELP = {
   "chat.message": () => [t("Message"), t("What you ask the assistant. Enter sends it, Shift+Enter starts a new line.")],
   "chat.send": () => [t("Send"), t("Sends the message. The assistant also gets the case's title, people, files and notes, never the values in profiles.")],
   "chat.stop": () => [t("Stop"), t("Stops the assistant; so does Esc. What it did so far is kept.")],
-  "chat.tool": () => [t("Tool"), t("Something the assistant did in Blankey. Click to see what it passed.")],
   "casefiles.open": () => [t("Open"), t("Opens the file in the app your computer uses for it.")],
   "casefiles.export": () => [t("Export…"), t("Saves a copy of the file where you choose, outside the vault.")],
   "casefiles.describe": () => [t("Description…"), t("Changes what the file is called. Your AI assistant sees the description, never the file name.")],
