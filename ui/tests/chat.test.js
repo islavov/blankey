@@ -24,8 +24,9 @@ const composer = () => $(".chat-composer textarea");
 const button = (label) => byText(".chat-composer button", label);
 const userTexts = () => $$(".chat-msg.user").map((el) => el.textContent);
 const lastNote = () => $$(".chat-note").at(-1)?.textContent ?? null;
-const toolCards = () => $$(".chat-tool").map((el) => [text(".tool-name", el), ["running", "done", "failed"].find((s) => el.classList.contains(s))]);
 const thoughts = (details) => $$("div > div", details).map((el) => el.textContent);
+const line = () => text(".chat-thinking");
+const follows = (first, second) => Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 
 /** A chat-event from the backend, as Rust emits it. */
 async function chatEvent(event, data, caseId = 1, turnId = "turn-1") {
@@ -59,23 +60,23 @@ test("the Chat tab shows, first, once the relay offers the assistant", async () 
   assert.ok(text(".case-tabs .chip.active").startsWith("Files"), "the default tab stays");
 });
 
-test("the stored thread: messages, collapsed reasoning, tool cards done or failed", async () => {
+test("the stored thread: each turn's progress collapsed, then its answer; no tool cards", async () => {
   await tab("Chat");
   assert.ok($(".case-tab.chat-tab"));
   assert.deepEqual(backend.called("case_chat").at(-1), { caseId: 1 });
   assert.deepEqual(userTexts(), ["Who sells and who buys?"]);
-  const reasoning = $(".chat-reasoning");
-  assert.equal(reasoning.open, false);
-  assert.equal(text("summary", reasoning), "Thinking");
-  assert.deepEqual(thoughts(reasoning), ["The case has two profiles; their roles say it."]);
-  assert.deepEqual(toolCards(), [["find profiles", "done"], ["get template", "failed"]]);
-  assert.equal(text(".tool-state", $$(".chat-tool")[1]), "Failed");
+  const progress = $(".chat-reasoning");
+  assert.equal(progress.open, false);
+  assert.equal(text("summary", progress), "Progress");
+  assert.deepEqual(thoughts(progress), ["The case has two profiles; their roles say it."]);
+  assert.equal($(".chat-tool"), null, "the tool calls show only as progress");
   assert.equal($(".chat-text").textContent, "Mary Example sells, John buys.\nThere is no deed template yet.");
+  assert.ok(follows(progress, $(".chat-text")), "the answer comes after the progress");
   assert.equal($(".chat-note"), null, "no summary yet");
   assert.equal(button("Send").disabled, true, "nothing to send");
 
   const keys = $$(".case-tab [data-help]").map((el) => el.getAttribute("data-help"));
-  assert.ok(keys.includes("chat.message") && keys.includes("chat.send") && keys.includes("chat.tool"));
+  assert.ok(keys.includes("chat.message") && keys.includes("chat.send"));
   assert.deepEqual(keys.filter((k) => !helpText(k)), []);
 });
 
@@ -89,50 +90,39 @@ test("Enter sends the message and clears the composer; Shift+Enter does not send
   assert.equal(composer().value, "");
 });
 
-test("a turn streams in: the user's text at once, the thinking line, text, tool cards and the status", async () => {
+test("a turn streams in: the user's text at once, the answer as it comes, one line below it saying what goes on", async () => {
   await chatEvent("started", { text: "Fill the sale contract" });
   assert.deepEqual(spinning(), ["Sale, 12 Oak Street"]);
   assert.deepEqual(userTexts(), ["Who sells and who buys?", "Fill the sale contract"]);
-  assert.equal(text(".chat-status"), "The assistant is working");
+  assert.equal(line(), "The assistant is working");
+  assert.ok($(".chat-thinking .spinner"));
   assert.ok(button("Stop"));
   assert.ok($(".case-tabs .chip.active .spinner"), "the Chat tab spins too");
 
-  const reasoningShown = $$(".chat-reasoning").length;
+  const progressShown = $$(".chat-reasoning").length;
   await chatEvent("status", { state: "thinking" });
-  assert.equal(text(".chat-thinking"), "Thinking…");
-  assert.ok($(".chat-thinking .spinner"));
-  assert.equal($(".chat-status"), null, "the thinking line is the status");
-  assert.equal($$(".chat-reasoning").length, reasoningShown, "nothing to open yet");
-
+  assert.equal(line(), "Thinking…");
   await chatEvent("thinking", { text: "Checking which parties the template needs" });
-  assert.equal(text(".chat-thinking"), "Checking which parties the template needs");
+  assert.equal(line(), "Checking which parties the template needs");
   await chatEvent("thinking", { text: "Looking up both parties' profiles" });
-  assert.deepEqual($$(".chat-thinking").map((el) => el.textContent), ["Looking up both parties' profiles"], "a thought replaces the last");
+  assert.deepEqual($$(".chat-thinking").map((el) => el.textContent), ["Looking up both parties' profiles"], "a line replaces the last");
 
   await chatEvent("text_delta", { text: "Filling the contract" });
-  assert.equal($(".chat-thinking"), null, "the answer ends the thinking line");
-  const thinking = $$(".chat-reasoning").at(-1);
-  assert.equal(thinking.open, false);
-  assert.equal(text("summary", thinking), "Thinking");
-  assert.deepEqual(thoughts(thinking), ["Checking which parties the template needs", "Looking up both parties' profiles"]);
   assert.equal($$(".chat-text").at(-1).textContent, "Filling the contract");
-  await chatEvent("thinking", { text: "Filling the contract for both" });
-  assert.equal($(".chat-thinking"), null, "a late thought joins the list");
-  assert.deepEqual(thoughts($$(".chat-reasoning").at(-1)), ["Checking which parties the template needs", "Looking up both parties' profiles", "Filling the contract for both"]);
+  assert.equal(line(), "Looking up both parties' profiles", "the line stays while the turn runs");
+  assert.ok(follows($$(".chat-text").at(-1), $(".chat-thinking")), "below the answer");
+  assert.equal($$(".chat-reasoning").length, progressShown, "the progress collapses only when the turn ends");
 
   await chatEvent("tool_call", { id: "c9", name: "request_fill", input: { templates: ["oak-sale"] } });
-  const card = $$(".chat-tool").at(-1);
-  assert.deepEqual(toolCards().at(-1), ["request fill", "running"]);
-  assert.ok($(".spinner", card));
-  assert.equal($(".chat-status"), null, "the running card has its own spinner");
-
+  assert.equal($(".chat-tool"), null, "a tool call shows no card");
+  await chatEvent("thinking", { text: "Opening the fill form for the sale contract" });
+  assert.equal(line(), "Opening the fill form for the sale contract");
   await chatEvent("status", { state: "waiting" });
-  assert.equal(text(".chat-status"), "Waiting for you in Blankey");
+  assert.equal(line(), "Waiting for you in Blankey");
   await chatEvent("tool_done", { id: "c9", is_error: false });
-  assert.deepEqual(toolCards().at(-1), ["request fill", "done"]);
-  assert.equal(text(".chat-status"), "The assistant is working");
+  assert.equal(line(), "Opening the fill form for the sale contract");
   await chatEvent("status", { state: "compacting" });
-  assert.equal(text(".chat-status"), "Summarizing earlier messages");
+  assert.equal(line(), "Summarizing earlier messages");
 });
 
 test("the turn goes on while another case or page is open; coming back shows it", async () => {
@@ -151,12 +141,12 @@ test("the turn goes on while another case or page is open; coming back shows it"
   await click(caseItem("Sale, 12 Oak Street"));
   assert.deepEqual(userTexts(), ["Who sells and who buys?", "Fill the sale contract"]);
   assert.deepEqual($$(".chat-text").slice(-2).map((el) => el.textContent), ["Filling the contract", "Both parties are in the case."], "text after a tool call is a new part");
-  assert.deepEqual(toolCards().slice(-2), [["request fill", "done"], ["wait request", "running"]]);
+  assert.equal(line(), "Opening the fill form for the sale contract");
   assert.ok(button("Stop"));
 
   backend.emit("cases-changed");
   await settle();
-  assert.deepEqual(toolCards().slice(-2), [["request fill", "done"], ["wait request", "running"]], "a reload keeps the live turn");
+  assert.equal(line(), "Opening the fill form for the sale contract", "a reload keeps the live turn");
 });
 
 test("Stop asks the backend to stop the case's turn", async () => {
@@ -218,25 +208,26 @@ test("done fetches the stored thread again and the spinner goes", async () => {
   assert.deepEqual(spinning(), []);
   assert.equal($(".chat-status"), null);
   assert.deepEqual(userTexts(), ["Who sells and who buys?", "Fill the sale contract"], "the turn shows once, as stored");
-  assert.deepEqual(toolCards().slice(-2), [["request fill", "done"], ["wait request", "failed"]]);
-  const reasoning = $$(".chat-reasoning").at(-1);
-  assert.equal(reasoning.open, false);
-  reasoning.open = true;
-  assert.deepEqual(thoughts(reasoning), ["Checking which parties the template needs", "Looking up both parties' profiles"], "one line per thought");
+  assert.equal($(".chat-thinking"), null);
+  assert.equal($(".chat-tool"), null);
+  const progress = $$(".chat-reasoning").at(-1);
+  assert.equal(progress.open, false);
+  progress.open = true;
+  assert.deepEqual(thoughts(progress), ["Checking which parties the template needs", "Looking up both parties' profiles"], "one line each");
+  assert.deepEqual($$(".chat-text").slice(-2).map((el) => el.textContent), ["Filling the contract", "Both parties are in the case."]);
+  assert.ok(follows(progress, $$(".chat-text").at(-2)));
   assert.equal(lastNote(), "Stopped");
   assert.ok(button("Send"));
 });
 
-test("each message shows when it was sent, how long its turn took, and each tool card how long it ran", async () => {
+test("each message shows when it was sent and how long its turn and its tool calls took", async () => {
   const sentAt = new Date().toISOString();
   const clock = new Date(sentAt).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const turn = await send("Check the deed");
   await chatEvent("started", { text: "Check the deed", sent_at: sentAt }, 1, turn);
   assert.equal($$(".chat-time").at(-1).textContent, clock, "the time it was sent, until it ends");
   await chatEvent("tool_call", { id: "c20", name: "inspect_docx", input: {} }, 1, turn);
-  assert.equal(text(".tool-state", $$(".chat-tool").at(-1)), "Running");
   await chatEvent("tool_done", { id: "c20", is_error: false, ms: 1200 }, 1, turn);
-  assert.equal(text(".tool-state", $$(".chat-tool").at(-1)), "Done · 1.2 s");
 
   const timing = { sent_at: sentAt, ms: 38200, tools: { c20: 1200 } };
   backend.db.chats[1].messages.push(
@@ -246,7 +237,6 @@ test("each message shows when it was sent, how long its turn took, and each tool
   );
   await chatEvent("done", { stopped: null, timing }, 1, turn);
   assert.equal($$(".chat-time").at(-1).textContent, `${clock} · 38 s · model 37 s · tools 1.2 s`, "as stored");
-  assert.equal(text(".tool-state", $$(".chat-tool").at(-1)), "Done · 1.2 s");
   assert.equal($$(".chat-time").length, 1, "turns stored before timing show none");
 });
 
