@@ -476,7 +476,7 @@ pub struct SaveDocxArgs {
     name: String,
     /// A local path, a file id from request_file, a lib:<id> from find_templates or a casefile:<id> from get_case.
     source_path: String,
-    /// [{find, var, occurrence?}]
+    /// [{find, var, occurrence?}], or [{find, remove: "text" | "paragraph", occurrence?}] to delete
     replacements: Vec<Map<String, Value>>,
     #[serde(deserialize_with = "lenient::str_map")]
     roles: StrMap,
@@ -1078,7 +1078,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Create a docx template from a .docx: each replacement {find, var, occurrence?} replaces the text\nwith {{ var }} (occurrence is 1-based across the document; omit it to replace all). A blank: {\"find\":\n\"\u{27e6}blank:3\u{27e7}\", \"var\": \"seller_name\"} replaces exactly that whole blank, even across runs, and the\nlabel and hints around it stay; blanks are replaced first. Replace the value, not its label; other spans must sit\ninside one run. Text replacements apply in order, so put longer spans first. fields maps var -> default Jinja\nexpression over roles; labels maps var -> label shown in the fill form. Use generic var names\n(counterparty_name, amount, signing_date), the same across related documents so one fill covers them all."
+        description = "Create a docx template from a .docx: each replacement {find, var, occurrence?} replaces the text\nwith {{ var }} (occurrence is 1-based across the document; omit it to replace all). A blank: {\"find\":\n\"\u{27e6}blank:3\u{27e7}\", \"var\": \"seller_name\"} replaces exactly that whole blank, even across runs, and the\nlabel and hints around it stay; blanks are replaced first. Replace the value, not its label; other spans must sit\ninside one run. Text replacements apply in order, so put longer spans first. To delete instead, use remove in\nplace of var: {\"find\": \"\u{27e6}blank:1\u{27e7}\", \"remove\": \"paragraph\"} deletes the whole paragraph (line) that has\nthe find, a blank or any of its text; \"remove\": \"text\" deletes only the found text or blank. Never make a var\nwith an empty default to hide text. fields maps var -> default Jinja\nexpression over roles; labels maps var -> label shown in the fill form. Use generic var names\n(counterparty_name, amount, signing_date), the same across related documents so one fill covers them all."
     )]
     async fn save_docx_template(&self, Parameters(a): Parameters<SaveDocxArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
