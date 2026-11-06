@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.0
+
+- Cases: Blankey opens on Cases. A case keeps one matter together: its people with their roles, the files you import
+  for it (drop them on the window and say what each one is), and the templates, fill sets and documents made for it.
+  Profiles and templates made in a case stay in it until you make them global. Copy link gives the assistant the case
+  to work in.
+- The assistant in a case: on accounts that have it, a case has a Chat tab where the assistant sets up the parties,
+  makes templates from the case's documents and fills them. It sees the case and the profiles' field names, never the
+  values: personal values in documents reach it masked, and you check every fill in the form. While it works, a line
+  says what it is doing; when it is done, its steps fold into Progress above its answer. Each message shows when it
+  was sent and how long the answer took. Esc stops it. The case's tab counts update as it adds things, and flash.
+- Fill form: click a blank to type a value right away, or pick a profile field, the template default or the
+  assistant's suggestion from the list under it; typing narrows the list. The assistant suggests values for blanks no
+  profile holds (dates, amounts, places), so fewer are left to type.
+- Word templates: rows of dots or underscores are blanks, replaced whole, and the labels and hints around them stay
+  ("(трите имена)"). The assistant can also remove a line or words from a template.
+- Settings: the Connections page is now Settings, behind the cog next to the theme switch, with the MCP server status
+  and a language for this computer (Default, English, Български) that the online account does not override.
+- Help: a box in the sidebar explains what the pointer is over, and what each page is for. Close it with its ✕; turn
+  it on again in Settings.
+- Files you collect or add for a profile are kept with it, under its fields (Add files…); Documents lists generated
+  documents only. Fill set export and import are gone.
+- This version upgrades the vault: Blankey 0.2.7 or older cannot open it afterwards.
+
 ## 0.2.7
 
 - Personal data stays out of the assistant's view: when it reads a Word file or a PDF from your folders or one you
