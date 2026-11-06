@@ -2583,6 +2583,13 @@ pub mod tests {
         };
         assert!(!app.vault().get_profile(profile_id).unwrap().global);
         assert_eq!(app.scope(Some(case)).unwrap().role(profile_id), Some("buyer"));
+
+        // a profile the assistant's form creates counts as created in the usage report; filling it again does not
+        let months = crate::vault::kept_months();
+        let created = || app.vault().usage_months(&months).unwrap()[&months[0]]["profile_created"];
+        assert_eq!(created(), 1);
+        app.save_profile_values(&specs, &values, crate::core::Target::Existing(profile_id)).unwrap();
+        assert_eq!(created(), 1);
     }
 
     #[tokio::test]
