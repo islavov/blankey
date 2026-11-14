@@ -49,19 +49,21 @@ test("at startup, chat_running puts a spinner on the cases with a turn in progre
   assert.deepEqual(spinning(), []);
 });
 
-test("the Chat tab shows, first, once the relay offers the assistant", async () => {
-  assert.ok(!chips().includes("Chat"));
+test("the assistant tab shows, first and open, once the relay offers the assistant", async () => {
+  assert.ok(!chips().includes("AI assistant"));
+  assert.ok(text(".case-tabs .chip.active").startsWith("Files"));
   backend.db.relay.chat = true;
   backend.emit("relay-status");
   await settle();
-  assert.equal(chips()[0], "Chat");
+  assert.equal(chips()[0], "AI assistant");
+  assert.ok($(".case-tabs .chip.assistant svg"));
   assert.equal($(".case-tabs .chip").getAttribute("data-help"), "case.chat");
   assert.ok(helpText("case.chat"));
-  assert.ok(text(".case-tabs .chip.active").startsWith("Files"), "the default tab stays");
+  assert.ok(text(".case-tabs .chip.active").startsWith("AI assistant"), "a case opens on the assistant");
 });
 
 test("the stored thread: each turn's progress collapsed, then its answer; no tool cards", async () => {
-  await tab("Chat");
+  await tab("AI assistant");
   assert.ok($(".case-tab.chat-tab"));
   assert.deepEqual(backend.called("case_chat").at(-1), { caseId: 1 });
   assert.deepEqual(userTexts(), ["Who sells and who buys?"]);
@@ -97,7 +99,7 @@ test("a turn streams in: the user's text at once, the answer as it comes, one li
   assert.equal(line(), "The assistant is working");
   assert.ok($(".chat-thinking .spinner"));
   assert.ok(button("Stop"));
-  assert.ok($(".case-tabs .chip.active .spinner"), "the Chat tab spins too");
+  assert.ok($(".case-tabs .chip.active .spinner"), "the assistant tab spins too");
 
   const progressShown = $$(".chat-reasoning").length;
   await chatEvent("status", { state: "thinking" });
@@ -128,7 +130,7 @@ test("a turn streams in: the user's text at once, the answer as it comes, one li
 test("the turn goes on while another case or page is open; coming back shows it", async () => {
   backend.db.chats[2] = { summary: "The lease starts on 1 December.", messages: [stored(1, "user", [{ type: "text", text: "When does it start?" }])] };
   await click(caseItem("Lease, Main Road"));
-  assert.ok(text(".case-tabs .chip.active").startsWith("Chat"));
+  assert.ok(text(".case-tabs .chip.active").startsWith("AI assistant"));
   assert.deepEqual(spinning(), ["Sale, 12 Oak Street"], "only the running case spins");
   assert.equal(text(".chat-note summary"), "Earlier messages are summarized");
   assert.deepEqual(userTexts(), ["When does it start?"]);
@@ -280,11 +282,11 @@ test("after a lock and unlock, chat_running says again which cases run", async (
   assert.deepEqual(spinning(), []);
 });
 
-test("the Chat tab goes when the relay stops offering the assistant", async () => {
+test("the assistant tab goes when the relay stops offering the assistant", async () => {
   backend.db.relay.chat = false;
   backend.emit("relay-status");
   await settle();
-  assert.ok(!chips().includes("Chat"));
+  assert.ok(!chips().includes("AI assistant"));
   assert.ok(text(".case-tabs .chip.active").startsWith("Files"));
   assert.equal($(".chat-composer"), null);
 });
