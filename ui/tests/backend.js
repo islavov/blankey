@@ -45,6 +45,8 @@ export function seed() {
   return {
     initialized: true,
     unlocked: true,
+    // the first-use stage: "wizard", "case" or null when done
+    firstUse: null,
     keyring: true,
     password: "pw",
     profiles: [
@@ -300,11 +302,13 @@ export function createBackend(db = seed()) {
       language: db.deviceLanguage || db.language || "en",
       device_language: db.deviceLanguage ?? null,
       languages: { en: "English", bg: "Български" },
+      first_use: db.firstUse,
     }),
     setup: ({ password }) => {
       db.initialized = true;
       db.unlocked = true;
       db.password = password;
+      db.firstUse = "wizard";
       return "ABCD-EFGH-IJKL";
     },
     unlock: ({ password }) => {
@@ -480,6 +484,7 @@ export function createBackend(db = seed()) {
           updated_at: c.updated_at,
           profiles: linksOf(c.id).map((l) => db.profiles.find((p) => p.id === l.profile_id).name),
           files: db.collected.filter((f) => f.case_id === c.id).length,
+          sample: c.sample === true,
         })),
     create_case: ({ title }) => {
       if (!title.trim()) throw "Give the case a title";
@@ -487,6 +492,24 @@ export function createBackend(db = seed()) {
       db.cases.push({ id, title: title.trim(), notes: "", created_at: now(), updated_at: now() });
       return id;
     },
+    first_use_set: ({ stage }) => {
+      db.firstUse = stage;
+    },
+    // an invented contract and the two people in it
+    create_sample_case: () => {
+      const id = nextId(db.cases);
+      db.cases.push({ id, title: "Sample: loan contract", notes: "", sample: true, created_at: now(), updated_at: now() });
+      for (const [name, role] of [["Maria Example", "lender"], ["Peter Sample", "borrower"]]) {
+        const profile = nextId(db.profiles);
+        db.profiles.push({ id: profile, name, kind: "person", global: false });
+        db.fields[profile] = [{ key: "name", label: "Full name", type: "text", value: name }];
+        db.caseLinks.push({ case_id: id, profile_id: profile, role });
+      }
+      db.collected.unshift({ id: nextId(db.collected), case_id: id, profile_id: null, link_id: "", name: "Loan contract.docx", type: "docx", size: 20 * 1024, description: "Sample loan contract", created_at: now(), link_title: "", profile_name: null });
+      db.firstUse = null;
+      return id;
+    },
+    connect_claude_desktop: () => "claude_desktop_config.json",
     get_case: ({ id }) => {
       const found = db.cases.find((c) => c.id === id);
       if (!found) throw `Unknown case ${id}`;
@@ -498,6 +521,7 @@ export function createBackend(db = seed()) {
       const count = (rows) => rows.filter((r) => r.case_id === id).length;
       return {
         ...found,
+        sample: found.sample === true,
         profiles,
         counts: {
           files: count(db.collected),

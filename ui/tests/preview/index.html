@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- The real UI over the fake backend, in a browser: npm run preview, then open /tests/preview/ (?lang=bg). -->
+<!-- The real UI over the fake backend, in a browser: npm run preview, then open /tests/preview/ (?lang=bg, ?first=1 for a first launch). -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -20,8 +20,13 @@
     import { demo } from "./tests/preview/demo.js";
     import { toast } from "./js/ui/feedback.js";
 
-    const language = new URLSearchParams(location.search).get("lang");
-    const backend = createBackend(Object.assign(seed(), demo(), language ? { language } : {}));
+    const params = new URLSearchParams(location.search);
+    const language = params.get("lang");
+    // ?first=1: a first launch, with no vault, no cases and nobody signed in
+    const first = params.get("first")
+      ? { initialized: false, unlocked: false, chats: {}, relay: { ...seed().relay, signed_in: false, state: "signed_out", account: null, chat: false } }
+      : demo();
+    const backend = createBackend(Object.assign(seed(), first, language ? { language } : {}));
     // the real app opens files in the computer's apps; the preview says which it would open
     const invoke = backend.tauri.core.invoke;
     const opens = {
@@ -29,6 +34,13 @@
       open_documents: ({ ids }) => backend.db.docs.filter((d) => ids.includes(d.id)).map((d) => d.title),
     };
     backend.tauri.core.invoke = async (cmd, args = {}) => {
+      // the sign-in that happens in the browser, a moment later
+      if (cmd === "relay_login" && params.get("first")) {
+        setTimeout(() => {
+          Object.assign(backend.db.relay, { signed_in: true, state: "connected", account: "you@example.com", chat: true });
+          backend.emit("relay-status");
+        }, 1500);
+      }
       if (opens[cmd]) toast(`Opens in its app: ${opens[cmd](args).join(", ")}`);
       return invoke(cmd, args);
     };

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "../vendor/preact-htm.js";
-import { invoke, refreshStatus } from "./api.js";
+import { call, invoke, refreshStatus } from "./api.js";
 import { seedChat } from "./chat.js";
 import { t, tn } from "./i18n.js";
 import { html, reload, state, update, useStore } from "./lib.js";
 import { processRequests } from "./requests.js";
 import { toast } from "./ui/feedback.js";
+import { Select } from "./ui/select.js";
 
 /** Shows the app after an unlock: Activity first when the assistant is waiting, then the waiting requests. */
 export async function enterApp() {
@@ -44,8 +45,21 @@ export function Gate() {
   return html`<${Unlock} onForgot=${() => setMode("recovery")} />`;
 }
 
-/** The centered card; `onSubmit(values)` may throw a message, shown under the form. */
-function GateForm({ title, text, onSubmit, children }) {
+/** Blankey's language, top right of the first-use screens; picking one keeps it for this computer. */
+export function LanguagePick() {
+  const { status } = useStore();
+  const pick = async (code) => {
+    await call("language_set", { language: code });
+    await refreshStatus();
+  };
+  return html`
+    <div class="gate-lang">
+      <${Select} id="gate-language" aria-label=${t("Language")} value=${status.language} options=${Object.entries(status.languages)} onChange=${pick} />
+    </div>`;
+}
+
+/** The centered card; `onSubmit(values)` may throw a message, shown under the form. `language` adds the picker. */
+function GateForm({ title, text, onSubmit, language, children }) {
   const form = useRef();
   const [error, setError] = useState("");
   useEffect(() => form.current.querySelector("input")?.focus(), [title]);
@@ -69,6 +83,7 @@ function GateForm({ title, text, onSubmit, children }) {
 
   return html`
     <div class="gate" data-tauri-drag-region>
+      ${language && html`<${LanguagePick} />`}
       <div class="gate-card">
         <img src="icon.png" alt="" class="gate-icon" />
         <h1>${title}</h1>
@@ -89,7 +104,7 @@ function Setup() {
     update({ recoveryKey: recovery });
   };
   return html`
-    <${GateForm} title=${t("Create your vault")} onSubmit=${create}
+    <${GateForm} title=${t("Create your vault")} onSubmit=${create} language
       text=${t("Personal data is encrypted with this password. Without it or the recovery key the data cannot be read.")}>
       <input type="password" name="password" placeholder=${t("Master password (8+ characters)")} />
       <input type="password" name="confirm" placeholder=${t("Repeat password")} />
@@ -143,7 +158,7 @@ function RecoveryKey({ recovery }) {
     toast(t("Recovery key copied"));
   };
   return html`
-    <${GateForm} title=${t("Save your recovery key")} onSubmit=${enterApp}
+    <${GateForm} title=${t("Save your recovery key")} onSubmit=${enterApp} language
       text=${t("Store it somewhere safe. It is shown only once and lets you set a new password if you forget the current one.")}>
       <div class="recovery">${recovery}</div>
       <button type="button" onClick=${copy}>${t("Copy")}</button>

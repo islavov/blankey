@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "../../vendor/preact-htm.js";
-import { call } from "../api.js";
+import { call, refreshStatus } from "../api.js";
 import { CaseChat, Spinner, useRunning, useWorked } from "../chat.js";
 import { openFill } from "../fill/form.js";
 import { HelpNote } from "../help.js";
@@ -15,6 +15,7 @@ import { CheckTable, keepText } from "../ui/table.js";
 import { openActivity } from "./activity.js";
 import { generateFillSets } from "./fillsets.js";
 import { openProfileSheet } from "./profiles.js";
+import { relaySignIn } from "./settings.js";
 
 // the case the page shows, where dropped files go
 let shown = null;
@@ -62,9 +63,11 @@ export function dropFiles(paths, position) {
 }
 
 export function Cases() {
-  const { caseId, drag } = useStore();
+  const { caseId, drag, status } = useStore();
   const running = useRunning();
   const cases = useLoad(() => call("list_cases"), []);
+  // first use: New case makes the sample case
+  const first = status.first_use === "case";
   if (!cases) return null;
 
   const visible = cases.filter((c) => matches(c.title, ...c.profiles));
@@ -72,6 +75,12 @@ export function Cases() {
   shown = current;
 
   const create = async () => {
+    if (first) {
+      const id = await call("create_sample_case");
+      await refreshStatus();
+      update({ caseId: id, caseTab: null, search: "" });
+      return reload();
+    }
     const values = await dialog({
       title: t("New case"),
       fields: [{ name: "title", label: t("Title (sale of an apartment, lease…)") }],
@@ -81,6 +90,11 @@ export function Cases() {
     const id = await call("create_case", { title: values.title.trim() });
     update({ caseId: id, caseTab: null, search: "" });
     reload();
+  };
+
+  const skip = async () => {
+    await call("first_use_set", { stage: null });
+    await refreshStatus();
   };
 
   const remove = async () => {
@@ -107,7 +121,7 @@ export function Cases() {
 
   return html`
     <${Page} title=${t("Cases")} subtitle=${tn(cases.length, "{n} case", "{n} cases")} actions=${[
-      [t("New case"), create, "primary", "cases.new"],
+      [t("New case"), create, first ? "primary coach" : "primary", "cases.new"],
       [t("Import…"), () => (current ? importInto(current) : toast(t("Make a case first"))), "", "cases.import"],
       [t("Delete case"), remove, "danger", "cases.delete"],
     ]}>
@@ -135,10 +149,16 @@ export function Cases() {
                 </div>`}
               </div>
             </div>`
-        : html`<${Empty}>
-            ${t("No cases yet. A case keeps one matter together: the people in it, the documents they brought and what you fill in for them.")}
-            <div style="margin-top:14px"><button class="primary" onClick=${create}>${t("New case")}</button></div>
-          </${Empty}>`}
+        : first
+          ? html`<${Empty}>
+              ${t("Start with a sample case: an invented loan contract and two invented people, to see how Blankey turns a document into one you can fill in again.")}
+              <div style="margin-top:14px"><button class="primary coach" onClick=${create}>${t("New case")}</button></div>
+              <div style="margin-top:10px"><button class="link" onClick=${skip}>${t("Skip")}</button></div>
+            </${Empty}>`
+          : html`<${Empty}>
+              ${t("No cases yet. A case keeps one matter together: the people in it, the documents they brought and what you fill in for them.")}
+              <div style="margin-top:14px"><button class="primary" onClick=${create}>${t("New case")}</button></div>
+            </${Empty}>`}
       ${drag && !current && html`<div class="drop-overlay"><div class="drop-text">${t("Make a case first")}</div></div>`}
     </${Page}>`;
 }
@@ -165,9 +185,11 @@ function CaseDetail({ caseId }) {
 
   // the assistant only while the relay offers it; then it is where a case opens
   const chat = relay?.chat === true;
-  const tab = caseTab && (caseTab !== "chat" || chat) ? caseTab : chat ? "chat" : "files";
+  // the sample case keeps the tab without it, to say what to ask an assistant of the user's own
+  const assistant = chat || info.sample;
+  const tab = caseTab && (caseTab !== "chat" || assistant) ? caseTab : assistant ? "chat" : "files";
   const tabs = [
-    chat && ["chat", t("AI assistant"), running.has(caseId) ? html`<${Spinner} />` : null, "case.chat"],
+    assistant && ["chat", t("AI assistant"), running.has(caseId) ? html`<${Spinner} />` : null, "case.chat"],
     ["files", t("Files"), info.counts.files, "case.files"],
     ["profiles", t("Profiles"), info.counts.profiles],
     ["templates", t("Templates"), info.counts.templates],
@@ -176,7 +198,7 @@ function CaseDetail({ caseId }) {
     ["activity", t("Activity"), info.counts.activity],
   ].filter(Boolean);
   const content = {
-    chat: () => html`<${CaseChat} caseId=${info.id} />`,
+    chat: () => (chat ? html`<${CaseChat} caseId=${info.id} sample=${info.sample} />` : html`<${SampleGuide} info=${info} />`),
     files: () => html`<${CaseFiles} info=${info} />`,
     profiles: () => html`<${CaseProfiles} info=${info} />`,
     templates: () => html`<${CaseTemplates} info=${info} />`,
@@ -192,7 +214,30 @@ function CaseDetail({ caseId }) {
           ${id === "chat" && html`<${Icon} name="magic" />`}${label} ${typeof n === "number" ? html`<${Count} n=${n} />` : n != null && html`<span class="count">${n}</span>`}
         </button>`)}
     </div>
-    <div class=${`case-tab ${tab === "chat" ? "chat-tab" : ""}`}>${(content[tab] || content.files)()}</div>`;
+    <div class=${`case-tab ${tab === "chat" && chat ? "chat-tab" : ""}`}>${(content[tab] || content.files)()}</div>`;
+}
+
+/** The sample case without the case chat: what to ask an assistant connected over MCP, and the way to the chat. */
+function SampleGuide({ info }) {
+  const prompt = t("In Blankey, open the case “{title}”. Make a template from the contract in it, then ask Blankey to fill it in for the lender and the borrower in the case.", { title: info.title });
+  const copy = async () => {
+    await call("copy_text", { text: prompt });
+    toast(t("Copied"));
+  };
+  return html`
+    <div class="sample-guide" data-help="case.sample">
+      <h3>${t("Ask your AI assistant")}</h3>
+      <p class="muted">${t("An assistant connected to Blankey can work on this case. Give it this:")}</p>
+      <div class="sample-prompt selectable">${prompt}</div>
+      <div><button onClick=${copy}>${t("Copy")}</button></div>
+      <p class="muted small">
+        ${t("Not connected yet? Settings shows the MCP address.")}${" "}
+        <button class="link" onClick=${() => update({ page: "settings" })}>${t("Settings")}</button>
+      </p>
+      <hr />
+      <p class="muted">${t("Sign in to Blankey Online to use the assistant right here.")}</p>
+      <div><button class="primary" onClick=${relaySignIn}>${t("Sign in")}</button></div>
+    </div>`;
 }
 
 /** What the user pastes to the AI assistant to name a case; the assistant passes the number as case_id. */

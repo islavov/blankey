@@ -218,6 +218,12 @@ const STARTERS = [
   () => t("What can you do?"),
 ];
 
+/** The same for the sample case: the two steps to its first document. */
+const SAMPLE_STARTERS = [
+  () => t("Make a template from the sample contract in this case"),
+  () => t("Fill in the contract for the lender and the borrower"),
+];
+
 const STATUS = {
   compacting: () => t("Summarizing earlier messages"),
   waiting: () => t("Waiting for you in Blankey"),
@@ -285,8 +291,8 @@ function Progress({ lines }) {
   return html`<details class="chat-reasoning"><summary>${t("Progress")}</summary><div>${lines.map((line, i) => html`<div key=${i}>${line}</div>`)}</div></details>`;
 }
 
-/** The Chat tab of a case: the stored thread, the turn streaming now, and the composer. */
-export function CaseChat({ caseId }) {
+/** The Chat tab of a case: the stored thread, the turn streaming now, and the composer. `sample`: the sample case. */
+export function CaseChat({ caseId, sample }) {
   const chat = useChat(caseId);
   const [thread, setThread] = useState(null);
   const box = useRef();
@@ -363,9 +369,11 @@ export function CaseChat({ caseId }) {
         ${turn && html`<${TurnEnd} turn=${turn} />`}
         ${empty &&
         html`<div class="empty">
-          ${t("Ask the assistant to work on this case. It knows the people, files and notes in it, never the values in profiles.")}
+          ${sample
+            ? t("This is a sample case. Ask the assistant to turn the contract into a template, then to fill it in for the two people here.")
+            : t("Ask the assistant to work on this case. It knows the people, files and notes in it, never the values in profiles.")}
           <div class="chat-starters" data-help="chat.starters">
-            ${STARTERS.map((text) => html`<button class="chip" onClick=${() => send(text())}>${text()}</button>`)}
+            ${(sample ? SAMPLE_STARTERS : STARTERS).map((text) => html`<button class="chip" onClick=${() => send(text())}>${text()}</button>`)}
           </div>
         </div>`}`}
     </div>

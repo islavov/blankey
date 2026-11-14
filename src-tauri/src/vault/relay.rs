@@ -66,11 +66,11 @@ impl Vault {
         self.set_text_meta(RELAY_CLIENT, client)
     }
 
-    fn text_meta(&self, key: &str) -> Result<Option<String>> {
+    pub(super) fn text_meta(&self, key: &str) -> Result<Option<String>> {
         Ok(self.repo.meta(key)?.map(|v| String::from_utf8_lossy(&v).into_owned()))
     }
 
-    fn set_text_meta(&self, key: &str, value: Option<&str>) -> Result<()> {
+    pub(super) fn set_text_meta(&self, key: &str, value: Option<&str>) -> Result<()> {
         match value {
             Some(value) => self.repo.set_meta(key, value.as_bytes()),
             None => self.repo.delete_meta(key),

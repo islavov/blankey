@@ -22,5 +22,6 @@ test("setup: passwords must match, the recovery key must be confirmed", async ()
   await check($(".gate input[type=checkbox]"));
   assert.equal(proceed.disabled, false);
   await submit($(".gate form"));
-  assert.ok($(".app"));
+  // a new vault goes on to the first-use wizard
+  assert.equal(text(".gate h1"), "Blankey is better online");
 });

@@ -46,6 +46,7 @@ const HELP = {
   "case.files": () => [t("Files"), t("What the case starts from: the documents the client brought and the ones you import. Your AI assistant reads them to make templates and profiles.")],
   "case.documents": () => [t("Documents"), t("What Blankey filled in for this case from a template, ready to open or export.")],
   "case.chat": () => [t("AI assistant"), t("Ask the assistant to work on this case. It keeps working while you open another case or page. When it needs something from you, such as values or a file, Blankey asks you first.")],
+  "case.sample": () => [t("Sample case"), t("Invented people and an invented contract to try Blankey on. Delete the case when you are done.")],
   "chat.starters": () => [t("Examples"), t("Things to ask first. A click sends the question.")],
   "chat.message": () => [t("Message"), t("What you ask the assistant. Enter sends it, Shift+Enter starts a new line.")],
   "chat.send": () => [t("Send"), t("Sends the message. The assistant also gets the case's title, people, files and notes, never the values in profiles.")],

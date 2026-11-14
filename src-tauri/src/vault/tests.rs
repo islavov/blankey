@@ -502,3 +502,18 @@ fn reads_python_vault() {
     let id = vault.create_request("fill", &json!({"reason": "New"}), None).unwrap();
     assert_eq!(vault.get_request(id).unwrap().payload["reason"], json!("New"));
 }
+
+#[test]
+fn first_use_stage_is_kept_until_done() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = vault(dir.path());
+    assert_eq!(vault.first_use().unwrap(), None, "a vault without the key is past its first use");
+    for stage in FIRST_USE_STAGES {
+        vault.set_first_use(Some(stage)).unwrap();
+        assert_eq!(vault.first_use().unwrap().as_deref(), Some(stage));
+    }
+    vault.set_first_use(Some("later")).unwrap();
+    assert_eq!(vault.first_use().unwrap(), None, "an unknown stage reads as done");
+    vault.set_first_use(None).unwrap();
+    assert_eq!(vault.first_use().unwrap(), None);
+}
