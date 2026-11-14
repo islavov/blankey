@@ -756,7 +756,7 @@
   "Puts the profile on the Profiles page, so any case can add it.": "Показва профила в „Профили“, за да може всеки казус да го добави.",
   "Takes the profiles out of this case. Profiles that exist only here are deleted.": "Премахва профилите от казуса. Профилите, които са само тук, се изтриват.",
   "Puts the template on the Templates page, so any case can use it.": "Показва шаблона в „Шаблони“, за да може всеки казус да го използва.",
-  "Chat": "Чат",
+  "AI assistant": "AI асистент",
   "The assistant is working": "Асистентът работи",
   "Thinking…": "Мисли…",
   "Send": "Изпрати",

@@ -50,6 +50,7 @@ const ICONS = {
   "eye-off": '<path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 13.5l11-11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
   more: '<circle cx="8" cy="3.4" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="12.6" r="1.4" fill="currentColor"/>',
   trash: '<path d="M2.8 4.2h10.4M6.3 4.2V2.6h3.4v1.6M4.2 4.2l.7 9.2h6.2l.7-9.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>',
+  magic: '<path d="M6.5 3.5l1.3 3.7 3.7 1.3-3.7 1.3-1.3 3.7-1.3-3.7L1.5 8.5l3.7-1.3z" fill="currentColor"/><path d="M12 1.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" fill="currentColor"/>',
   lock: '<rect x="3.5" y="7" width="9" height="7" rx="1.5" fill="currentColor"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.4"/>',
 };
 
@@ -57,14 +58,14 @@ export const Icon = ({ name }) => html`<svg viewBox="0 0 16 16" dangerouslySetIn
 
 // -- app-wide state ------------------------------------------------------------------------
 // Only what crosses components: the rest lives in component state. caseId and caseTab: the case open on the Cases
-// page and its tab; dragging: files are being dragged over the window.
+// page and its tab, null for the default one; dragging: files are being dragged over the window.
 
 export const state = {
   status: null,
   relay: null,
   page: "cases",
   caseId: null,
-  caseTab: "files",
+  caseTab: null,
   dragging: false,
   search: "",
   gateReason: "",

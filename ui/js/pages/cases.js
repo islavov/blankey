@@ -4,7 +4,7 @@ import { CaseChat, Spinner, useRunning, useWorked } from "../chat.js";
 import { openFill } from "../fill/form.js";
 import { HelpNote } from "../help.js";
 import { t, tn } from "../i18n.js";
-import { html, KIND_NAMES, matches, megabytes, reload, state, update, useLoad, useStore, when } from "../lib.js";
+import { html, Icon, KIND_NAMES, matches, megabytes, reload, state, update, useLoad, useStore, when } from "../lib.js";
 import { openReview } from "../review.js";
 import { confirmDialog, dialog, isDialogOpen, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
@@ -46,7 +46,7 @@ export function Cases() {
     });
     if (!values?.title?.trim()) return;
     const id = await call("create_case", { title: values.title.trim() });
-    update({ caseId: id, caseTab: "files", search: "" });
+    update({ caseId: id, caseTab: null, search: "" });
     reload();
   };
 
@@ -127,11 +127,11 @@ function CaseDetail({ caseId }) {
   const info = useLoad(() => call("get_case", { id: caseId }), [caseId, worked]);
   if (!info) return null;
 
-  // the chat only while the relay offers it
+  // the assistant only while the relay offers it; then it is where a case opens
   const chat = relay?.chat === true;
-  const tab = caseTab === "chat" && !chat ? "files" : caseTab;
+  const tab = caseTab && (caseTab !== "chat" || chat) ? caseTab : chat ? "chat" : "files";
   const tabs = [
-    chat && ["chat", t("Chat"), running.has(caseId) ? html`<${Spinner} />` : null, "case.chat"],
+    chat && ["chat", t("AI assistant"), running.has(caseId) ? html`<${Spinner} />` : null, "case.chat"],
     ["files", t("Files"), info.counts.files],
     ["profiles", t("Profiles"), info.counts.profiles],
     ["templates", t("Templates"), info.counts.templates],
@@ -152,8 +152,8 @@ function CaseDetail({ caseId }) {
     <${CaseHead} info=${info} />
     <div class="filters case-tabs" data-help="case.tabs">
       ${tabs.map(([id, label, n, help]) => html`
-        <button class=${`chip ${tab === id ? "active" : ""}`} data-help=${help} onClick=${() => update({ caseTab: id })}>
-          ${label} ${typeof n === "number" ? html`<${Count} n=${n} />` : n != null && html`<span class="count">${n}</span>`}
+        <button class=${`chip ${id === "chat" ? "assistant" : ""} ${tab === id ? "active" : ""}`} data-help=${help} onClick=${() => update({ caseTab: id })}>
+          ${id === "chat" && html`<${Icon} name="magic" />`}${label} ${typeof n === "number" ? html`<${Count} n=${n} />` : n != null && html`<span class="count">${n}</span>`}
         </button>`)}
     </div>
     <div class=${`case-tab ${tab === "chat" ? "chat-tab" : ""}`}>${(content[tab] || content.files)()}</div>`;
