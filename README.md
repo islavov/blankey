@@ -45,10 +45,11 @@ statistics (`src-tauri/src/telemetry.rs`, the `BLANKEY_TELEMETRY_KEY` repository
 without it, builds carry the development key that only a local relay accepts.
 
 To release: bump the version in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, update `CHANGELOG.md`,
-then publish a GitHub release tagged `v<version>`. `.github/workflows/release.yml` builds every platform while the
-tests (`ci.yml`, also run on pushes to main and PRs) run alongside, and uploads the installers to that release once
-both pass. A manual run without a tag only builds and keeps the installers as workflow artifacts; with a tag it
-uploads to that existing release. Rust caches are saved only on main, so a manual run on main before tagging warms
+then push the tag `v<version>` on that commit. `.github/workflows/release.yml` makes a draft release with the version's
+changelog section as its notes, builds every platform while the tests (`ci.yml`, also run on pushes to main and PRs)
+run alongside, uploads the installers once both pass, and publishes the release last. Installed apps look for updates
+in the latest published release, so it must never be published before `latest.json` is on it. A manual run without a
+tag only builds and keeps the installers as workflow artifacts; with a tag it uploads to that existing release. Rust caches are saved only on main, so a manual run on main before tagging warms
 the build caches.
 
 ## First launch
