@@ -5,6 +5,7 @@ import { openFill } from "../fill/form.js";
 import { HelpNote } from "../help.js";
 import { t, tn } from "../i18n.js";
 import { html, Icon, KIND_NAMES, matches, megabytes, reload, state, update, useLoad, useStore, when } from "../lib.js";
+import { openDocumentCheck } from "../docread.js";
 import { openReview } from "../review.js";
 import { openDocuments, openViewer } from "../viewer.js";
 import { confirmDialog, dialog, isDialogOpen, toast } from "../ui/feedback.js";
@@ -266,12 +267,16 @@ function TabTable({ rows, columns, actions = [], bulk = [], menu, onOpen, empty,
 // -- files -------------------------------------------------------------------------------
 
 const READABLE = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
+// what Blankey can read as a known document: a scan or a photo
+const DOCUMENT_TYPES = ["application/pdf", "image/png", "image/jpeg", "image/webp"];
 
 /** A Word 97-2003 file, which the assistant cannot read: typed so on import, or an earlier import named .doc. */
 const isOldWord = ({ type, name }) => type === "application/msword" || (type === "application/octet-stream" && /\.doc$/i.test(name));
 
+/** What the file is: the known document Blankey read it as, else its file type. */
 function fileKind(file) {
   const { type } = file;
+  if (file.document) return file.document;
   if (type === "application/pdf") return "PDF";
   if (type.includes("wordprocessingml")) return "Word";
   if (isOldWord(file)) return "Word (.doc)";
@@ -292,12 +297,30 @@ const openFile = (file) =>
     outside: () => openOutside(file),
   });
 
+/** Asks, then puts a profile of the case on the Profiles page. */
+async function makeProfileGlobal(p) {
+  const ok = await dialog({
+    title: t("Make \"{name}\" global?", { name: p.name }),
+    text: t("It shows on the Profiles page and any case can add it."),
+    ok: t("Make global"),
+  });
+  if (!ok) return;
+  await call("make_profile_global", { id: p.id });
+  reload();
+}
+
 function CaseFiles({ info }) {
   const files = useLoad(() => call("list_collected_files", { caseId: info.id }), [info.id]);
+  // files are read as documents only with a document config set from Blankey Online
+  const recognition = useLoad(() => call("doc_configs_status"), []);
   if (!files) return null;
+  const reads = recognition?.state === "valid";
 
+  // the profile a recognized file became
+  const profileOf = (file) => (file.doctype ? info.profiles.find((p) => p.id === file.profile_id) : null);
   const shown = (file) => READABLE.includes(file.type) || file.type.startsWith("image/") || isOldWord(file);
-  const open = (file) => (shown(file) ? openFile(file) : openOutside(file));
+  // a file that became a profile opens beside it: the profile on the left, the file on the right
+  const open = (file) => (profileOf(file) ? openDocumentCheck(file) : shown(file) ? openFile(file) : openOutside(file));
   const rename = async (file) => {
     const values = await dialog({ title: t("Rename {name}", { name: file.name }), fields: [{ name: "name", label: t("File name"), value: file.name }], ok: t("Rename") });
     const name = values?.name.trim();
@@ -313,6 +336,10 @@ function CaseFiles({ info }) {
     });
     if (!values) return;
     await call("update_case_file", { id: file.id, description: values.description.trim() });
+    reload();
+  };
+  const readAgain = async (file) => {
+    await call("read_case_file", { id: file.id });
     reload();
   };
   const exportFile = async (file) => {
@@ -337,19 +364,27 @@ function CaseFiles({ info }) {
       { label: t("Rename…"), help: "casefiles.rename", action: () => rename(f) },
       { label: t("Description…"), help: "casefiles.describe", action: () => describe(f) },
       READABLE.includes(f.type) && { label: t("Personal data…"), help: "casefiles.pii", action: () => openReview({ source: `casefile:${f.id}`, title: fileLabel(f) }) },
+      reads && DOCUMENT_TYPES.includes(f.type) && !profileOf(f) && !f.reading && { label: t("Read as a document"), help: "casefiles.read", action: () => readAgain(f) },
+      profileOf(f) && { label: t("Check values…"), help: "casefiles.check", action: () => openDocumentCheck(f) },
+      profileOf(f)?.global === false && { label: t("Make profile global"), help: "casefiles.global", action: () => makeProfileGlobal(profileOf(f)) },
       "-",
       { label: t("Delete"), danger: true, help: "casefiles.delete", action: () => remove([f]) },
     ]}
     columns=${[
       {
         title: t("Description"),
-        cell: (f) => html`<div class="file-label">${fileLabel(f)}</div>${f.description && html`<div class="muted small">${f.name}</div>`}`,
+        // under what the file is: its name, and the profile it became
+        cell: (f) => html`<div class="file-label">${fileLabel(f)}</div>
+          ${(f.description || profileOf(f)) && html`<div class="muted small file-sub">
+            ${f.description && html`<span>${f.name}</span>`}
+            ${profileOf(f) && html`<span class="file-profile">${profileOf(f).name}</span>`}
+          </div>`}`,
         cls: "wide",
       },
-      { title: t("Type"), cell: (f) => fileKind(f), cls: "nowrap" },
+      { title: t("Type"), cell: (f) => (f.reading ? html`<span class="muted">${t("Reading…")}</span>` : fileKind(f)), cls: "nowrap" },
       { title: t("Size"), cell: (f) => megabytes(f.size), cls: "nowrap" },
       { title: t("Added"), cell: (f) => html`<span class="muted">${when(f.created_at)}</span>`, cls: "nowrap" },
-    ]}
+    ].filter(Boolean)}
     empty=${html`<${DropZone} onImport=${() => importInto(info)} />`} />`;
 }
 
@@ -490,16 +525,6 @@ function CaseProfiles({ info }) {
     await call("link_case_profile", { caseId: info.id, profileId: p.id, role: values.role.trim() });
     reload();
   };
-  const makeGlobal = async (p) => {
-    const ok = await dialog({
-      title: t("Make \"{name}\" global?", { name: p.name }),
-      text: t("It shows on the Profiles page and any case can add it."),
-      ok: t("Make global"),
-    });
-    if (!ok) return;
-    await call("make_profile_global", { id: p.id });
-    reload();
-  };
   const remove = async (chosen) => {
     const only = chosen.filter((p) => !p.global && p.cases === 1);
     if (only.length) {
@@ -525,14 +550,14 @@ function CaseProfiles({ info }) {
     menu=${(p) => [
       { label: t("Edit"), help: "caseprofiles.edit", action: () => open(p) },
       { label: t("Role…"), help: "caseprofiles.role", action: () => role(p) },
-      !p.global && { label: t("Make global"), help: "caseprofiles.global", action: () => makeGlobal(p) },
+      !p.global && { label: t("Make global"), help: "caseprofiles.global", action: () => makeProfileGlobal(p) },
       "-",
       { label: t("Remove from case"), danger: true, help: "caseprofiles.remove", action: () => remove([p]) },
     ]}
     columns=${[
       { title: t("Name"), cell: (p) => html`<b>${p.name}</b>`, cls: "wide" },
       { title: t("Kind"), cell: (p) => p.kind, cls: "nowrap" },
-      { title: t("Role"), cell: (p) => p.role || html`<span class="muted">-</span>`, cls: "nowrap" },
+      { title: t("Role"), cell: (p) => p.role || html`<span class="muted">${p.document || "-"}</span>`, cls: "nowrap" },
       { title: t("Scope"), cell: (p) => html`<span class="muted">${scopeLabel(p)}</span>`, cls: "nowrap" },
     ]}
     empty=${t("No profiles in this case yet. Make one for each person or company in it, or add one you already have.")} />`;

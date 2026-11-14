@@ -204,6 +204,8 @@ struct CaseProfile {
     role: String,
     /// how many cases it is in
     cases: usize,
+    /// the name of the known document it was read from, in the UI language; empty for any other profile
+    document: String,
 }
 
 /// The case with its notes (needs the vault unlocked), its profiles and how much of each kind it holds.
@@ -212,10 +214,19 @@ fn get_case(state: State<AppState>, id: i64) -> CmdResult<Value> {
     let app = &state.app;
     let scope = app.scope(Some(id))?;
     let info = scope.case.clone().ok_or("Unknown case")?;
+    let documents = app.profile_document_names()?;
     let profiles: Vec<CaseProfile> = app
         .case_profiles(id)?
         .into_iter()
-        .map(|(p, role, cases)| CaseProfile { id: p.id, name: p.name, kind: p.kind, global: p.global, role, cases })
+        .map(|(p, role, cases)| CaseProfile {
+            document: documents.get(&p.id).cloned().unwrap_or_default(),
+            id: p.id,
+            name: p.name,
+            kind: p.kind,
+            global: p.global,
+            role,
+            cases,
+        })
         .collect();
     let (notes, counts) = {
         let vault = app.vault();
@@ -299,6 +310,8 @@ async fn import_case_files(state: State<'_, AppState>, case_id: i64, items: Vec<
     let files: Vec<(PathBuf, String)> = items.into_iter().map(|i| (i.path, i.description.trim().to_string())).collect();
     tauri::async_runtime::spawn_blocking(move || {
         let ids = app.keep_files(crate::links::FileOwner::Case(case_id), &files)?;
+        // a known document among them (an ID card, a registration certificate) becomes a profile of the case
+        app.read_new_files(ids.clone());
         let vault = app.vault();
         let kept: Vec<CollectedFile> = ids.iter().filter_map(|id| vault.get_collected_file(*id).ok()).collect();
         // a converted file is kept under a .docx name its source did not have
@@ -927,6 +940,39 @@ struct CollectedRow {
     file: CollectedFile,
     link_title: String,
     profile_name: Option<String>,
+    /// the name of the known document the file was read as, in the UI language; empty for any other file
+    document: String,
+    /// it is being read right now
+    reading: bool,
+}
+
+/// A recognized case file beside the profile it became: what the profile holds, what the document says, and where.
+#[tauri::command]
+async fn check_document(state: State<'_, AppState>, id: i64) -> CmdResult<crate::known::DocumentCheck> {
+    let app = state.app.clone();
+    let check = move || {
+        let check = app.check_document(id)?;
+        // read before readings were kept: read again behind the sheet, for the boxes the next time it opens
+        if check.unread {
+            app.keep_reading(id);
+        }
+        Ok(check)
+    };
+    tauri::async_runtime::spawn_blocking(check).await.map_err(err)?
+}
+
+/// Reads a case file again as a known document, in the background: for a file imported before documents were
+/// read, or one that did not read the first time.
+#[tauri::command]
+fn read_case_file(state: State<AppState>, id: i64) -> CmdResult<()> {
+    state.app.read_new_files(vec![id]);
+    Ok(())
+}
+
+/// Saves the values checked against the document into its profile; the problems when one is not valid.
+#[tauri::command]
+fn save_document_check(state: State<AppState>, id: i64, values: IndexMap<String, String>) -> CmdResult<Vec<Problem>> {
+    state.app.save_document_check(id, &values)
 }
 
 /// Files kept with profiles (from collection links or added by hand) and imported into cases; with a case only its
@@ -938,6 +984,7 @@ fn list_collected_files(state: State<AppState>, case_id: Option<i64>) -> CmdResu
         vault.list_links().map_err(err)?.into_iter().map(|l| (l.link_id, l.title)).collect();
     let names: IndexMap<i64, String> =
         vault.list_profiles().map_err(err)?.into_iter().map(|p| (p.id, p.name)).collect();
+    let (reading, language) = (state.app.files_being_read(), state.app.language());
     Ok(vault
         .list_collected_files()
         .map_err(err)?
@@ -946,6 +993,8 @@ fn list_collected_files(state: State<AppState>, case_id: Option<i64>) -> CmdResu
         .map(|file| CollectedRow {
             link_title: titles.get(&file.link_id).cloned().unwrap_or_default(),
             profile_name: file.profile_id.and_then(|id| names.get(&id).cloned()),
+            document: crate::known::document_name(&file, &language),
+            reading: reading.contains(&file.id),
             file,
         })
         .collect())
@@ -1707,6 +1756,22 @@ fn relay_logout(relay: RelayState) {
     relay.logout();
 }
 
+/// The document config set this app holds: whether it is in use, and how many documents it reads with it.
+#[tauri::command]
+fn doc_configs_status(state: State<AppState>) -> crate::docsets::DocConfigsStatus {
+    state.app.doc_configs_status()
+}
+
+/// Asks the relay for the current document config set now.
+#[tauri::command]
+async fn refresh_doc_configs(
+    state: State<'_, AppState>,
+    relay: RelayState<'_>,
+) -> CmdResult<crate::docsets::DocConfigsStatus> {
+    relay.refresh_doc_configs().await?;
+    Ok(state.app.doc_configs_status())
+}
+
 #[tauri::command]
 async fn relay_revoke(relay: RelayState<'_>, grant_id: String) -> CmdResult<()> {
     relay.revoke(&grant_id).await
@@ -1777,6 +1842,9 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         export_document,
         delete_documents,
         list_collected_files,
+        check_document,
+        read_case_file,
+        save_document_check,
         open_collected_files,
         export_collected_file,
         delete_collected_files,
@@ -1819,6 +1887,8 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         log_error,
         relay_login,
         relay_logout,
+        doc_configs_status,
+        refresh_doc_configs,
         relay_revoke,
         relay_set_url,
         relay_open_account,

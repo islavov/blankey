@@ -12,6 +12,7 @@ escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$1"; }
     echo '<h2 id="bundled">Bundled libraries and fonts</h2>'
     echo '<h3>PDFium (BSD-3-Clause / Apache-2.0), https://pdfium.googlesource.com/pdfium/</h3>'
     if [ -f pdfium/LICENSE ]; then echo '<pre>'; escape pdfium/LICENSE; echo '</pre>'; fi
+    echo '<h3>PaddleOCR PP-OCRv5 text detection and recognition models (Apache-2.0), https://github.com/PaddlePaddle/PaddleOCR, converted to ONNX by RapidOCR, https://github.com/RapidAI/RapidOCR</h3>'
     echo '<h3>Noto Sans, Noto Sans Mono (SIL Open Font License 1.1)</h3><pre>'
     escape assets/fonts/OFL.txt
     echo '</pre>'

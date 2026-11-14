@@ -1,0 +1,20 @@
+id: example_member_card
+name: { en: Example member card, bg: Примерна членска карта }
+family: example_member_card
+profile: { kind: person, name: "{name}", number: member.number }
+sides:
+  - id: front
+    match: { text_all: [example library], text_any: [member card, членска карта] }
+  - id: rules
+    read: false
+    match: { text_all: [rules of the example library] }
+fields:
+  - { key: name, label_of: [member name], label: { en: Name, bg: Име } }
+  - { key: member.number, label_of: [member no], pattern: member_no, label: { en: Member number, bg: Членски номер } }
+  - { key: egn, type: egn, label_of: [personal no], label: { en: EGN, bg: ЕГН } }
+  - { key: birth_date, type: date, label_of: [born], label: { en: Date of birth, bg: Дата на раждане } }
+  - { key: town, label_of: [town], part: 1, script: cyrillic, label: { en: Town, bg: Град } }
+  - { key: address, label_of: [address], below: true, label: { en: Address, bg: Адрес } }
+checks:
+  - { egn_birth: [egn, birth_date] }
+print: [example library]

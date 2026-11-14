@@ -32,6 +32,7 @@ jobs:
           shared-key: test
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: scripts/fetch-pdfium.sh
+      - run: scripts/fetch-ocr.sh
       - name: cargo clippy
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings

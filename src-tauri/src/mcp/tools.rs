@@ -48,6 +48,8 @@ Cases keep one matter together: its profiles with their roles, the files the use
 sets and documents made for it. A blankey://case/<id> link the user pastes names a case: pass <id> as case_id to
 every tool. In a case find_profiles lists its profiles and get_case its files (casefile:<id>, found by the user's
 descriptions); what you save there stays in the case. Without case_id, tools see global data only.
+An ID card or vehicle registration the user imported is already a profile of the case (find_profiles shows its
+"document" and "source" file): bind to its fields, and do not ask the user to type what it holds.
 
 When the user asks how to do something in Blankey, or what it can do: get_help has the app's guide.
 "#;
@@ -775,6 +777,7 @@ impl Tools {
                 let profiles = vault.list_profiles().map_err(string)?.into_iter().filter(listed).collect::<Vec<_>>();
                 (profiles, vault.field_index().map_err(string)?)
             };
+            let documents = if scope.case_id().is_some() { app.profile_documents()? } else { Default::default() };
             let words = find::words(a.query.as_deref());
             let kind = a.kind.as_deref().map(find::fold);
             let filled = a.filled.unwrap_or(true);
@@ -816,6 +819,11 @@ impl Tools {
                 if let Some(role) = scope.role(p.id) {
                     item["role"] = json!(role);
                     item["global"] = json!(p.global);
+                }
+                // read from a document the user imported: which one, and the file
+                if let Some((file, doctype)) = documents.get(&p.id) {
+                    item["document"] = json!(doctype);
+                    item["source"] = json!(crate::cases::case_file_source(*file));
                 }
                 item
             }))

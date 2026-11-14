@@ -1,0 +1,10 @@
+id: example_codes
+print: [example permit office]
+codes:
+  - { key: permit.number, code: A, pattern: permit_no, label: { en: Permit number, bg: Номер на разрешително } }
+  - { key: permit.issued_on, code: B, type: date, label: { en: Issued on, bg: Издадено на } }
+  - { key: holder.name, code: C.1, label: { en: Holder, bg: Притежател } }
+  - { key: holder.name_latin, code: C.1, line: 2, script: latin, label: { en: Holder in Latin, bg: Притежател на латиница } }
+  - { key: weight, code: D, type: number, label: { en: Weight, bg: Тегло } }
+  - { key: holder.status, code: E, items: true, label: { en: Status, bg: Статут } }
+  - { key: remarks, code: F, label: { en: Remarks, bg: Бележки } }

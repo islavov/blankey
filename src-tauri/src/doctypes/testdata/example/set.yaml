@@ -1,0 +1,17 @@
+# An invented set for the engine's tests: no real document is described here.
+engine: 1
+ocr:
+  min_side: 736
+  max_side: 2000
+  text: 0.3
+  box_score: 0.5
+  unclip: 1.6
+  min_confidence: 0.5
+  turn: true
+  zoom: 2
+  level: true
+  join_gap: 0.6
+  a_key_of_a_newer_engine: 3
+patterns:
+  member_no: { fold: latin, find: '\bM([0-9OIB]{6})\b', digits: [1], value: "M$1" }
+  permit_no: { fold: latin, squeeze: true, find: 'P[0-9]{4}' }

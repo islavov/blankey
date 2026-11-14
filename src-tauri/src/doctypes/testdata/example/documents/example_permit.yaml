@@ -1,0 +1,9 @@
+id: example_permit
+name: { en: Example permit, bg: Примерно разрешително }
+family: example_permit
+profile: { kind: vehicle, name: "{permit.number} {holder.name}", number: permit.number }
+uses: example_codes
+sides:
+  - id: front
+    match: { codes_all: [A, B], codes_none: [F] }
+codes: [A, B, C.1, D, E]

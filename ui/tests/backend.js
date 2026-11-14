@@ -101,6 +101,10 @@ export function seed() {
       { sid: "s-1", link_id: "XchaBj2", request_id: 11, size: 2048, received_at: "2026-10-16T10:00:00+00:00", status: "saved", handled_at: "2026-10-16T10:05:00+00:00", profile_id: 1, profile_name: "John" },
     ],
     collected: [],
+    // file id -> what Blankey read in a recognized file: [{key, label, type, read, status, box}]
+    reads: {},
+    // set to {delay, of: (file) => {doctype, document, profile: {name, kind}, fields, reads} | null}: imports are read
+    reading: null,
     // case id -> {messages, summary}, as case_chat returns them
     chats: { 1: chatThread() },
     // the cases with a turn in progress
@@ -109,6 +113,8 @@ export function seed() {
     previewDelay: 0,
     telemetry: true,
     update: { current: "0.2.5", auto: true, state: "idle" },
+    // the document config set from the relay; state "none" without one
+    docConfigs: { state: "valid", version: "f1e8fcc63b0f697c", checked_at: "2026-11-14T18:30:00Z", documents: 3, skipped: 0 },
     relay: {
       url: "https://relay.blankey.io",
       official: true,
@@ -248,6 +254,25 @@ export function createBackend(db = seed()) {
   // with a case: its rows; without one: every row, labelled with its case
   const inCase = (rows, caseId) =>
     caseId == null ? rows.map((r) => ({ ...r, case_id: r.case_id ?? null, case_title: caseTitle(r.case_id) })) : rows.filter((r) => r.case_id === caseId);
+  // what the real backend does after an import: each file is read, and a known document becomes a profile of the case
+  const readImported = (files) => {
+    if (db.docConfigs.state !== "valid") return;
+    files.forEach((file) => (file.reading = true));
+    setTimeout(() => {
+      for (const file of files) {
+        file.reading = false;
+        const found = db.reading.of(file);
+        if (!found) continue;
+        const id = nextId(db.profiles);
+        db.profiles.push({ id, ...found.profile, global: false });
+        db.fields[id] = found.fields;
+        db.caseLinks.push({ case_id: file.case_id, profile_id: id, role: "" });
+        db.reads[file.id] = found.reads;
+        Object.assign(file, { doctype: found.doctype, document: found.document, profile_id: id, profile_name: found.profile.name });
+      }
+      emit("cases-changed");
+    }, db.reading.delay);
+  };
   const linksOf = (caseId) => db.caseLinks.filter((l) => l.case_id === caseId);
   const casesOf = (profileId) => db.caseLinks.filter((l) => l.profile_id === profileId);
   const nextId = (rows) => Math.max(0, ...rows.map((r) => r.id)) + 1;
@@ -313,7 +338,7 @@ export function createBackend(db = seed()) {
     // newest first, as the vault lists them
     list_documents: ({ caseId } = {}) => inCase([...db.docs].sort((a, b) => b.id - a.id), caseId),
     list_collected_files: ({ caseId } = {}) =>
-      (caseId == null ? db.collected : db.collected.filter((f) => f.case_id === caseId)).map((f) => ({ case_id: null, description: "", ...f })),
+      (caseId == null ? db.collected : db.collected.filter((f) => f.case_id === caseId)).map((f) => ({ case_id: null, description: "", doctype: "", document: "", reading: false, ...f })),
     open_collected_files: () => null,
     export_collected_file: () => "/tmp/payslip.pdf",
     add_profile_files: ({ profileId }) => {
@@ -467,7 +492,8 @@ export function createBackend(db = seed()) {
       if (!found) throw `Unknown case ${id}`;
       const profiles = linksOf(id).map((l) => {
         const p = db.profiles.find((x) => x.id === l.profile_id);
-        return { id: p.id, name: p.name, kind: p.kind, global: p.global !== false, role: l.role, cases: casesOf(p.id).length };
+        const document = db.collected.find((f) => f.profile_id === p.id && f.doctype)?.document ?? "";
+        return { id: p.id, name: p.name, kind: p.kind, global: p.global !== false, role: l.role, cases: casesOf(p.id).length, document };
       });
       const count = (rows) => rows.filter((r) => r.case_id === id).length;
       return {
@@ -542,6 +568,7 @@ export function createBackend(db = seed()) {
         });
       }
       touch(caseId);
+      if (db.reading) readImported(db.collected.slice(0, items.length));
       const names = items.map(({ path }) => path.split(/[\\/]/).pop());
       return { count: items.length, converted, old_word: db.convertsDoc === false ? names.filter((name) => /\.doc$/i.test(name)) : [] };
     },
@@ -549,6 +576,37 @@ export function createBackend(db = seed()) {
       const file = db.collected.find((f) => f.id === id);
       if (description != null) file.description = description;
       if (name != null) file.name = name;
+    },
+    read_case_file: ({ id }) => {
+      if (db.reading) readImported([db.collected.find((f) => f.id === id)]);
+    },
+    check_document: ({ id }) => {
+      const file = db.collected.find((f) => f.id === id);
+      const held = db.fields[file.profile_id] || [];
+      const reads = db.reads[id] || [];
+      return {
+        profile: { id: file.profile_id, name: file.profile_name },
+        document: file.document,
+        fields: reads.map(({ key, label, type = "text", read, status = "ok" }) => ({ key, label, type, value: held.find((f) => f.key === key)?.value ?? "", read, status })),
+        preview: {
+          type: "pages",
+          names: reads.map((r) => r.key),
+          pages: [{ image: PAGE_IMAGE, width: 856, height: 540, boxes: Object.fromEntries(reads.filter((r) => r.box).map((r) => [r.key, [r.box]])) }],
+        },
+      };
+    },
+    save_document_check: ({ id, values }) => {
+      const file = db.collected.find((f) => f.id === id);
+      const reads = db.reads[id] || [];
+      const bad = reads.filter((r) => r.type === "egn" && values[r.key] && !/^\d{10}$/.test(values[r.key]));
+      if (bad.length) return bad.map((r) => ({ key: r.key, label: r.label, message: "Invalid EGN" }));
+      const held = (db.fields[file.profile_id] ||= []);
+      for (const { key, label, type = "text" } of reads) {
+        const found = held.find((f) => f.key === key);
+        if (found) found.value = values[key] ?? "";
+        else held.push({ key, label, type, value: values[key] ?? "" });
+      }
+      return [];
     },
     case_file_preview: ({ id }) => {
       const { type } = db.collected.find((f) => f.id === id);
@@ -639,11 +697,18 @@ export function createBackend(db = seed()) {
     },
     stop_chat: () => null,
     chat_running: () => db.chatRunning,
+    doc_configs_status: () => db.docConfigs,
+    refresh_doc_configs: () => {
+      if (db.docConfigsRefused) throw db.docConfigsRefused;
+      db.docConfigs = { ...(db.docConfigsNext ?? db.docConfigs), checked_at: now() };
+      return db.docConfigs;
+    },
     relay_login: () => {
       db.relay.state = "signing_in";
     },
     relay_logout: () => {
       Object.assign(db.relay, { signed_in: false, state: "signed_out", account: null });
+      db.docConfigs = { state: "none", version: "", checked_at: null, documents: 0, skipped: 0 };
     },
     relay_revoke: ({ grantId }) => {
       db.relay.grants = db.relay.grants.filter((g) => g.grant_id !== grantId);

@@ -302,6 +302,11 @@ impl Blankey {
                 if let Some(grant) = grant {
                     item["shared"] = json!(self.file_shared(grant, &source));
                 }
+                // a known document that was read: what it is, and the profile that holds its fields
+                if !f.doctype.is_empty() {
+                    item["document"] = json!(f.doctype);
+                    item["profile_id"] = json!(f.profile_id);
+                }
                 item
             })
             .collect();

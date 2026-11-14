@@ -220,7 +220,7 @@ test("files: double-click shows one inside Blankey; its ⋮ menu has what a file
   await click(byText(".sheet-head button", "Close"));
   assert.equal($(".sheet"), null);
 
-  assert.deepEqual(await menuOf("Title deed"), ["Open", "Export…", "Rename…", "Description…", "Personal data…", "Delete"]);
+  assert.deepEqual(await menuOf("Title deed"), ["Open", "Export…", "Rename…", "Description…", "Personal data…", "Read as a document", "Delete"]);
   for (const item of $$(".menu-item")) {
     await hover(item);
     assert.equal(text(".help-title"), item.textContent, "each menu item has its help");
@@ -228,7 +228,7 @@ test("files: double-click shows one inside Blankey; its ⋮ menu has what a file
   assert.equal(text(".help-text"), "Removes the files from the vault. Copies you exported stay.");
   await key("Escape", document.body);
   assert.equal($(".menu"), null);
-  assert.deepEqual(await menuOf("mary-id.jpg"), ["Open", "Export…", "Rename…", "Description…", "Delete"], "no personal data check for an image");
+  assert.deepEqual(await menuOf("mary-id.jpg"), ["Open", "Export…", "Rename…", "Description…", "Read as a document", "Delete"], "no personal data check for an image");
   await key("Escape", document.body);
   await rowMenu("mary-id.jpg", "Open");
   assert.ok($(".sheet img.preview-image"), "an image shows as it is");

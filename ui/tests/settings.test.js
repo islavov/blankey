@@ -102,8 +102,31 @@ test("the sidebar shows the Blankey Online account above the buttons", async () 
   assert.equal(text(".toolbar h2"), "Settings");
 });
 
+test("document recognition shows what Blankey Online gave it, and Refresh asks again", async () => {
+  assert.equal(text("#doc-configs-state"), "3 documents");
+  assert.equal(text("#doc-configs-checked"), "updated 2026-11-14 18:30");
+  backend.db.docConfigsNext = { state: "valid", version: "v2", documents: 4, skipped: 0 };
+  await click(byText(".relay button", "Refresh"));
+  assert.equal(backend.called("refresh_doc_configs").length, 1);
+  assert.equal(text("#doc-configs-state"), "4 documents");
+
+  // not confirmed for a day, or the account lost it: off, and the window is told
+  backend.db.docConfigs = { state: "stale", version: "v2", checked_at: "2026-11-12T18:30:00Z", documents: 0, skipped: 0 };
+  backend.emit("doc-configs-changed");
+  await settle();
+  assert.equal(text("#doc-configs-state"), "Off");
+  assert.equal($("#doc-configs-checked"), null);
+
+  backend.db.docConfigsRefused = "Blankey Online cannot be reached";
+  await click(byText(".relay button", "Refresh"));
+  assert.equal(text("#toast"), "Blankey Online cannot be reached");
+  assert.equal(text("#doc-configs-state"), "Off");
+  backend.db.docConfigsRefused = null;
+});
+
 test("sign out and in again, next to the online server", async () => {
   await click(byText(".relay button", "Sign out"));
+  assert.equal($("#doc-configs-state"), null, "signed out: no document recognition to show");
   assert.equal(text("#relay-state"), "Signed out");
   assert.equal($("#relay-account"), null);
   assert.equal($("#page-actions button"), null);

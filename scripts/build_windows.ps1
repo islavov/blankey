@@ -20,6 +20,9 @@ if (-not (Test-Path (Join-Path $PdfiumDir "pdfium.dll"))) {
     Remove-Item -Recurse -Force $Tmp
 }
 
+bash scripts/fetch-ocr.sh
+if ($LASTEXITCODE -ne 0) { throw "fetch-ocr.sh failed" }
+
 if (-not $env:BLANKEY_TELEMETRY_KEY) {
     Write-Warning "BLANKEY_TELEMETRY_KEY is not set; this build sends anonymous statistics with the development key, which the official relay ignores"
 }

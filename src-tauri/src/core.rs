@@ -90,10 +90,18 @@ pub struct Blankey {
     on_library_change: RwLock<Hook>,
     /// after an AI assistant changed a case
     on_cases_change: RwLock<Hook>,
+    /// after the document config set held changed
+    pub(crate) on_doc_configs_change: RwLock<Hook>,
+    /// the document config set from the relay; None without one
+    pub(crate) doc_set: RwLock<Option<crate::docsets::Held>>,
     /// the UI language (i18n); MCP output stays English
     language: RwLock<String>,
     /// the language picked in Settings, which the account's language never overrides
     device_language: RwLock<Option<String>>,
+    /// the OCR models, loaded when the first scan is read; None when the model files are missing
+    pub(crate) ocr: std::sync::OnceLock<Option<crate::doctypes::ocr::Engine>>,
+    /// the case files being read as known documents right now
+    pub(crate) reading: Mutex<std::collections::HashSet<i64>>,
 }
 
 impl Blankey {
@@ -102,7 +110,7 @@ impl Blankey {
         let templates = TemplateStore::new(config.templates_dir());
         let library = Library::open(&config.library_db_path())?;
         let device_language = config.language.clone();
-        Ok(Self {
+        let app = Self {
             config,
             vault: Mutex::new(vault),
             templates,
@@ -111,9 +119,15 @@ impl Blankey {
             on_unlock_needed: RwLock::new(Box::new(|_| {})),
             on_library_change: RwLock::new(Box::new(|| {})),
             on_cases_change: RwLock::new(Box::new(|| {})),
+            on_doc_configs_change: RwLock::new(Box::new(|| {})),
+            doc_set: RwLock::new(None),
             language: RwLock::new(crate::i18n::resolve(device_language.as_deref(), None)),
             device_language: RwLock::new(device_language),
-        })
+            ocr: std::sync::OnceLock::new(),
+            reading: Mutex::new(std::collections::HashSet::new()),
+        };
+        app.reload_doc_set();
+        Ok(app)
     }
 
     pub fn vault(&self) -> MutexGuard<'_, Vault> {

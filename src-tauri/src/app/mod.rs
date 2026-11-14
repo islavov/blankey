@@ -167,6 +167,23 @@ fn state_flag(handle: &AppHandle, running: bool) {
     tray::refresh(handle);
 }
 
+/// A set the relay has not confirmed for a day stops being used without anything happening; the window is told, so
+/// Settings and the Files tab show it.
+fn start_doc_configs_expiry(handle: &AppHandle, app: &Arc<Blankey>) {
+    let (handle, app) = (handle.clone(), app.clone());
+    std::thread::spawn(move || {
+        let mut state = app.doc_configs_status().state;
+        loop {
+            std::thread::sleep(Duration::from_secs(30 * 60));
+            let now = app.doc_configs_status().state;
+            if now != state {
+                let _ = handle.emit("doc-configs-changed", ());
+            }
+            state = now;
+        }
+    });
+}
+
 fn start_auto_lock(handle: &AppHandle) {
     let handle = handle.clone();
     std::thread::spawn(move || loop {
@@ -284,6 +301,11 @@ pub fn run() {
             app.set_cases_hook(move || {
                 let _ = cases_handle.emit("cases-changed", ());
             });
+            let doc_configs_handle = handle.clone();
+            app.set_doc_configs_hook(move || {
+                let _ = doc_configs_handle.emit("doc-configs-changed", ());
+            });
+            start_doc_configs_expiry(&handle, &app);
             crate::library::watch::start(app.clone(), crate::core::LIBRARY_POLL);
             if let Some(old) = moved_from {
                 let message = i18n::tf(

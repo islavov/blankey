@@ -25,6 +25,8 @@ use crate::vault::{now, RelayGrant};
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 /// how often the relay hears what the app did on this computer
 const REPORT_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// How often the relay is asked whether the document config set changed.
+const DOC_CONFIGS_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const MIN_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// the relay waits at least 60 s for an mcp_result
@@ -128,10 +130,13 @@ async fn serve(relay: &Arc<Relay>, socket: Socket) {
     // submissions that arrived while the app was offline, the account's current language, and this computer's numbers
     drain(relay);
     refresh_profile(relay);
+    refresh_doc_configs(relay);
     relay.report();
     let start = tokio::time::Instant::now() + PING_INTERVAL;
     let mut ping = tokio::time::interval_at(start, PING_INTERVAL);
     let mut report = tokio::time::interval_at(tokio::time::Instant::now() + REPORT_INTERVAL, REPORT_INTERVAL);
+    let mut doc_configs =
+        tokio::time::interval_at(tokio::time::Instant::now() + DOC_CONFIGS_INTERVAL, DOC_CONFIGS_INTERVAL);
     let mut awaiting_pong = false;
     loop {
         tokio::select! {
@@ -163,6 +168,7 @@ async fn serve(relay: &Arc<Relay>, socket: Socket) {
                 }
             }
             _ = report.tick() => relay.report(),
+            _ = doc_configs.tick() => refresh_doc_configs(relay),
             _ = ping.tick() => {
                 if awaiting_pong {
                     break;
@@ -180,6 +186,15 @@ async fn serve(relay: &Arc<Relay>, socket: Socket) {
 fn drain(relay: &Arc<Relay>) {
     let relay = relay.clone();
     tokio::spawn(async move { relay.drain_inbox().await });
+}
+
+fn refresh_doc_configs(relay: &Arc<Relay>) {
+    let relay = relay.clone();
+    tokio::spawn(async move {
+        if let Err(e) = relay.refresh_doc_configs().await {
+            eprintln!("relay: cannot read the document config set: {e}");
+        }
+    });
 }
 
 fn refresh_profile(relay: &Arc<Relay>) {

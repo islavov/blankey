@@ -199,6 +199,32 @@ pub(super) fn get_json<T: serde::de::DeserializeOwned>(agent: &ureq::Agent, url:
     parse(&read(agent.get(url).set("Authorization", &format!("Bearer {token}")).call())?)
 }
 
+/// What a conditional GET came back with.
+pub(super) enum Conditional {
+    /// 200: the body
+    Fresh(String),
+    /// 304: what the caller holds is current
+    Same,
+    /// 204: there is nothing for this caller
+    Nothing,
+    /// 402: the account may not have it
+    Refused,
+}
+
+/// A GET that names the version held (`If-None-Match`), so an unchanged body is not sent again.
+pub(super) fn get_conditional(agent: &ureq::Agent, url: &str, token: &str, held: Option<&str>) -> Http<Conditional> {
+    let mut request = agent.get(url).set("Authorization", &format!("Bearer {token}"));
+    if let Some(version) = held {
+        request = request.set("If-None-Match", &format!("\"{version}\""));
+    }
+    match request.call() {
+        Ok(response) if response.status() == 304 => Ok(Conditional::Same),
+        Ok(response) if response.status() == 204 => Ok(Conditional::Nothing),
+        Err(ureq::Error::Status(402, _)) => Ok(Conditional::Refused),
+        result => read(result).map(Conditional::Fresh),
+    }
+}
+
 /// Only the status counts: reading the empty body of a 204 through some proxies fails with "unexpected end of file".
 pub(super) fn delete(agent: &ureq::Agent, url: &str, token: &str) -> Http<()> {
     match agent.delete(url).set("Authorization", &format!("Bearer {token}")).call() {
