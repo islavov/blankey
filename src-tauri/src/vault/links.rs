@@ -100,12 +100,22 @@ impl Vault {
 
     /// What the file is and whose; the rest of its metadata stays.
     pub fn set_file_description(&self, id: i64, description: &str) -> Result<()> {
+        self.set_file_meta(id, "description", description)
+    }
+
+    /// Renames the file. Its extension stays, so it still opens as what it is; a path keeps only its last part.
+    pub fn set_file_name(&self, id: i64, name: &str) -> Result<()> {
+        let old = self.get_collected_file(id)?.name;
+        self.set_file_meta(id, "name", &renamed(&old, name))
+    }
+
+    fn set_file_meta(&self, id: i64, field: &str, value: &str) -> Result<()> {
         let dek = self.require_dek()?;
         let row = self.repo.collected_file(id)?.ok_or_else(|| VaultError::NotFound(format!("Unknown file {id}")))?;
         let case_id = row.case_id;
         let plain = encrypt::open_collected_meta(dek, id, &row.meta.nonce, &row.meta.ciphertext)?;
         let mut meta: Value = serde_json::from_slice(&plain)?;
-        meta["description"] = Value::String(description.to_string());
+        meta[field] = Value::String(value.to_string());
         self.repo.set_collected_meta(id, &encrypt::collected_meta(dek, id, &serde_json::to_vec(&meta)?))?;
         self.touch_case(case_id)
     }
@@ -154,5 +164,15 @@ impl Vault {
             description: text("description"),
         };
         Ok((file, key))
+    }
+}
+
+/// `name` as the new name of the file called `old`: without folders, and with `old`'s extension when it lacks it.
+fn renamed(old: &str, name: &str) -> String {
+    let extension = |n: &str| std::path::Path::new(n).extension().and_then(|e| e.to_str()).map(str::to_owned);
+    let name = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
+    match extension(old) {
+        Some(kept) if extension(name).is_none_or(|e| !e.eq_ignore_ascii_case(&kept)) => format!("{name}.{kept}"),
+        _ => name.to_string(),
     }
 }

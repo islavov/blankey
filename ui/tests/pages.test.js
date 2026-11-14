@@ -126,6 +126,11 @@ test("profiles: edits mark the profile unsaved, problems are shown, switching aw
     ["text", "egn"]
   );
   assert.ok($("input.value").classList.contains("masked"));
+  await click($$(".fields .eye")[1]);
+  assert.deepEqual($$("input.value").map((input) => input.classList.contains("masked")), [true, false], "the eye shows one value");
+  assert.equal($$(".fields .eye")[1].title, "Hide value");
+  await click($$(".fields .eye")[1]);
+  assert.ok($$("input.value")[1].classList.contains("masked"));
 
   await type($$("input.value")[1], "8001010000");
   assert.equal(text(".detail-actions > span.small"), "Unsaved changes");

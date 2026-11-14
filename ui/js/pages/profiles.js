@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "../../vendor/preact-htm.js";
 import { call } from "../api.js";
 import { problemText, t, tn } from "../i18n.js";
-import { html, matches, megabytes, placeholder, reload, state, useLoad, useRemembered, when } from "../lib.js";
+import { html, Icon, matches, megabytes, placeholder, reload, state, useLoad, useRemembered, when } from "../lib.js";
 import { confirmDialog, dialog, toast } from "../ui/feedback.js";
 import { Page } from "../ui/page.js";
 import { Select } from "../ui/select.js";
@@ -256,6 +256,8 @@ function FieldRow({ r, reveal, focus, onChange, onRemove }) {
     if (focus) keyInput.current.focus();
   }, [focus]);
   const input = (field) => (e) => onChange({ [field]: e.target.value });
+  // this one value shown while the others stay dots
+  const [shown, setShown] = useState(false);
   return html`
     <tr>
       <td style="width:26%">
@@ -267,8 +269,13 @@ function FieldRow({ r, reveal, focus, onChange, onRemove }) {
           onChange=${(type) => onChange({ type })} />
       </td>
       <td>
-        <input type="text" class=${`value ${reveal ? "" : "masked"}`} value=${r.value}
-          placeholder=${placeholder(r.type)} spellcheck="false" onInput=${input("value")} />
+        <div class="value-cell">
+          <input type="text" class=${`value ${reveal || shown ? "" : "masked"}`} value=${r.value}
+            placeholder=${placeholder(r.type)} spellcheck="false" onInput=${input("value")} />
+          ${!reveal &&
+          html`<button class="eye ghost" data-help="profiles.eye" title=${shown ? t("Hide value") : t("Show value")} aria-label=${shown ? t("Hide value") : t("Show value")}
+            onClick=${() => setShown(!shown)}><${Icon} name=${shown ? "eye-off" : "eye"} /></button>`}
+        </div>
       </td>
       <td style="width:1%"><button class="remove ghost" data-help="profiles.remove" title=${t("Remove field")} onClick=${onRemove}>✕</button></td>
     </tr>`;

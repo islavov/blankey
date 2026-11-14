@@ -30,9 +30,29 @@ pub struct PagePreview {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Preview {
-    Html { html: String, names: Vec<String> },
-    Pages { pages: Vec<PagePreview>, names: Vec<String> },
-    Error { message: String },
+    Html {
+        html: String,
+        names: Vec<String>,
+    },
+    Pages {
+        pages: Vec<PagePreview>,
+        names: Vec<String>,
+    },
+    /// data: URL of an image file
+    Image {
+        image: String,
+    },
+    Error {
+        message: String,
+    },
+}
+
+impl Preview {
+    /// An image file as it is.
+    pub fn image(media_type: &str, bytes: &[u8]) -> Self {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        Preview::Image { image: format!("data:{media_type};base64,{encoded}") }
+    }
 }
 
 pub fn preview(template: &Template, values: Option<&Values>) -> Preview {

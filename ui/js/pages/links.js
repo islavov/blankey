@@ -14,7 +14,23 @@ import { relaySignIn } from "./settings.js";
 const linkState = (state) => ({ open: t("Open"), expired: t("Expired"), revoked: t("Revoked"), full: t("Full") })[state] || state;
 const DAYS = [1, 7, 30];
 
-const copyLink = (url) => call("copy_text", { text: url }).then(() => toast(t("Link copied.")));
+/** Copies a link and says so; `copied` is that link's URL for two seconds, for the checkmark on the button. */
+function useCopyLink() {
+  const [copied, setCopied] = useState(null);
+  const timer = useRef();
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const copy = async (url) => {
+    await call("copy_text", { text: url });
+    toast(t("Link copied."));
+    setCopied(url);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(null), 2000);
+  };
+  return [copied, copy];
+}
+
+/** A copy button's label: a checkmark right after it copied. */
+const copyLabel = (done, label) => (done ? html`<span class="copied">✓ ${t("Copied")}</span>` : label);
 const shortUrl = (url) => url.replace(/^https?:\/\//, "").replace(/#.*$/, "");
 
 const FILTERS = [
@@ -55,6 +71,7 @@ export function Links() {
   const links = useLoad(() => call("list_links"), []);
   const [picked, pick, setSelected] = useSelection("links");
   const [filter, setFilter] = useRemembered("links.filter", "all");
+  const [copied, copyLink] = useCopyLink();
   if (!links || !relay) return null;
 
   const chosen = links.filter((l) => picked.includes(l.link_id));
@@ -108,7 +125,7 @@ export function Links() {
   return html`
     <${Page} title=${t("Collection links")} subtitle=${pending ? tn(pending, "{n} submission to review", "{n} submissions to review") : tn(links.length, "{n} link", "{n} links")} actions=${[
       [t("New link"), create, "primary", "links.new"],
-      [t("Copy link"), need((l) => copyLink(l.url)), "", "links.copy"],
+      [copyLabel(last && copied === last.url, t("Copy link")), need((l) => copyLink(l.url)), "", "links.copy"],
       [t("Revoke"), needAll(revoke), "", "links.revoke"],
       [t("Delete"), needAll(remove), "danger", "links.delete"],
     ]}>
@@ -137,6 +154,7 @@ export function Links() {
 
 /** What came in for one link, beside the table; each opens again until it is discarded. */
 function Submissions({ link, close }) {
+  const [copied, copyLink] = useCopyLink();
   const submissions = useLoad(() => call("list_submissions", { linkId: link.link_id }), [link.link_id]);
   const open = async (sid) => {
     await openSubmission({ sid });
@@ -150,7 +168,7 @@ function Submissions({ link, close }) {
       </div>
       <div class="side-link">
         <span class="mono selectable">${shortUrl(link.url)}</span>
-        <button class="link" onClick=${() => copyLink(link.url)}>${t("Copy")}</button>
+        <button class="link" onClick=${() => copyLink(link.url)}>${copyLabel(copied === link.url, t("Copy"))}</button>
       </div>
       <div class="muted small">
         ${t("{count} received · {state} · expires {date}", { count: `${link.submissions}/${link.max_submissions}`, state: linkState(link.state), date: when(link.expires_at) })}

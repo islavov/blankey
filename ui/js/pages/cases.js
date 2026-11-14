@@ -5,6 +5,7 @@ import { openFill } from "../fill/form.js";
 import { HelpNote } from "../help.js";
 import { t, tn } from "../i18n.js";
 import { html, Icon, KIND_NAMES, matches, megabytes, reload, state, update, useLoad, useStore, when } from "../lib.js";
+import { Preview } from "../preview.js";
 import { openReview } from "../review.js";
 import { confirmDialog, dialog, isDialogOpen, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
@@ -132,11 +133,11 @@ function CaseDetail({ caseId }) {
   const tab = caseTab && (caseTab !== "chat" || chat) ? caseTab : chat ? "chat" : "files";
   const tabs = [
     chat && ["chat", t("AI assistant"), running.has(caseId) ? html`<${Spinner} />` : null, "case.chat"],
-    ["files", t("Files"), info.counts.files],
+    ["files", t("Files"), info.counts.files, "case.files"],
     ["profiles", t("Profiles"), info.counts.profiles],
     ["templates", t("Templates"), info.counts.templates],
     ["fillsets", t("Fill sets"), info.counts.fill_sets],
-    ["documents", t("Documents"), info.counts.documents],
+    ["documents", t("Documents"), info.counts.documents, "case.documents"],
     ["activity", t("Activity"), info.counts.activity],
   ].filter(Boolean);
   const content = {
@@ -190,6 +191,16 @@ function CaseHead({ info }) {
     </div>`;
 }
 
+/** The empty Files tab: where the case's documents are dropped, lit while files are dragged; a click opens Import. */
+function DropZone({ onImport }) {
+  const { dragging } = useStore();
+  return html`
+    <button class=${`drop-zone ${dragging ? "over" : ""}`} onClick=${onImport}>
+      <${Icon} name="upload" />
+      <span>${t("No files yet. Drop what the client brought here, such as IDs, deeds and contracts, or use Import…")}</span>
+    </button>`;
+}
+
 // -- tabs --------------------------------------------------------------------------------
 
 /**
@@ -231,11 +242,36 @@ function fileKind(type) {
 
 const fileLabel = (f) => f.description || f.name;
 
+const openOutside = (file) => call("open_collected_files", { ids: [file.id] });
+
+/** Shows a case file inside Blankey, so no decrypted copy has to leave the vault for another app. */
+const openFile = (file) =>
+  openSheet((close) => html`
+    <div class="sheet-head"><${SheetHead} icon="doc" title=${fileLabel(file)} reason=${file.description ? file.name : ""} /></div>
+    <div class="sheet-body file-view"><${FileView} file=${file} /></div>
+    <div class="sheet-foot">
+      <button data-help="casefiles.outside" onClick=${() => openOutside(file)}>${t("Open in another app")}</button>
+      <span class="spacer"></span>
+      <button class="primary" onClick=${close}>${t("Close")}</button>
+    </div>`);
+
+function FileView({ file }) {
+  const preview = useLoad(() => call("case_file_preview", { id: file.id }), [file.id]);
+  return html`<${Preview} preview=${preview} interactive=${false} />`;
+}
+
 function CaseFiles({ info }) {
   const files = useLoad(() => call("list_collected_files", { caseId: info.id }), [info.id]);
   if (!files) return null;
 
-  const open = (file) => call("open_collected_files", { ids: [file.id] });
+  const open = (file) => (READABLE.includes(file.type) || file.type.startsWith("image/") ? openFile(file) : openOutside(file));
+  const rename = async (file) => {
+    const values = await dialog({ title: t("Rename {name}", { name: file.name }), fields: [{ name: "name", label: t("File name"), value: file.name }], ok: t("Rename") });
+    const name = values?.name.trim();
+    if (!name || name === file.name) return;
+    await call("update_case_file", { id: file.id, name });
+    reload();
+  };
   const describe = async (file) => {
     const values = await dialog({
       title: t("Description of {name}", { name: file.name }),
@@ -265,6 +301,7 @@ function CaseFiles({ info }) {
     menu=${(f) => [
       { label: t("Open"), help: "casefiles.open", action: () => open(f) },
       { label: t("Export…"), help: "casefiles.export", action: () => exportFile(f) },
+      { label: t("Rename…"), help: "casefiles.rename", action: () => rename(f) },
       { label: t("Description…"), help: "casefiles.describe", action: () => describe(f) },
       READABLE.includes(f.type) && { label: t("Personal data…"), help: "casefiles.pii", action: () => openReview({ source: `casefile:${f.id}`, title: fileLabel(f) }) },
       "-",
@@ -280,7 +317,7 @@ function CaseFiles({ info }) {
       { title: t("Size"), cell: (f) => megabytes(f.size), cls: "nowrap" },
       { title: t("Added"), cell: (f) => html`<span class="muted">${when(f.created_at)}</span>`, cls: "nowrap" },
     ]}
-    empty=${t("No files yet. Drop the documents of this case here, or use Import…")} />`;
+    empty=${html`<${DropZone} onImport=${() => importInto(info)} />`} />`;
 }
 
 // -- import ------------------------------------------------------------------------------
@@ -579,7 +616,7 @@ function CaseDocuments({ info }) {
       { title: t("Size"), cell: (d) => (d.pages ? tn(d.pages, "{n} page", "{n} pages") : "-"), cls: "nowrap" },
       { title: t("Created"), cell: (d) => html`<span class="muted">${when(d.created_at)}</span>`, cls: "nowrap" },
     ]}
-    empty=${t("No documents in this case yet.")} />`;
+    empty=${t("No documents yet. What Blankey fills in for this case from a template shows here.")} />`;
 }
 
 function CaseActivity({ info }) {

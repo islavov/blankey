@@ -294,6 +294,12 @@ fn case_file_descriptions_are_encrypted() {
         (stored.description.as_str(), stored.name.as_str(), content.as_slice()),
         ("Seller, deed", "scan.pdf", &b"%PDF"[..])
     );
+
+    vault.set_file_name(id, "deed 2019").unwrap();
+    assert_eq!(vault.get_collected_file(id).unwrap().name, "deed 2019.pdf", "the extension stays");
+    vault.set_file_name(id, "../title deed.PDF").unwrap();
+    let stored = vault.get_collected_file(id).unwrap();
+    assert_eq!((stored.name.as_str(), stored.description.as_str()), ("title deed.PDF", "Seller, deed"));
 }
 
 #[test]

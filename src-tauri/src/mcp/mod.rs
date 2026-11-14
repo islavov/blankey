@@ -110,12 +110,13 @@ mod tests {
             let (_, tools) = post(port, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}), None);
             let names: Vec<&str> =
                 tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-            assert_eq!(names.len(), 24, "collection link tools need a Blankey Online sign-in: {names:?}");
+            assert_eq!(names.len(), 25, "collection link tools need a Blankey Online sign-in: {names:?}");
             assert!(!names.contains(&"create_collection_link"));
             assert!(!reply["result"]["instructions"].as_str().unwrap().contains("create_collection_link"));
             app.vault().set_relay_account(Some("someone@example.com")).unwrap();
             let (_, tools) = post(port, json!({"jsonrpc": "2.0", "id": 5, "method": "tools/list"}), None);
-            assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 26);
+            assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 27);
+            assert!(names.contains(&"get_help"));
             let (_, signed_in) = post(port, init.clone(), None);
             assert!(signed_in["result"]["instructions"].as_str().unwrap().contains("create_collection_link"));
             // a find with no arguments at all

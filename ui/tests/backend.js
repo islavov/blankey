@@ -532,8 +532,15 @@ export function createBackend(db = seed()) {
       touch(caseId);
       return items.length;
     },
-    update_case_file: ({ id, description }) => {
-      db.collected.find((f) => f.id === id).description = description;
+    update_case_file: ({ id, description, name }) => {
+      const file = db.collected.find((f) => f.id === id);
+      if (description != null) file.description = description;
+      if (name != null) file.name = name;
+    },
+    case_file_preview: ({ id }) => {
+      const { type } = db.collected.find((f) => f.id === id);
+      if (type.startsWith("image/")) return { type: "image", image: PAGE_IMAGE };
+      return type === "application/pdf" ? pagesPreview : htmlPreview;
     },
     // profiles a case can add: global ones not in it, and local ones of other cases (named by their cases)
     linkable_profiles: ({ caseId }) =>

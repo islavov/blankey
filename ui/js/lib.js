@@ -51,6 +51,7 @@ const ICONS = {
   more: '<circle cx="8" cy="3.4" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="12.6" r="1.4" fill="currentColor"/>',
   trash: '<path d="M2.8 4.2h10.4M6.3 4.2V2.6h3.4v1.6M4.2 4.2l.7 9.2h6.2l.7-9.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>',
   magic: '<path d="M6.5 3.5l1.3 3.7 3.7 1.3-3.7 1.3-1.3 3.7-1.3-3.7L1.5 8.5l3.7-1.3z" fill="currentColor"/><path d="M12 1.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" fill="currentColor"/>',
+  upload: '<path d="M8 10.4V2.6M4.9 5.6l3.1-3 3.1 3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.4 10v2.6a1 1 0 0 0 1 1h9.2a1 1 0 0 0 1-1V10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
   lock: '<rect x="3.5" y="7" width="9" height="7" rx="1.5" fill="currentColor"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.4"/>',
 };
 

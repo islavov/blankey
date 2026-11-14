@@ -165,11 +165,18 @@ test("Escape closes what is on top: the dialog first, then the sheet", async () 
   await tab("Files");
 });
 
-test("files: double-click opens one; its ⋮ menu has what a file can do", async () => {
+test("files: double-click shows one inside Blankey; its ⋮ menu has what a file can do", async () => {
   await dblclick(row("Title deed"));
+  assert.equal(text(".sheet h2"), "Title deed, 2019");
+  assert.deepEqual(backend.called("case_file_preview").at(-1), { id: 12 });
+  assert.ok($(".sheet .preview-area .pdf-page, .sheet .preview-area .paper"), "the file is shown, not handed to another app");
+  assert.equal(backend.called("open_collected_files").length, 0);
+  await click(byText(".sheet-foot button", "Open in another app"));
   assert.deepEqual(backend.called("open_collected_files").at(-1), { ids: [12] });
+  await click(byText(".sheet-foot button", "Close"));
+  assert.equal($(".sheet"), null);
 
-  assert.deepEqual(await menuOf("Title deed"), ["Open", "Export…", "Description…", "Personal data…", "Delete"]);
+  assert.deepEqual(await menuOf("Title deed"), ["Open", "Export…", "Rename…", "Description…", "Personal data…", "Delete"]);
   for (const item of $$(".menu-item")) {
     await hover(item);
     assert.equal(text(".help-title"), item.textContent, "each menu item has its help");
@@ -177,8 +184,18 @@ test("files: double-click opens one; its ⋮ menu has what a file can do", async
   assert.equal(text(".help-text"), "Removes the files from the vault. Copies you exported stay.");
   await key("Escape", document.body);
   assert.equal($(".menu"), null);
-  assert.deepEqual(await menuOf("mary-id.jpg"), ["Open", "Export…", "Description…", "Delete"], "no personal data check for an image");
+  assert.deepEqual(await menuOf("mary-id.jpg"), ["Open", "Export…", "Rename…", "Description…", "Delete"], "no personal data check for an image");
   await key("Escape", document.body);
+  await rowMenu("mary-id.jpg", "Open");
+  assert.ok($(".sheet img.preview-image"), "an image shows as it is");
+  await click(byText(".sheet-foot button", "Close"));
+
+  await rowMenu("mary-id.jpg", "Rename…");
+  assert.equal($(".modal input[name=name]").value, "mary-id.jpg");
+  await type($(".modal input[name=name]"), "scan-of-mary-id.jpg");
+  await submit($(".modal form"));
+  assert.deepEqual(backend.called("update_case_file").at(-1), { id: 11, name: "scan-of-mary-id.jpg" });
+  assert.ok(row("scan-of-mary-id.jpg"));
 
   await rowMenu("Title deed", "Description…");
   await type($(".modal input[name=description]"), "Title deed of the flat, 2019");
@@ -338,5 +355,14 @@ test("a new case opens ready for files", async () => {
   await submit($(".modal form"));
   assert.deepEqual(backend.called("create_case").at(-1), { title: "Power of attorney, car" });
   assert.equal($(".case-title").value, "Power of attorney, car");
-  assert.equal(text(".case-tab .empty"), "No files yet. Drop the documents of this case here, or use Import…");
+  assert.equal(text(".case-tab .empty"), "No files yet. Drop what the client brought here, such as IDs, deeds and contracts, or use Import…");
+  assert.ok($(".case-tab .drop-zone svg"), "the empty tab is a drop zone");
+  backend.emit("tauri://drag-enter", { paths: [], position: { x: 10, y: 10 } });
+  await settle();
+  assert.ok($(".drop-zone.over"), "lit while files are dragged");
+  backend.emit("tauri://drag-leave");
+  await settle();
+  assert.equal($(".drop-zone.over"), null);
+  await click($(".drop-zone"));
+  assert.ok(backend.called("pick_files").length > 0, "a click opens Import");
 });
