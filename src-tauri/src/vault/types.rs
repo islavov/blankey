@@ -143,6 +143,10 @@ pub struct CollectedFile {
     pub case_id: Option<i64>,
     /// what the file is and whose, as the user typed it on import; how the AI finds case files
     pub description: String,
+    /// SHA-256 of the file as it was imported, as `recognize` gives it: for a .doc kept as the .docx made from it,
+    /// the .doc's. Empty for a file kept before it was recorded
+    #[serde(skip)]
+    pub sha256: String,
 }
 
 /// A file to keep: with a profile (from a link or added by hand) or in a case.
@@ -153,6 +157,7 @@ pub struct NewFile<'a> {
     pub name: &'a str,
     pub file_type: &'a str,
     pub description: &'a str,
+    pub sha256: &'a str,
 }
 
 /// One matter: the profiles in it, its files, templates, fill sets, documents and requests. The title is plaintext

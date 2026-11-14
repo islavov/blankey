@@ -517,9 +517,16 @@ export function createBackend(db = seed()) {
       return deleted;
     },
     pick_files: () => db.pickPaths ?? ["/Users/test/Downloads/id-card.jpg", "/Users/test/Downloads/notary-deed.pdf", "/Users/test/Downloads/power-of-attorney.docx"],
+    recognize_files: ({ paths }) => paths.map((path) => ({ path, type: fileType(path.split(/[\\/]/).pop()) })),
     import_case_files: ({ caseId, items }) => {
+      const converted = [];
       for (const { path, description } of items) {
-        const name = path.split(/[\\/]/).pop();
+        let name = path.split(/[\\/]/).pop();
+        // this computer converts old Word files, unless the test says it cannot
+        if (/\.doc$/i.test(name) && db.convertsDoc !== false) {
+          name = `${name}x`;
+          converted.push(name);
+        }
         db.collected.unshift({
           id: nextId(db.collected),
           case_id: caseId,
@@ -535,7 +542,8 @@ export function createBackend(db = seed()) {
         });
       }
       touch(caseId);
-      return items.length;
+      const names = items.map(({ path }) => path.split(/[\\/]/).pop());
+      return { count: items.length, converted, old_word: db.convertsDoc === false ? names.filter((name) => /\.doc$/i.test(name)) : [] };
     },
     update_case_file: ({ id, description, name }) => {
       const file = db.collected.find((f) => f.id === id);
@@ -670,7 +678,7 @@ export function createBackend(db = seed()) {
 const now = () => new Date().toISOString().slice(0, 19);
 
 const FILE_TYPES = { pdf: "application/pdf", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", heic: "image/heic" };
-const fileType = (name) => FILE_TYPES[name.split(".").pop().toLowerCase()] || "application/octet-stream";
+const fileType = (name) => (/\.doc$/i.test(name) ? "application/msword" : FILE_TYPES[name.split(".").pop().toLowerCase()] || "application/octet-stream");
 
 const delayed = (ms, value) => (ms ? new Promise((resolve) => setTimeout(() => resolve(value), ms)) : value);
 

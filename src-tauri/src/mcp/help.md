@@ -49,8 +49,10 @@ profile fields; other blanks get values at fill time.
 
 - The user does not build templates by hand. They ask the assistant: "make a template from this document". The
   document is a file in the case, or a file in one of the folders added under Templates.
-- Word (.docx) and PDF files can become templates. An old .doc file has to be saved as .docx first; a scan or photo
-  cannot become a Word template.
+- Word (.docx) and PDF files can become templates. An old .doc file is converted to .docx when it is imported, if
+  the computer has LibreOffice or is a Mac; the layout can shift, so it is worth a look. Where it could not be
+  converted it shows as "Word (.doc)" and has to be saved as .docx in Word and imported again. A scan or photo cannot
+  become a Word template.
 - The Templates page also lists the folders the user added and the files in them; Blankey rebuilds a template when
   its file changes.
 
