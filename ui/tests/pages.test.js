@@ -172,7 +172,8 @@ test("profiles: edits mark the profile unsaved, problems are shown, switching aw
 
   await type($$("input.key")[1], "bad key");
   await click(byText(".detail-actions button", "Save"));
-  assert.equal(text(".problems"), "bad key: use dotted words without spaces");
+  assert.equal(text(".fields .field-problem"), "use dotted words without spaces");
+  assert.equal(text(".problems"), "");
 
   await type($$("input.key")[1], "egn");
   await click(byText(".detail-actions button", "Save"));

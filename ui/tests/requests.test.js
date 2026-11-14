@@ -15,12 +15,16 @@ test("profile input: required fields are checked, values go to the vault", async
   assert.equal(email.value, "old@example.com");
 
   await type(email, "");
+  await check($("input[name=f1]"));
   await click(byText(".sheet-foot button", "Save"));
-  assert.equal(text(".problems"), "Email: required");
+  assert.equal(text(".field-problem"), "required");
+  assert.equal(text(".problems"), "", "a field's problem shows at the field only");
+  assert.ok(email.classList.contains("invalid"));
   assert.ok($(".sheet"));
+  assert.equal(email.value, "", "a refused save leaves what was typed");
+  assert.ok($("input[name=f1]").checked);
 
   await type(email, "john@example.com");
-  await check($("input[name=f1]"));
   await click(byText(".sheet-foot button", "Save"));
   const resolved = backend.called("resolve_profile_input").at(-1);
   assert.deepEqual(resolved.values, { email: "john@example.com", vip: "yes" });
@@ -118,7 +122,8 @@ test("submission: values are prefilled and editable; unticked files are not kept
 
   await type($(".sheet input[name=name]"), "");
   await click(byText(".sheet-foot button", "Save"));
-  assert.equal(text(".sheet .problems"), "Full name: required");
+  assert.equal(text(".sheet .field-problem"), "required");
+  assert.ok($(".sheet input[name=name]").classList.contains("invalid"));
 
   await type($(".sheet input[name=name]"), "Jane A. Roe");
   await check($$(".file-row input.keep")[1], false);

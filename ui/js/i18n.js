@@ -37,3 +37,9 @@ export async function setLanguage(code, load) {
 
 /** A validation problem from the backend: the field's own label and an English message from the catalog. */
 export const problemText = ({ label, message }) => (label ? `${label}: ${t(message)}` : t(message));
+
+/** What is wrong with the field `key`, for the line under its input; "" when nothing is. */
+export const problemsAt = (problems, key) => problems.filter((p) => p.key === key).map((p) => t(p.message)).join("\n");
+
+/** The problems of fields that are not among `keys`, with their labels, for the block under the form. */
+export const problemsElsewhere = (problems, keys) => problems.filter((p) => !keys.includes(p.key)).map(problemText).join("\n");

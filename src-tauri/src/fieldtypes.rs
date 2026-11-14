@@ -7,14 +7,34 @@ use crate::i18n::mark;
 pub const TYPES: &[&str] = &["text", "number", "date", "bool", "egn", "iban", "email", "phone"];
 pub const TRUE_VALUES: &[&str] = &["1", "true", "да", "yes", "x"];
 const EGN_WEIGHTS: [u32; 9] = [2, 4, 8, 5, 10, 9, 7, 3, 6];
+const LNCH_WEIGHTS: [u32; 9] = [21, 19, 17, 13, 11, 9, 7, 3, 1];
+
+/// The digits of a 10-digit personal number, EGN or ЛНЧ.
+fn ten_digits(value: &str) -> Option<Vec<u32>> {
+    (value.len() == 10 && value.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| value.bytes().map(|b| (b - b'0') as u32).collect())
+}
+
+fn weighted(digits: &[u32], weights: [u32; 9]) -> u32 {
+    digits[..9].iter().zip(weights).map(|(d, w)| d * w).sum()
+}
 
 pub fn valid_egn(value: &str) -> bool {
-    if value.len() != 10 || !value.bytes().all(|b| b.is_ascii_digit()) {
-        return false;
+    ten_digits(value).is_some_and(|d| weighted(&d, EGN_WEIGHTS) % 11 % 10 == d[9])
+}
+
+/// ЛНЧ, the personal number a foreigner has in place of an EGN.
+pub fn valid_lnch(value: &str) -> bool {
+    ten_digits(value).is_some_and(|d| weighted(&d, LNCH_WEIGHTS) % 10 == d[9])
+}
+
+/// Why an `egn` field refuses a value; it takes an EGN or a ЛНЧ. The collection form runs the same check
+/// (public/collect/validate.js on the relay).
+fn egn_problem(value: &str) -> Option<&'static str> {
+    if ten_digits(value).is_none() {
+        return Some(mark("An EGN or LNCh has 10 digits"));
     }
-    let digits: Vec<u32> = value.bytes().map(|b| (b - b'0') as u32).collect();
-    let checksum = digits[..9].iter().zip(EGN_WEIGHTS).map(|(d, w)| d * w).sum::<u32>() % 11 % 10;
-    checksum == digits[9]
+    (!valid_egn(value) && !valid_lnch(value)).then_some(mark("Not a valid EGN or LNCh: check for a mistyped digit"))
 }
 
 pub fn valid_iban(value: &str) -> bool {
@@ -54,7 +74,7 @@ pub fn validate(field_type: &str, value: &str) -> Option<&'static str> {
     match field_type {
         "number" => value.replace(' ', "").replace(',', ".").parse::<f64>().is_err().then_some(mark("Invalid number")),
         "date" => parse_date(value).is_none().then_some(mark("Date must be DD.MM.YYYY")),
-        "egn" => (!valid_egn(value)).then_some(mark("Invalid EGN")),
+        "egn" => egn_problem(value),
         "iban" => (!valid_iban(value)).then_some(mark("Invalid IBAN")),
         "email" => (!valid_email(value)).then_some(mark("Invalid email")),
         _ => None,
@@ -96,6 +116,17 @@ mod tests {
         assert!(valid_egn("7501020018"));
         assert!(!valid_egn("7501020019"));
         assert!(!valid_egn("75010200"));
+        assert!(valid_lnch("7111042925"));
+        assert!(!valid_lnch("7111042922"));
+    }
+
+    #[test]
+    fn egn_fields_take_an_egn_or_a_lnch_and_say_why_not() {
+        assert_eq!(validate("egn", "7501020018"), None);
+        assert_eq!(validate("egn", "7111042925"), None);
+        assert_eq!(validate("egn", "9208128911"), Some("Not a valid EGN or LNCh: check for a mistyped digit"));
+        assert_eq!(validate("egn", "75010200"), Some("An EGN or LNCh has 10 digits"));
+        assert_eq!(validate("egn", "75010200a8"), Some("An EGN or LNCh has 10 digits"));
     }
 
     #[test]

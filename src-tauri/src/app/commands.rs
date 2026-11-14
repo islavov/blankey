@@ -523,15 +523,15 @@ fn save_fields(
             continue;
         }
         if key.starts_with('.') || key.ends_with('.') || key.contains(char::is_whitespace) {
-            errors.push(Problem::new(key, crate::i18n::mark("use dotted words without spaces")));
+            errors.push(Problem::new(key, key, crate::i18n::mark("use dotted words without spaces")));
         }
         if !seen.insert(key.to_string()) {
-            errors.push(Problem::new(key, crate::i18n::mark("duplicate key")));
+            errors.push(Problem::new(key, key, crate::i18n::mark("duplicate key")));
         }
         let field_type = if fieldtypes::is_type(&f.field_type) { f.field_type.as_str() } else { "text" };
         let value = f.value.trim();
         if let Some(message) = fieldtypes::validate(field_type, value) {
-            errors.push(Problem::new(key, message));
+            errors.push(Problem::new(key, key, message));
         }
         inputs.push(FieldInput::new(key, value, f.label.trim(), field_type));
     }
