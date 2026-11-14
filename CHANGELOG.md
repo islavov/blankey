@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0
+
+- First use: after the recovery key, a welcome shows what Blankey Online adds and lets you sign in, or stay offline
+  and connect Claude Desktop with one click. The Cases page then offers a sample case: an invented loan contract and
+  the two people in it, in your language, with what to ask the assistant to get a first document. The language can be
+  picked top right from the first screen on. Vaults you already have see none of this.
+- Known documents: with a Blankey Online account, a scan or photo of an ID card or a registration certificate
+  imported into a case is read on this computer and becomes a profile of the case. Opening the file shows the profile
+  beside it, with a box on each value that was read. Settings shows the state of document recognition.
+- Files and documents open inside Blankey: Word, PDF and images show in a viewer that prints; other file types still
+  open in their own apps. A case file can be renamed.
+- Files are recognized by their content, not their name. An old Word file (.doc) is converted to .docx on import, with
+  LibreOffice when it is installed or macOS's own converter, so the assistant can read it.
+- Dropped files land only on the open case, which shows a frame while you drag. Hold them over another case for two
+  seconds and it opens. The empty Files tab is a drop zone; a click on it opens Import.
+- The assistant in a case: the tab is called AI assistant and is where a case opens. An empty chat offers questions
+  to start with. A model step that fails is tried again, and the chat says so; a model that fails or stays silent is
+  named in the error.
+- Forms: a problem shows under its own field, and a refused save keeps what you typed. An EGN field also takes a
+  ЛНЧ, and says whether the number is too short or has a mistyped digit.
+- Profiles: an eye beside each value shows that one value. Copy on a collection link confirms on the button.
+- Fixed: signing in to or out of Blankey Online could undo a language picked in Settings in the same session.
+
 ## 0.3.1
 
 - A profile you create through the assistant's form, or from a collection link submission, now counts as a profile
