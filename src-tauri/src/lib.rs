@@ -17,6 +17,7 @@ pub mod pii;
 pub mod recognize;
 pub mod relay;
 pub mod render;
+pub mod sample;
 pub mod telemetry;
 pub mod templates;
 pub mod vault;

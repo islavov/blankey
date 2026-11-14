@@ -55,6 +55,8 @@ pub struct Status {
     language: String,
     device_language: Option<String>,
     languages: serde_json::Map<String, Value>,
+    /// "wizard" or "case" while a new vault's owner is shown around; None after, and for every older vault
+    first_use: Option<String>,
 }
 
 // async so it runs off the main thread: the window waits on it before drawing anything
@@ -75,6 +77,7 @@ async fn status(state: State<'_, AppState>) -> CmdResult<Status> {
         language: app.language(),
         device_language: app.device_language(),
         languages: crate::i18n::languages(),
+        first_use: vault.first_use().map_err(err)?,
     })
 }
 
@@ -87,6 +90,7 @@ async fn setup(
 ) -> CmdResult<String> {
     check_password(&password)?;
     let recovery = state.app.vault().initialize(&password, use_keyring).map_err(err)?;
+    state.app.vault().set_first_use(Some("wizard")).map_err(err)?;
     state.app.audit("user", "initialize", "");
     tray::refresh(&handle);
     Ok(recovery)
@@ -151,6 +155,35 @@ fn copy_text(handle: AppHandle, text: String) -> CmdResult<()> {
     handle.clipboard().write_text(text).map_err(err)
 }
 
+// -- first use ---------------------------------------------------------------
+
+/// Moves the first use on to the sample case ("case") or ends it (None).
+#[tauri::command]
+fn first_use_set(state: State<AppState>, stage: Option<String>) -> CmdResult<()> {
+    if stage.as_deref().is_some_and(|s| s != "case") {
+        return Err(format!("unknown first-use stage {stage:?}"));
+    }
+    state.app.vault().set_first_use(stage.as_deref()).map_err(err)?;
+    state.app.audit("user", "first_use", stage.as_deref().unwrap_or("done"));
+    Ok(())
+}
+
+/// The sample case in the UI language; it ends the first use.
+#[tauri::command]
+fn create_sample_case(handle: AppHandle, state: State<AppState>) -> CmdResult<i64> {
+    let id = state.app.create_sample_case(&state.app.language())?;
+    state.app.audit("user", "create_sample_case", &id.to_string());
+    let _ = handle.emit("cases-changed", ());
+    Ok(id)
+}
+
+/// Adds Blankey to Claude Desktop's config, as the tray does; returns the config file's name.
+#[tauri::command]
+fn connect_claude_desktop() -> CmdResult<String> {
+    let path = super::platform::connect_claude_desktop()?;
+    Ok(path.file_name().and_then(|n| n.to_str()).unwrap_or("claude_desktop_config.json").to_string())
+}
+
 // -- cases -------------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -160,6 +193,8 @@ struct CaseRow {
     updated_at: String,
     profiles: Vec<String>,
     files: i64,
+    /// the sample case of a first use
+    sample: bool,
 }
 
 /// Latest change first, each with the names of its profiles and its file count.
@@ -170,6 +205,7 @@ fn list_cases(state: State<AppState>) -> CmdResult<Vec<CaseRow>> {
         vault.list_profiles().map_err(err)?.into_iter().map(|p| (p.id, p.name)).collect();
     let links = vault.case_links().map_err(err)?;
     let files = vault.case_file_counts().map_err(err)?;
+    let sample = vault.sample_case().map_err(err)?;
     Ok(vault
         .list_cases()
         .map_err(err)?
@@ -181,6 +217,7 @@ fn list_cases(state: State<AppState>) -> CmdResult<Vec<CaseRow>> {
                 .filter_map(|l| names.get(&l.profile_id).cloned())
                 .collect(),
             files: files.get(&c.id).copied().unwrap_or(0),
+            sample: sample.as_deref() == Some(c.uuid.as_str()),
             id: c.id,
             title: c.title,
             updated_at: c.updated_at,
@@ -228,12 +265,12 @@ fn get_case(state: State<AppState>, id: i64) -> CmdResult<Value> {
             cases,
         })
         .collect();
-    let (notes, counts) = {
+    let (notes, counts, sample) = {
         let vault = app.vault();
-        (vault.case_notes(id).map_err(err)?, vault.case_counts(id).map_err(err)?)
+        (vault.case_notes(id).map_err(err)?, vault.case_counts(id).map_err(err)?, vault.sample_case().map_err(err)?)
     };
     Ok(json!({
-        "id": info.id, "title": info.title, "notes": notes, "created_at": info.created_at, "updated_at": info.updated_at,
+        "id": info.id, "title": info.title, "notes": notes, "sample": sample.as_deref() == Some(info.uuid.as_str()), "created_at": info.created_at, "updated_at": info.updated_at,
         "counts": {
             "files": counts.files, "profiles": profiles.len(), "templates": app.case_templates(&scope).len(),
             "fill_sets": counts.fill_sets, "documents": counts.documents, "activity": counts.requests,
@@ -1800,6 +1837,9 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         touch,
         set_busy,
         copy_text,
+        first_use_set,
+        create_sample_case,
+        connect_claude_desktop,
         list_cases,
         create_case,
         get_case,

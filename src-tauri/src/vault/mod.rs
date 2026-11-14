@@ -12,6 +12,7 @@ mod chat;
 mod documents;
 mod encrypt;
 mod error;
+mod first_use;
 mod keys;
 mod links;
 mod profiles;
@@ -31,6 +32,7 @@ use crate::keychain::SecretStore;
 use repo::Repo;
 
 pub use error::{Result, VaultError};
+pub use first_use::FIRST_USE_STAGES;
 pub use repo::{CaseCounts, NewDocument};
 pub use types::*;
 

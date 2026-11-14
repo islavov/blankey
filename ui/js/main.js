@@ -11,6 +11,7 @@ import { cancelDialog, closeDialog, isDialogOpen } from "./ui/feedback.js";
 import { hidePopup, isMenuOpen } from "./ui/menu.js";
 import { applyTheme } from "./theme.js";
 import { closeSheet, escapeSheet } from "./ui/sheet.js";
+import { Welcome } from "./welcome.js";
 
 // script errors go to the app's log, where they can be read when the window comes up blank
 const report = (message) => invoke("log_error", { message: String(message) }).catch(() => {});
@@ -23,6 +24,7 @@ function Root() {
   const { status, recoveryKey } = useStore();
   if (!status) return null;
   if (recoveryKey || !status.initialized || !status.unlocked) return html`<${Gate} />`;
+  if (status.first_use === "wizard") return html`<${Welcome} />`;
   return html`<${App} />`;
 }
 

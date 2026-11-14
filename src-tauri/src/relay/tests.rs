@@ -748,7 +748,13 @@ async fn the_account_language_comes_from_the_device_profile() {
     *stub.state.lang.lock().unwrap() = Some("bg".into());
     relay.refresh_profile().await;
     assert_eq!(relay.language().as_deref(), Some("bg"));
+    // a setting saved since launch stays when the relay saves its own
+    let on_disk = || crate::config::Config::load_from(app.config.data_dir.clone()).unwrap();
+    let mut config = on_disk();
+    config.language = Some("bg".into());
+    config.save().unwrap();
     relay.logout();
+    assert_eq!(on_disk().language.as_deref(), Some("bg"));
     assert_eq!(relay.language(), None);
     assert_eq!(app.vault().relay_language().unwrap(), None);
 }
