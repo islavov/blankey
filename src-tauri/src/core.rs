@@ -45,17 +45,18 @@ pub struct DocxTemplate<'a> {
     pub case: Option<&'a str>,
 }
 
-/// Something wrong with a typed value: the field's own label (empty for the form as a whole) and an English
-/// message the window translates.
+/// Something wrong with a typed value: the field's key, so the window shows it at that field (`__profile` for the
+/// profile name), the field's own label, and an English message the window translates.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Problem {
+    pub key: String,
     pub label: String,
     pub message: &'static str,
 }
 
 impl Problem {
-    pub fn new(label: &str, message: &'static str) -> Self {
-        Self { label: label.to_string(), message }
+    pub fn new(key: &str, label: &str, message: &'static str) -> Self {
+        Self { key: key.to_string(), label: label.to_string(), message }
     }
 }
 
@@ -225,14 +226,14 @@ impl Blankey {
                 spec.get("type").and_then(Value::as_str).filter(|t| fieldtypes::is_type(t)).unwrap_or("text");
             let value = values.get(key).map(|v| v.trim().to_string()).unwrap_or_default();
             if spec.get("required").and_then(Value::as_bool).unwrap_or(false) && value.is_empty() {
-                errors.push(Problem::new(shown, crate::i18n::mark("required")));
+                errors.push(Problem::new(key, shown, crate::i18n::mark("required")));
             } else if let Some(message) = fieldtypes::validate(field_type, &value) {
-                errors.push(Problem::new(shown, message));
+                errors.push(Problem::new(key, shown, message));
             }
             items.push(FieldInput::new(key, &value, label, field_type));
         }
         if matches!(target, Target::New { name, .. } if name.trim().is_empty()) {
-            errors.push(Problem::new("", crate::i18n::mark("Enter a profile name")));
+            errors.push(Problem::new("__profile", "", crate::i18n::mark("Enter a profile name")));
         }
         if !errors.is_empty() {
             return Ok(ProfileSave::Problems(errors));

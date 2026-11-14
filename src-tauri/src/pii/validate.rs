@@ -1,10 +1,9 @@
-//! Checksums of the identifiers T1 recognizes. EGN, IBAN and email live in `fieldtypes`.
+//! Checksums of the identifiers T1 recognizes. EGN, ЛНЧ, IBAN and email live in `fieldtypes`.
 
 use chrono::NaiveDate;
 
-pub use crate::fieldtypes::{valid_email, valid_iban};
+pub use crate::fieldtypes::{valid_email, valid_iban, valid_lnch};
 
-const LNCH_WEIGHTS: [u32; 9] = [21, 19, 17, 13, 11, 9, 7, 3, 1];
 const EIK9_WEIGHTS: [[u32; 8]; 2] = [[1, 2, 3, 4, 5, 6, 7, 8], [3, 4, 5, 6, 7, 8, 9, 10]];
 const EIK13_WEIGHTS: [[u32; 4]; 2] = [[2, 7, 3, 5], [4, 9, 5, 7]];
 
@@ -27,11 +26,6 @@ pub fn egn_birth_date(value: &str) -> Option<NaiveDate> {
         _ => return None,
     };
     NaiveDate::from_ymd_opt((century + yy) as i32, month, dd)
-}
-
-pub fn valid_lnch(value: &str) -> bool {
-    let Some(d) = digits(value).filter(|d| d.len() == 10) else { return false };
-    d[..9].iter().zip(LNCH_WEIGHTS).map(|(d, w)| d * w).sum::<u32>() % 10 == d[9]
 }
 
 fn eik_digit<const N: usize>(d: &[u32], weights: &[[u32; N]; 2]) -> u32 {

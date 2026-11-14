@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "../vendor/preact-htm.js";
 import { call, invoke, isLocked, refreshStatus } from "./api.js";
 import { openFill } from "./fill/form.js";
 import { HelpNote } from "./help.js";
-import { problemText, t, tn } from "./i18n.js";
+import { problemsAt, problemsElsewhere, t, tn } from "./i18n.js";
 import { html, placeholder, reload, update } from "./lib.js";
 import { openLinkSheet } from "./pages/links.js";
 import { openSubmission } from "./submission.js";
@@ -75,11 +75,24 @@ export async function refreshAfterRequests() {
 
 const TRUE_WORDS = ["1", "true", "да", "yes", "x"];
 
+/** Where a requested field starts: the profile's value, or the assistant's suggestion when the profile has none. */
+function startValue(spec, existing) {
+  const existingValue = existing[spec.key] || "";
+  const suggested = spec.suggested == null ? "" : String(spec.suggested);
+  const prefill = !existingValue.trim() && suggested.trim() !== "";
+  return { existingValue, suggested, prefill, current: prefill ? suggested : existingValue };
+}
+
 /** The assistant asks for profile fields; the values are typed here and never sent back. */
 function ProfileInput({ request, profile_name, existing, close }) {
   const payload = request.payload;
   const specs = payload.fields || [];
   const form = useRef();
+  // kept in state, so a save that is refused leaves what was typed in place
+  const [values, setValues] = useState(() => Object.fromEntries(specs.map((spec) => [spec.key, startValue(spec, existing).current])));
+  const [name, setName] = useState(payload.new_profile?.name || "");
+  // the fields still holding the assistant's suggestion
+  const [suggestedKeys, setSuggestedKeys] = useState(() => specs.filter((spec) => startValue(spec, existing).prefill).map((spec) => spec.key));
   const [problems, setProblems] = useState([]);
   useEffect(() => form.current.querySelector("input")?.focus(), []);
 
@@ -91,14 +104,8 @@ function ProfileInput({ request, profile_name, existing, close }) {
 
   const save = async (e) => {
     e?.preventDefault();
-    const elements = form.current.elements;
-    const values = {};
-    specs.forEach((spec, i) => {
-      const input = elements[`f${i}`];
-      values[spec.key] = input.type === "checkbox" ? (input.checked ? "yes" : "") : input.value;
-    });
-    const name = elements.__profile?.value ?? null;
-    const result = await call("resolve_profile_input", { id: request.id, profileName: name, values });
+    const profileName = payload.profile_id == null ? name : null;
+    const result = await call("resolve_profile_input", { id: request.id, profileName, values });
     setProblems(result);
     if (!result.length) {
       toast(t("Saved"));
@@ -106,37 +113,46 @@ function ProfileInput({ request, profile_name, existing, close }) {
     }
   };
 
-  const useSuggestion = (i, value) => {
-    const input = form.current.elements[`f${i}`];
-    input.value = value;
-    input.classList.add("suggested");
-    input.focus();
+  const set = (key, value, suggested = false) => {
+    setValues({ ...values, [key]: value });
+    setSuggestedKeys(suggested ? [...suggestedKeys, key] : suggestedKeys.filter((k) => k !== key));
+  };
+  const useSuggestion = (i, key, value) => {
+    set(key, value, true);
+    form.current.elements[`f${i}`].focus();
+  };
+  const problemLine = (key) => {
+    const text = problemsAt(problems, key);
+    return text && html`<div class="field-problem">${text}</div>`;
   };
 
   const field = (spec, i) => {
     const label = (spec.label || spec.key) + (spec.required ? " *" : "");
-    const existingValue = existing[spec.key] || "";
-    const suggested = spec.suggested == null ? "" : String(spec.suggested);
-    const prefill = !existingValue.trim() && suggested.trim() !== "";
-    const current = prefill ? suggested : existingValue;
+    const { existingValue, suggested, prefill } = startValue(spec, existing);
+    const fromAssistant = suggestedKeys.includes(spec.key);
     const offer = !prefill && suggested.trim() !== "" && suggested !== existingValue;
+    const invalid = problemsAt(problems, spec.key) !== "";
     if (spec.type === "bool") {
       return html`
         <label>${label}</label>
         <label class="check-row">
-          <input type="checkbox" name=${`f${i}`} checked=${TRUE_WORDS.includes(current.trim().toLowerCase())} />
+          <input type="checkbox" name=${`f${i}`} checked=${TRUE_WORDS.includes(values[spec.key].trim().toLowerCase())}
+            onChange=${(e) => set(spec.key, e.target.checked ? "yes" : "")} />
           <span class="muted small">${spec.hint || ""}</span>
           ${prefill && html`<span class="chip Suggested">${t("Suggested")}</span>`}
-        </label>`;
+        </label>
+        ${problemLine(spec.key)}`;
     }
     return html`
       <label title=${spec.key}>${label}</label>
-      <input type="text" name=${`f${i}`} class=${prefill ? "suggested" : ""} title=${prefill ? t("Suggested by the assistant") : ""}
-        value=${current} placeholder=${spec.hint || placeholder(spec.type)} spellcheck="false"
-        onInput=${(e) => e.target.classList.remove("suggested")} />
+      <input type="text" name=${`f${i}`} class=${`${fromAssistant ? "suggested" : ""} ${invalid ? "invalid" : ""}`}
+        title=${fromAssistant ? t("Suggested by the assistant") : ""}
+        value=${values[spec.key]} placeholder=${spec.hint || placeholder(spec.type)} spellcheck="false"
+        onInput=${(e) => set(spec.key, e.target.value)} />
+      ${problemLine(spec.key)}
       ${offer &&
       html`<div class="hint">
-        <button type="button" class="chip Suggested" data-help="request.suggestion" onClick=${() => useSuggestion(i, suggested)}>
+        <button type="button" class="chip Suggested" data-help="request.suggestion" onClick=${() => useSuggestion(i, spec.key, suggested)}>
           ${t("Use suggestion: {value}", { value: suggested })}
         </button>
       </div>`}`;
@@ -149,10 +165,12 @@ function ProfileInput({ request, profile_name, existing, close }) {
     <div class="sheet-body">
       <form class="input-form" autocomplete="off" data-help="request.fields" ref=${form} onSubmit=${save}>
         ${payload.profile_id == null &&
-        html`<label>${t("New profile")}</label><input type="text" name="__profile" value=${payload.new_profile?.name || ""} />`}
+        html`<label>${t("New profile")}</label>
+          <input type="text" name="__profile" class=${problemsAt(problems, "__profile") ? "invalid" : ""} value=${name} onInput=${(e) => setName(e.target.value)} />
+          ${problemLine("__profile")}`}
         ${specs.map(field)}
       </form>
-      <div class="problems" style="max-width:640px;margin:0 auto;padding:0 24px">${problems.map(problemText).join("\n")}</div>
+      <div class="problems" style="max-width:640px;margin:0 auto;padding:0 24px">${problemsElsewhere(problems, [...specs.map((spec) => spec.key), "__profile"])}</div>
     </div>
     <div class="sheet-foot">
       <${HelpNote}>${t("Your data stays in Blankey. The AI assistant only sees the field names and how long the values are.")}</${HelpNote}>

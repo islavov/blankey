@@ -345,7 +345,7 @@ export function createBackend(db = seed()) {
       return found;
     },
     resolve_submission: ({ sid, values }) => {
-      if (!values.name) return [{ label: "Full name", message: "required" }];
+      if (!values.name) return [{ key: "name", label: "Full name", message: "required" }];
       removeRequest(db.submissions[sid].request_id);
       return [];
     },
@@ -425,7 +425,7 @@ export function createBackend(db = seed()) {
     list_profiles: () => db.profiles.filter((p) => p.global !== false),
     profile_fields: ({ id }) => db.fields[id],
     save_fields: ({ id, fields }) => {
-      const problems = fields.filter((f) => f.key.includes(" ")).map((f) => ({ label: f.key, message: "use dotted words without spaces" }));
+      const problems = fields.filter((f) => f.key.includes(" ")).map((f) => ({ key: f.key, label: f.key, message: "use dotted words without spaces" }));
       if (!problems.length) db.fields[id] = fields;
       return problems;
     },
@@ -575,7 +575,7 @@ export function createBackend(db = seed()) {
     },
     cancel_request: ({ id }) => removeRequest(id),
     resolve_profile_input: ({ id, values }) => {
-      if (!values.email) return [{ label: "Email", message: "required" }];
+      if (!values.email) return [{ key: "email", label: "Email", message: "required" }];
       removeRequest(id);
       return [];
     },

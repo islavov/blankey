@@ -1,7 +1,7 @@
 import { useState } from "../vendor/preact-htm.js";
 import { call } from "./api.js";
 import { HelpNote } from "./help.js";
-import { problemText, t, tn } from "./i18n.js";
+import { problemsAt, problemsElsewhere, t, tn } from "./i18n.js";
 import { html, megabytes, placeholder, useLoad, when } from "./lib.js";
 import { confirmDialog, toast } from "./ui/feedback.js";
 import { openSheet, SheetHead } from "./ui/sheet.js";
@@ -60,6 +60,10 @@ function SubmissionSheet({ submission, close }) {
   };
 
   const set = (key, value) => setValues({ ...values, [key]: value });
+  const problemLine = (key) => {
+    const text = problemsAt(problems, key);
+    return text && html`<div class="field-problem">${text}</div>`;
+  };
   const field = (spec) => {
     const label = (spec.label || spec.key) + (spec.required ? " *" : "");
     if (spec.type === "bool") {
@@ -68,12 +72,14 @@ function SubmissionSheet({ submission, close }) {
         <label>${label}</label>
         <label class="check-row">
           <input type="checkbox" name=${spec.key} checked=${checked} onChange=${(e) => set(spec.key, e.target.checked ? "yes" : "")} />
-        </label>`;
+        </label>
+        ${problemLine(spec.key)}`;
     }
     return html`
       <label title=${spec.key}>${label}</label>
-      <input type="text" name=${spec.key} value=${values[spec.key] || ""} placeholder=${placeholder(spec.type)} spellcheck="false"
-        onInput=${(e) => set(spec.key, e.target.value)} />`;
+      <input type="text" name=${spec.key} class=${problemsAt(problems, spec.key) ? "invalid" : ""} value=${values[spec.key] || ""}
+        placeholder=${placeholder(spec.type)} spellcheck="false" onInput=${(e) => set(spec.key, e.target.value)} />
+      ${problemLine(spec.key)}`;
   };
 
   const toggle = (index, on) => setKeep(on ? [...keep, index] : keep.filter((i) => i !== index));
@@ -93,7 +99,8 @@ function SubmissionSheet({ submission, close }) {
         <${Select} name="profile" data-help="submission.profile" value=${profileId} options=${options} onChange=${(v) => setProfileId(v === "new" ? "new" : Number(v))} />
         ${profileId === "new" && html`
           <label>${t("Profile name")}</label>
-          <input type="text" name="__profile" value=${newName} onInput=${(e) => setNewName(e.target.value)} />`}
+          <input type="text" name="__profile" class=${problemsAt(problems, "__profile") ? "invalid" : ""} value=${newName} onInput=${(e) => setNewName(e.target.value)} />
+          ${problemLine("__profile")}`}
         ${fields.map(field)}
       </form>
       ${files.length > 0 && html`
@@ -112,7 +119,7 @@ function SubmissionSheet({ submission, close }) {
               </div>`
           )}
         </div>`}
-      <div class="problems" style="max-width:640px;margin:0 auto;padding:0 24px">${problems.map(problemText).join("\n")}</div>
+      <div class="problems" style="max-width:640px;margin:0 auto;padding:0 24px">${problemsElsewhere(problems, [...fields.map((spec) => spec.key), ...(profileId === "new" ? ["__profile"] : [])])}</div>
     </div>
     <div class="sheet-foot">
       <${HelpNote}>${t("Kept files are encrypted and stored with the profile. This submission stays here until you discard it.")}</${HelpNote}>

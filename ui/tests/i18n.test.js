@@ -13,7 +13,7 @@ test("the account's language: the sheet, its problems and the page are in Bulgar
   assert.equal(text(".sheet h2"), "2 полета за John");
   await type($("input[name=f0]"), "");
   await click(byText(".sheet-foot button", "Запази"));
-  assert.equal(text(".problems"), "Email: задължително");
+  assert.equal(text(".field-problem"), "задължително");
   await click(byText(".sheet-foot button", "Отказ"));
 
   assert.deepEqual(
