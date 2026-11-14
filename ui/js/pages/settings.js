@@ -1,6 +1,6 @@
 import { call, refreshRelay, refreshStatus } from "../api.js";
 import { helpEnabled, setHelpEnabled } from "../help.js";
-import { t } from "../i18n.js";
+import { t, tn } from "../i18n.js";
 import { html, matches, reload, useLoad, useStore, when } from "../lib.js";
 import { confirmDialog, dialog, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
@@ -46,7 +46,8 @@ export function Settings() {
   const info = useLoad(() => call("relay_status"), []);
   const telemetry = useLoad(() => call("telemetry_status"), []);
   const update = useLoad(() => call("update_status"), []);
-  if (!info || telemetry === null || !update) return null;
+  const recognition = useLoad(() => call("doc_configs_status"), []);
+  if (!info || telemetry === null || !update || !recognition) return null;
   const busy = update.state === "checking" || update.state === "downloading";
 
   const state = info.signed_in || info.state === "signing_in" ? info.state : "signed_out";
@@ -171,6 +172,15 @@ export function Settings() {
           <span class="spacer"></span>
           ${info.account_url && html`<button class="link" onClick=${() => call("relay_open_account")}>${t("Account and billing")}</button>`}
         </div>
+        ${info.signed_in && html`
+          <div class="relay-row" data-help="settings.doc_configs">
+            <span class="muted">${t("Document recognition")}</span>
+            <span class=${`dot ${recognition.state === "valid" ? "up" : ""}`}></span>
+            <span id="doc-configs-state">${recognition.state === "valid" ? tn(recognition.documents, "{n} document", "{n} documents") : t("Off")}</span>
+            ${recognition.state === "valid" && html`<span class="muted small" id="doc-configs-checked">${t("updated {when}", { when: when(recognition.checked_at) })}</span>`}
+            <span class="spacer"></span>
+            <button onClick=${() => call("refresh_doc_configs").then(reload, reload)}>${t("Refresh")}</button>
+          </div>`}
       </div>
       ${rows.length
         ? html`<div data-help="settings.agents"><${Table}

@@ -18,6 +18,7 @@ pub use corrections::Corrections;
 pub use document::{blank_paragraphs, Document, EntityView, PageText};
 pub use redact::{guard, mask_png};
 pub use types::{Analysis, Block, Detection, Entity, Kind, Occ};
+pub(crate) use validate::{egn_birth_date, valid_egn, valid_eik, valid_lnch};
 
 /// Detections at or above this are redacted.
 pub const REDACT: f32 = 0.4;

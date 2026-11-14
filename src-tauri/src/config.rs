@@ -111,6 +111,11 @@ impl Config {
         self.data_dir.join("library.db")
     }
 
+    /// The document config set from the relay, as last served.
+    pub fn doc_configs_path(&self) -> PathBuf {
+        self.data_dir.join("doc-configs.json")
+    }
+
     pub fn previews_dir(&self) -> PathBuf {
         self.data_dir.join("previews")
     }

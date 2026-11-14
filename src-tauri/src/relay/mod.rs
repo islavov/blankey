@@ -8,6 +8,7 @@
 mod chat;
 mod client;
 pub mod discovery;
+mod doc_configs;
 pub mod oauth;
 #[cfg(test)]
 mod tests;
@@ -448,6 +449,7 @@ impl Relay {
         let _ = self.app.vault().set_relay_account(None);
         self.set_language(None);
         self.set_chat(false);
+        self.app.drop_doc_set();
         {
             let mut inner = self.inner();
             inner.access_token = None;

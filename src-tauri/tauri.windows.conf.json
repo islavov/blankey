@@ -5,7 +5,9 @@
       "msi"
     ],
     "resources": {
-      "pdfium/pdfium.dll": "pdfium.dll"
+      "pdfium/pdfium.dll": "pdfium.dll",
+      "ocr/ch_PP-OCRv5_det_mobile.onnx": "ocr/ch_PP-OCRv5_det_mobile.onnx",
+      "ocr/cyrillic_PP-OCRv5_rec_mobile.onnx": "ocr/cyrillic_PP-OCRv5_rec_mobile.onnx"
     },
     "windows": {
       "nsis": {

@@ -48,6 +48,7 @@ agent --POST /mcp (Bearer)--> relay --WebSocket frame--> Blankey app --> local M
   "device_links": "https://relay.example.com/device/links",
   "device_inbox": "https://relay.example.com/device/inbox",
   "device_profile": "https://relay.example.com/device/profile",
+  "device_doc_configs": "https://relay.example.com/device/doc-configs",
   "chat_url": "https://relay.example.com/device/chat"
 }
 ```
@@ -55,7 +56,8 @@ agent --POST /mcp (Bearer)--> relay --WebSocket frame--> Blankey app --> local M
 `device_resource` is optional: the OAuth resource the app's tokens are for (see below). Relays with a single resource
 for everything leave it out. `device_links` and `device_inbox` are optional too: relays without collection links
 leave them out, and older apps ignore them. `device_profile` is optional as well (see Profile below), and so is
-`chat_url` (see Case chat below): an app that finds none shows "This relay offers no assistant".
+`chat_url` (see Case chat below): an app that finds none shows "This relay offers no assistant". `device_doc_configs`
+is optional too (see Document config sets below): without it the app reads no file as a known document.
 
 The app refuses a relay whose `protocol` it does not support, and any URL that is not `https`/`wss` unless the host is
 `localhost` or `127.0.0.1` (for development). `account_url` is shown to the user (sign up, billing, devices).
@@ -257,6 +259,29 @@ output stays English. The app reads the profile after each connect, when its win
 `{"v": 1, "type": "profile"}` from the relay (no reply). Relays without `device_profile` leave the app to the
 computer's language.
 
+## Document config sets
+
+The app can read a case file (a photo or scan of an ID card, a registration certificate) into a profile, on the
+computer. Its engine knows no document: which documents there are, how a page is told to be one, where its fields are
+and how the reading runs come in a **document config set**, which the app pulls from its relay. The request carries
+nothing about the user's files.
+
+`GET device_doc_configs?device_id=<id>&engine=<n>` with the device token, and `If-None-Match: "<version>"` when the
+app holds a set. `engine` is the version of the app's engine.
+
+| Answer | Meaning | The app |
+|---|---|---|
+| `200 {"engine": n, "version": "...", "files": {"<path>": "<text>", ...}}` with `ETag: "<version>"` | the current set | keeps it, replacing the one it held |
+| `304` | the set it holds is the current one | goes on using it |
+| `204` | no set this engine can run | drops the set it holds |
+| `402` | the account may not have sets | drops the set it holds |
+
+The set's files are opaque to this protocol: the app's engine parses them (`src-tauri/src/doctypes/set.rs`), leaves
+out what it cannot run and refuses a set it cannot parse, keeping the one it held. The app asks after each connect,
+every 30 minutes while connected, and when the user asks in Settings. A set is used for 24 hours after the relay last
+answered `200` or `304`; after that, and after signing out, the app reads no file as a document until it has one
+again. Profiles made earlier stay.
+
 ## Case chat
 
 The case chat's agent runs on the relay; the app is the tool host and keeps every rule. The app posts one turn at a
@@ -368,6 +393,7 @@ Any stack works (Workers, Node, Go…) as long as it speaks the above over TLS. 
 - optionally, collection links: `device_links`, `device_inbox`, the `inbox` frame and a form page that seals in the
   browser
 - optionally, `report` frames: store the device's monthly numbers and answer `ok`
+- optionally, document config sets: `device_doc_configs` with the answers above
 - optionally, the case chat: `chat_url`, `chat` in the device profile, the turn request and its events, and the agent's
   `mcp` frames under `case:` grants
 

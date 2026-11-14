@@ -147,6 +147,12 @@ pub struct CollectedFile {
     /// the .doc's. Empty for a file kept before it was recorded
     #[serde(skip)]
     pub sha256: String,
+    /// the known document it was read as (`doctypes`), "bg_id_card"; empty for any other file
+    pub doctype: String,
+    /// what was read in it then, as JSON (`doctypes::Reading`): kept so the file is not read again each time it
+    /// is shown beside its profile. Empty when it was not read, or before readings were kept
+    #[serde(skip)]
+    pub reading: String,
 }
 
 /// A file to keep: with a profile (from a link or added by hand) or in a case.

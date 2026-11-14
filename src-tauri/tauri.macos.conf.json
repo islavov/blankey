@@ -11,6 +11,10 @@
       ],
       "signingIdentity": "-",
       "hardenedRuntime": false
+    },
+    "resources": {
+      "ocr/ch_PP-OCRv5_det_mobile.onnx": "ocr/ch_PP-OCRv5_det_mobile.onnx",
+      "ocr/cyrillic_PP-OCRv5_rec_mobile.onnx": "ocr/cyrillic_PP-OCRv5_rec_mobile.onnx"
     }
   }
 }

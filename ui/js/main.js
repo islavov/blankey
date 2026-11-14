@@ -88,6 +88,10 @@ listen("update-status", () => {
   if (state.page === "settings") reload();
 });
 listen("show-page", ({ payload }) => update({ page: payload, search: "" }));
+// the document config set from Blankey Online arrived, changed or went
+listen("doc-configs-changed", () => {
+  if (state.page === "settings" || state.page === "cases") reload();
+});
 // an AI assistant created or changed a case
 listen("cases-changed", () => {
   if (state.page === "cases") reload();

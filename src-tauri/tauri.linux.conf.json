@@ -11,6 +11,8 @@
         ],
         "files": {
           "/usr/lib/blankey/libpdfium.so": "pdfium/libpdfium.so",
+          "/usr/lib/blankey/ocr/ch_PP-OCRv5_det_mobile.onnx": "ocr/ch_PP-OCRv5_det_mobile.onnx",
+          "/usr/lib/blankey/ocr/cyrillic_PP-OCRv5_rec_mobile.onnx": "ocr/cyrillic_PP-OCRv5_rec_mobile.onnx",
           "/usr/share/doc/blankey/THIRD_PARTY_LICENSES.html": "THIRD_PARTY_LICENSES.html"
         }
       },
@@ -24,6 +26,8 @@
         ],
         "files": {
           "/usr/lib/blankey/libpdfium.so": "pdfium/libpdfium.so",
+          "/usr/lib/blankey/ocr/ch_PP-OCRv5_det_mobile.onnx": "ocr/ch_PP-OCRv5_det_mobile.onnx",
+          "/usr/lib/blankey/ocr/cyrillic_PP-OCRv5_rec_mobile.onnx": "ocr/cyrillic_PP-OCRv5_rec_mobile.onnx",
           "/usr/share/doc/blankey/THIRD_PARTY_LICENSES.html": "THIRD_PARTY_LICENSES.html"
         }
       }

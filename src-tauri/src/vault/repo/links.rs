@@ -218,6 +218,11 @@ impl Repo {
         Ok(())
     }
 
+    pub fn set_collected_profile(&self, id: i64, profile_id: Option<i64>) -> Result<()> {
+        self.conn.execute("UPDATE collected_files SET profile_id = ?1 WHERE id = ?2", params![profile_id, id])?;
+        Ok(())
+    }
+
     pub fn delete_collected_file(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM collected_files WHERE id = ?1", [id])?;
         Ok(())

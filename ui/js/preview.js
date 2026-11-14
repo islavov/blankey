@@ -8,10 +8,12 @@ const ZOOM_MAX = 4;
 /**
  * A template or file preview: html (docx with blanks as chips), page images with a box per field, or one image.
  * `active` is highlighted; bumping `revealSeq` scrolls it into view. Clicking a field calls `onPick(name)`.
+ * With `dragMove`, holding the left button and dragging moves the content: for a picture to look closely at, such
+ * as a photographed card. Pinching zooms either way.
  */
-export function Preview({ preview, placeholder = "", interactive = true, onPick, active, revealSeq = 0, style = "", help }) {
+export function Preview({ preview, placeholder = "", interactive = true, onPick, active, revealSeq = 0, style = "", help, dragMove = false }) {
   const area = useRef();
-  usePinchZoom(area);
+  usePinchZoom(area, dragMove);
 
   useEffect(() => {
     $$var(area.current).forEach((el) => el.classList.toggle("active", el.dataset.var === active));
@@ -29,7 +31,7 @@ export function Preview({ preview, placeholder = "", interactive = true, onPick,
     if (field && onPick) onPick(field.dataset.var);
   };
 
-  return html`<div class="preview-area" style=${style} data-help=${help} ref=${area} onClick=${pick}>${content(preview, placeholder, interactive)}</div>`;
+  return html`<div class=${`preview-area ${dragMove ? "drag-move" : ""}`} style=${style} data-help=${help} ref=${area} onClick=${pick}>${content(preview, placeholder, interactive)}</div>`;
 }
 
 const $$var = (root) => [...root.querySelectorAll("[data-var]")];
@@ -74,8 +76,11 @@ export function decodePreview(preview) {
   );
 }
 
-/** Pinch (trackpad or ctrl+wheel) zooms around the pointer; double-click resets. Survives re-renders. */
-function usePinchZoom(area) {
+/**
+ * Pinch (trackpad or ctrl+wheel) zooms around the pointer; double-click resets. Survives re-renders. With
+ * `dragMove`, dragging with the left button held moves the content.
+ */
+function usePinchZoom(area, dragMove) {
   const zoom = useRef(1);
 
   const apply = () => {
@@ -109,6 +114,19 @@ function usePinchZoom(area) {
       e.preventDefault();
       zoomTo(zoom.current * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
     };
+    // a press that does not move is still a click
+    let drag = null;
+    const press = (e) => {
+      if (dragMove && e.button === 0) drag = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+    };
+    const move = (e) => {
+      if (!drag) return;
+      el.scrollLeft = drag.left - (e.clientX - drag.x);
+      el.scrollTop = drag.top - (e.clientY - drag.y);
+    };
+    const release = () => {
+      drag = null;
+    };
     // WebKit sends pinches as gesture events instead of ctrl+wheel
     let start = 1;
     const gestureStart = (e) => {
@@ -126,7 +144,13 @@ function usePinchZoom(area) {
     el.addEventListener("gesturestart", gestureStart);
     el.addEventListener("gesturechange", gestureChange);
     el.addEventListener("dblclick", reset);
+    el.addEventListener("mousedown", press);
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", release);
     return () => {
+      el.removeEventListener("mousedown", press);
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", release);
       el.removeEventListener("wheel", wheel);
       el.removeEventListener("gesturestart", gestureStart);
       el.removeEventListener("gesturechange", gestureChange);

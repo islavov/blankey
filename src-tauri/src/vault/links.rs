@@ -109,6 +109,14 @@ impl Vault {
         self.set_file_meta(id, "name", &renamed(&old, name))
     }
 
+    /// Records the known document the file was read as, and the profile it became (None: it holds no fields).
+    /// `reading` is what was read, kept encrypted with the rest of the file's metadata.
+    pub fn set_file_document(&self, id: i64, doctype: &str, profile_id: Option<i64>, reading: &str) -> Result<()> {
+        self.set_file_meta(id, "doctype", doctype)?;
+        self.set_file_meta(id, "reading", reading)?;
+        self.repo.set_collected_profile(id, profile_id)
+    }
+
     fn set_file_meta(&self, id: i64, field: &str, value: &str) -> Result<()> {
         let dek = self.require_dek()?;
         let row = self.repo.collected_file(id)?.ok_or_else(|| VaultError::NotFound(format!("Unknown file {id}")))?;
@@ -163,6 +171,8 @@ impl Vault {
             case_id: row.case_id,
             description: text("description"),
             sha256: text("sha256"),
+            doctype: text("doctype"),
+            reading: text("reading"),
         };
         Ok((file, key))
     }

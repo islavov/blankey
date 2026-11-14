@@ -13,6 +13,7 @@ export function demo() {
       { id: 3, name: "Maria Example", kind: "person", global: false },
       { id: 4, name: "Peter Sample", kind: "person", global: false },
       { id: 5, name: "Oak Street Holdings", kind: "company", global: false },
+      { id: 6, name: "CA 1234 AB", kind: "vehicle", global: false },
     ],
     fields: {
       1: [
@@ -22,7 +23,10 @@ export function demo() {
       2: [],
       3: [
         { key: "name", label: "Full name", type: "text", value: "Maria Example" },
-        { key: "egn", label: "EGN", type: "egn", value: "7501020018" },
+        { key: "egn", label: "EGN", type: "egn", value: "" },
+        { key: "id_card.number", label: "ID card number", type: "text", value: "640000001" },
+        { key: "id_card.valid_until", label: "ID card valid until", type: "date", value: "14.03.2031" },
+        { key: "address", label: "Permanent address", type: "text", value: "Springfield, 12 Oak Street" },
         { key: "address.city", label: "City", type: "text", value: "Springfield" },
       ],
       4: [
@@ -30,6 +34,12 @@ export function demo() {
         { key: "egn", label: "EGN", type: "egn", value: "" },
       ],
       5: [{ key: "name", label: "Company name", type: "text", value: "Oak Street Holdings Ltd" }],
+      6: [
+        { key: "plate", label: "Plate", type: "text", value: "CA 1234 AB" },
+        { key: "vin", label: "VIN", type: "text", value: "WVWZZZ1KZ6W000001" },
+        { key: "make", label: "Make", type: "text", value: "Volkswagen" },
+        { key: "owner.name", label: "Owner", type: "text", value: "Peter Sample" },
+      ],
     },
     cases: [
       {
@@ -48,16 +58,34 @@ export function demo() {
       { case_id: 2, profile_id: 5, role: "landlord" },
       { case_id: 2, profile_id: 1, role: "tenant" },
       { case_id: 3, profile_id: 4, role: "principal" },
+      { case_id: 3, profile_id: 6, role: "" },
     ],
     collected: [
-      file(11, 1, "maria-id-front.jpg", "image/jpeg", 1.8, "Maria Example, seller, ID card front", "2026-10-28T09:12:00"),
-      file(12, 1, "maria-id-back.jpg", "image/jpeg", 1.7, "Maria Example, seller, ID card back", "2026-10-28T09:12:00"),
+      { ...file(11, 1, "maria-id-front.jpg", "image/jpeg", 1.8, "Maria Example, seller, ID card front", "2026-10-28T09:12:00"), ...ID_CARD, profile_id: 3, profile_name: "Maria Example" },
+      { ...file(12, 1, "maria-id-back.jpg", "image/jpeg", 1.7, "Maria Example, seller, ID card back", "2026-10-28T09:12:00"), ...ID_CARD, profile_id: 3, profile_name: "Maria Example" },
       file(13, 1, "title-deed-2019.pdf", "application/pdf", 0.9, "Title deed of the apartment, 2019", "2026-10-28T09:13:00"),
       file(14, 1, "sale-contract-draft.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 0.1, "Draft sale contract from the buyer's lawyer", "2026-10-29T10:02:00"),
       file(15, 1, "peter-id.png", "image/png", 2.4, "Peter Sample, buyer, ID card", "2026-10-29T10:03:00"),
       file(16, 2, "lease-model.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 0.06, "Our model lease for shops", "2026-10-25T10:05:00"),
-      file(17, 3, "car-registration.pdf", "application/pdf", 0.4, "Registration certificate of the car, Peter Sample", "2026-10-18T14:10:00"),
+      { ...file(17, 3, "car-registration.pdf", "application/pdf", 0.4, "Registration certificate of the car, Peter Sample", "2026-10-18T14:10:00"), ...VEHICLE, profile_id: 6, profile_name: "CA 1234 AB" },
     ],
+    reads: {
+      11: [
+        { key: "name", label: "Full name", read: "Maria Example", box: [300, 380, 560, 410] },
+        { key: "egn", label: "EGN", type: "egn", read: "7501020019", status: "failed", box: [300, 300, 460, 330] },
+        { key: "id_card.number", label: "ID card number", read: "640000007", box: [600, 470, 780, 500] },
+        { key: "id_card.valid_until", label: "ID card valid until", type: "date", read: "14.03.2031", box: [300, 220, 440, 250] },
+      ],
+      12: [{ key: "address", label: "Permanent address", read: "Springfield, 12 Oak Street", box: [60, 380, 520, 410] }],
+      17: [
+        { key: "plate", label: "Plate", read: "CA 1234 AB", box: [120, 440, 300, 470] },
+        { key: "vin", label: "VIN", read: "WVWZZZ1KZ6W000001", box: [120, 360, 420, 390] },
+        { key: "make", label: "Make", read: "Volkswagen", box: [120, 300, 300, 330] },
+        { key: "owner.name", label: "Owner", read: "Peter Sample", box: [120, 240, 340, 270] },
+      ],
+    },
+    // a dropped file named like an ID card or a registration is read into a profile, as the real backend would
+    reading: { delay: 1500, of: readDemo },
     templates: [
       { id: "nzok", name: "NZOK request", kind: "pdf_form", blanks: 2, used_by: ["acme"], description: "Data subject request" },
       { id: "loan", name: "Loan contract", kind: "docx", blanks: 2, used_by: [], description: "" },
@@ -111,6 +139,28 @@ const saleChat = () => ({
     stored(10, "assistant", [{ type: "text", text: "Only his EGN. Everything else the contract needs is in the two profiles and the case notes." }]),
   ],
 });
+
+const ID_CARD = { doctype: "bg_id_card", document: "ID card" };
+const VEHICLE = { doctype: "bg_vehicle_registration", document: "Vehicle registration" };
+
+function readDemo(dropped) {
+  if (/id|card/i.test(dropped.name)) {
+    const fields = [
+      { key: "name", label: "Full name", type: "text", value: "Anna Demo" },
+      { key: "egn", label: "EGN", type: "egn", value: "" },
+    ];
+    const reads = [
+      { key: "name", label: "Full name", read: "Anna Demo", box: [300, 380, 560, 410] },
+      { key: "egn", label: "EGN", type: "egn", read: "8001010009", status: "failed", box: [300, 300, 460, 330] },
+    ];
+    return { ...ID_CARD, profile: { name: "Anna Demo", kind: "person" }, fields, reads };
+  }
+  if (/registration|car|talon/i.test(dropped.name)) {
+    const fields = [{ key: "plate", label: "Plate", type: "text", value: "B 5678 CD" }];
+    return { ...VEHICLE, profile: { name: "B 5678 CD", kind: "vehicle" }, fields, reads: [{ key: "plate", label: "Plate", read: "B 5678 CD", box: [120, 440, 300, 470] }] };
+  }
+  return null;
+}
 
 const file = (id, caseId, name, type, mb, description, created_at) => ({
   id,

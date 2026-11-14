@@ -56,6 +56,10 @@ struct StubState {
     /// the account has the case chat; no `chat_url` in discovery when `chat_offered` is false
     chat: AtomicBool,
     chat_offered: AtomicBool,
+    /// what GET /device/doc-configs answers with (200, 204 or 402), and the version of the set it serves
+    doc_configs: Mutex<(u16, String)>,
+    /// what each GET /device/doc-configs asked with: (engine, If-None-Match)
+    doc_config_asks: Mutex<Vec<(String, Option<String>)>>,
     /// bodies of POST /device/chat
     chat_turns: Mutex<Vec<Value>>,
     /// what the next turn streams, chunk by chunk, until the sender is dropped
@@ -95,6 +99,8 @@ impl Stub {
             chat_stream: Mutex::default(),
             chat_refusal: Mutex::default(),
             chat_cancelled: Mutex::default(),
+            doc_configs: Mutex::new((200, "v1".into())),
+            doc_config_asks: Mutex::default(),
         });
         let routes = Router::new()
             .route("/.well-known/blankey-relay", get(discovery))
@@ -115,6 +121,7 @@ impl Stub {
             .route("/device/inbox/{sid}", delete(delete_submission))
             .route("/blob/{sid}", get(blob))
             .route("/device/profile", get(profile))
+            .route("/device/doc-configs", get(doc_configs))
             .route("/device/chat", post(chat_turn))
             .route("/device/chat/{turn}", delete(cancel_chat_turn))
             .with_state(state.clone());
@@ -171,6 +178,31 @@ async fn profile(
     own_device(&query)?;
     Ok(Json(json!({"account": "you@example.com", "lang": *stub.lang.lock().unwrap(),
                    "chat": stub.chat.load(Ordering::SeqCst)})))
+}
+
+/// GET /device/doc-configs: the set at its current version, 304 to an app that holds it.
+async fn doc_configs(
+    Shared(stub): Shared<Arc<StubState>>,
+    Query(query): Query<HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    if let Err(status) = own_device(&query) {
+        return status.into_response();
+    }
+    let held = headers.get("if-none-match").and_then(|v| v.to_str().ok()).map(str::to_string);
+    stub.doc_config_asks.lock().unwrap().push((query.get("engine").cloned().unwrap_or_default(), held.clone()));
+    let (status, version) = stub.doc_configs.lock().unwrap().clone();
+    if status != 200 {
+        return StatusCode::from_u16(status).unwrap().into_response();
+    }
+    if held.as_deref() == Some(format!("\"{version}\"").as_str()) {
+        return StatusCode::NOT_MODIFIED.into_response();
+    }
+    let body = match version.as_str() {
+        "broken" => r#"{"engine": 1, "version": "broken", "files": {}}"#.to_string(),
+        version => crate::docsets::tests::served(version),
+    };
+    ([(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response()
 }
 
 /// POST /device/chat: records the turn, then refuses it or streams what the test sends.
@@ -929,4 +961,69 @@ async fn a_relay_without_chat_url_offers_no_chat() {
     wait_for(&relay, State::Connected).await;
     relay.refresh_profile().await;
     assert!(!relay.chat_available());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_document_config_set_comes_from_the_relay_and_goes_with_the_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = Stub::start(1).await;
+    let (relay, app) = signed_in_app(dir.path(), &stub).await;
+    let _socket = stub.accept().await;
+    wait_for(&relay, State::Connected).await;
+    // read on connecting, with the engine's version and no version held
+    let arrived = async {
+        while app.doc_set().is_none() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(WAIT, arrived).await.expect("the set arrives after connecting");
+    assert_eq!(app.doc_set().unwrap().version, "v1");
+    assert_eq!(stub.state.doc_config_asks.lock().unwrap()[0], ("1".to_string(), None));
+
+    // unchanged: confirmed without a download
+    let first = app.doc_configs_status().checked_at;
+    relay.refresh_doc_configs().await.unwrap();
+    assert_eq!(stub.state.doc_config_asks.lock().unwrap().last().unwrap().1.as_deref(), Some("\"v1\""));
+    assert!(app.doc_configs_status().checked_at > first);
+    assert_eq!(app.doc_set().unwrap().version, "v1");
+
+    // a new one replaces it; one this engine cannot parse does not
+    stub.state.doc_configs.lock().unwrap().1 = "v2".into();
+    relay.refresh_doc_configs().await.unwrap();
+    assert_eq!(app.doc_set().unwrap().version, "v2");
+    stub.state.doc_configs.lock().unwrap().1 = "broken".into();
+    assert!(relay.refresh_doc_configs().await.is_err());
+    assert_eq!(app.doc_set().unwrap().version, "v2");
+
+    // the account lost its plan, or this engine is too old for the set: the set goes
+    for refusal in [402, 204] {
+        *stub.state.doc_configs.lock().unwrap() = (200, "v3".into());
+        relay.refresh_doc_configs().await.unwrap();
+        assert_eq!(app.doc_set().unwrap().version, "v3");
+        stub.state.doc_configs.lock().unwrap().0 = refusal;
+        relay.refresh_doc_configs().await.unwrap();
+        assert_eq!(app.doc_configs_status().state, "none", "{refusal}");
+    }
+
+    *stub.state.doc_configs.lock().unwrap() = (200, "v4".into());
+    relay.refresh_doc_configs().await.unwrap();
+    assert!(app.doc_set().is_some());
+    relay.logout();
+    assert_eq!(app.doc_configs_status().state, "none", "signed out: no set");
+    let asked = stub.state.doc_config_asks.lock().unwrap().len();
+    relay.refresh_doc_configs().await.unwrap();
+    assert_eq!(stub.state.doc_config_asks.lock().unwrap().len(), asked, "signed out: nothing is asked");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relay_without_document_config_sets_leaves_the_set_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = Stub::start(1).await;
+    stub.state.doc_configs.lock().unwrap().0 = 404;
+    let (relay, app) = signed_in_app(dir.path(), &stub).await;
+    let _socket = stub.accept().await;
+    wait_for(&relay, State::Connected).await;
+    app.store_doc_set(&crate::docsets::tests::served("kept")).unwrap();
+    assert!(relay.refresh_doc_configs().await.is_err(), "an answer that is none of the protocol's");
+    assert_eq!(app.doc_set().unwrap().version, "kept", "an error changes nothing: the day's rule covers it");
 }

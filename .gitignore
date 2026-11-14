@@ -3,6 +3,7 @@
 .DS_Store
 /src-tauri/pdfium/libpdfium.*
 /src-tauri/pdfium/*.dll
+/src-tauri/ocr/
 /src-tauri/THIRD_PARTY_LICENSES.html
 /dist
 /target-linux
