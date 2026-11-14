@@ -302,14 +302,16 @@ Otherwise `200 text/event-stream`, with these events (`event:` name, `data:` JSO
 - `tool_call {id, name, input}` and `tool_done {id, is_error}`: one pair per tool call, for the tool cards.
 - `status {state}`: `thinking` when the model starts thinking in a step, `compacting` while earlier turns are folded
   into the summary, `waiting` while a request waits for the user (the relay polls `wait_request` itself, in calls of at
-  most 40 s).
+  most 40 s), `retrying` when the model failed or sent nothing in a step and the relay runs that step again: the app
+  drops the `text_delta`s of the failed step. A step whose tools already ran is never run again.
 - `done {messages, stopped, error?, compaction?, model, usage}`, always last:
   - `messages`: the assistant and tool messages the turn added, in order, to append to the thread. Never the user
     message, which the app stores itself, and never a tool call without its result. A `reasoning` part holds its
     step's `thinking` summaries, one per line, not the raw reasoning.
   - `stopped`: `null` when the model finished; `step_limit`, `cancelled` or `error` otherwise. The messages are kept
     in every case, since their tools already ran.
-  - `error {code, message}`: `device_offline`, `not_allowed` (the app refused the grant), `model_unavailable` or
+  - `error {code, message}`: `device_offline`, `not_allowed` (the app refused the grant), `model_unavailable` (the
+    model's provider failed, also after the relay's retries), `model_timeout` (the model sent nothing in time) or
     `internal`. `message` can be shown to the user.
   - `compaction {summary, folded}`: a new summary that covers the first `folded` of the sent `messages`; the app stores
     it and sends it as `summary`, with only the later messages, from the next turn on.

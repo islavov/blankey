@@ -250,6 +250,19 @@ test("a turn stopped at the step limit says how to go on", async () => {
   assert.equal(lastNote(), "The assistant stopped after many steps; ask it to continue");
 });
 
+test("a step the relay runs again drops what it wrote; a model that never answers is named", async () => {
+  const turn = await send("Who signs?");
+  await chatEvent("started", { text: "Who signs?" }, 1, turn);
+  await chatEvent("text_delta", { text: "The sel" }, 1, turn);
+  await chatEvent("status", { state: "retrying" }, 1, turn);
+  assert.equal(line(), "The model did not answer. Trying again…");
+  assert.ok(!$$(".chat-text").some((el) => el.textContent === "The sel"));
+  await chatEvent("text_delta", { text: "The seller signs." }, 1, turn);
+  assert.equal($$(".chat-text").at(-1).textContent, "The seller signs.");
+  await chatEvent("done", { stopped: "error", error: { code: "model_timeout", message: "The model did not answer in time; try again in a moment" } }, 1, turn);
+  assert.equal(text(".chat-error"), "The model did not answer in time. Try again in a moment.");
+});
+
 test("an error says what went wrong and puts the text back in the composer", async () => {
   let turn = await send("Draft the power of attorney");
   assert.equal(composer().value, "");
