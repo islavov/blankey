@@ -295,6 +295,21 @@ test("after a lock and unlock, chat_running says again which cases run", async (
   assert.deepEqual(spinning(), []);
 });
 
+test("an empty chat offers things to ask; a click sends one", async () => {
+  backend.db.cases.push({ id: 3, title: "Car sale", notes: "", created_at: "2026-11-01T09:00:00", updated_at: "2026-11-01T09:00:00" });
+  await goTo("Activity");
+  await goTo("Cases");
+  await click(caseItem("Car sale"));
+  await tab("AI assistant");
+  assert.deepEqual($$(".chat-starters button").map((b) => b.textContent), [
+    "Make a template from a document in this case",
+    "Fill in a document for the people in this case",
+    "What can you do?",
+  ]);
+  await click(byText(".chat-starters button", "What can you do?"));
+  assert.deepEqual(backend.called("send_chat_message").at(-1), { caseId: 3, text: "What can you do?" });
+});
+
 test("the assistant tab goes when the relay stops offering the assistant", async () => {
   backend.db.relay.chat = false;
   backend.emit("relay-status");

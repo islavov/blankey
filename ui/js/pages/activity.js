@@ -6,12 +6,13 @@ import { processRequests } from "../requests.js";
 import { toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
 import { Table } from "../ui/table.js";
+import { openDocuments } from "../viewer.js";
 
 /** A request: a waiting one to answer it, a fill in the fill form, or the documents it made. */
 export function openActivity(row) {
   if (row.status === "pending") return processRequests();
   if (row.kind === "fill" && row.fill_set_id) return openFill({ fill_set_id: row.fill_set_id });
-  if (row.document_ids.length) return call("open_documents", { ids: row.document_ids });
+  if (row.document_ids.length) return openDocuments(row.document_ids);
   toast(t("Nothing to open for this request"));
 }
 

@@ -28,6 +28,10 @@ test("collection links: one line per link; fields and Copy are in the panel besi
   assert.equal(text(".side .small:not(.muted)"), "Full name, Email");
   await click(byText(".side button", "Copy"));
   assert.deepEqual(backend.called("copy_text").at(-1), { text: "https://relay.blankey.io/s/XchaBj2#k4Fp9QzR2mWx7aLc" });
+  assert.equal(text("#toast"), "Link copied.");
+  assert.equal(text(".side-link button"), "✓ Copied", "the button confirms it for a moment");
+  await click(byText("#page-actions button", "Copy link"));
+  assert.ok(byText("#page-actions button", "✓ Copied"));
   await click($(".side .close"));
 });
 

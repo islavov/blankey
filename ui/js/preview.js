@@ -6,7 +6,7 @@ const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 4;
 
 /**
- * A template preview: html (docx with blanks as chips) or page images with a box per field.
+ * A template or file preview: html (docx with blanks as chips), page images with a box per field, or one image.
  * `active` is highlighted; bumping `revealSeq` scrolls it into view. Clicking a field calls `onPick(name)`.
  */
 export function Preview({ preview, placeholder = "", interactive = true, onPick, active, revealSeq = 0, style = "", help }) {
@@ -39,6 +39,7 @@ function content(preview, placeholder, interactive) {
   if (preview.type === "error") return html`<div class="preview-error">${t("No preview: {error}", { error: preview.message })}</div>`;
   // the docx HTML comes from Blankey's own renderer, which escapes the document text
   if (preview.type === "html") return html`<div class="zoom"><div class="paper" dangerouslySetInnerHTML=${{ __html: preview.html }}></div></div>`;
+  if (preview.type === "image") return html`<div class="zoom"><img class="preview-image" src=${preview.image} alt="" /></div>`;
   return html`<div class="zoom">${preview.pages.map((page) => html`<${PdfPage} page=${page} interactive=${interactive} />`)}</div>`;
 }
 

@@ -211,6 +211,13 @@ const ERRORS = {
 /** What went wrong, in the user's language when the code is known. */
 const errorText = (error) => ERRORS[error.code]?.() || error.message;
 
+/** What a new user can ask first; a click sends it. */
+const STARTERS = [
+  () => t("Make a template from a document in this case"),
+  () => t("Fill in a document for the people in this case"),
+  () => t("What can you do?"),
+];
+
 const STATUS = {
   compacting: () => t("Summarizing earlier messages"),
   waiting: () => t("Waiting for you in Blankey"),
@@ -326,11 +333,10 @@ export function CaseChat({ caseId }) {
   const stored = turn?.done && thread?.at >= turn.endedAt;
   const empty = !thread?.messages.length && !turn && !chat.running;
 
-  const send = async () => {
-    const text = chat.draft.trim();
+  const send = async (text = chat.draft.trim()) => {
     if (!text || chat.running) return;
     stick.current = true;
-    setDraft(caseId, "");
+    if (text === chat.draft.trim()) setDraft(caseId, "");
     await call("send_chat_message", { caseId, text }).catch(() => {
       if (!drafts.get(caseId)) setDraft(caseId, text);
     });
@@ -355,14 +361,20 @@ export function CaseChat({ caseId }) {
         ${turn && !stored && !turn.failed && html`<${LiveTurn} turn=${turn} running=${chat.running} />`}
         ${chat.running && !turn && html`<div class="chat-status"><${Spinner} /> ${t("The assistant is working")}</div>`}
         ${turn && html`<${TurnEnd} turn=${turn} />`}
-        ${empty && html`<div class="empty">${t("Ask the assistant to work on this case. It knows the people, files and notes in it, never the values in profiles.")}</div>`}`}
+        ${empty &&
+        html`<div class="empty">
+          ${t("Ask the assistant to work on this case. It knows the people, files and notes in it, never the values in profiles.")}
+          <div class="chat-starters" data-help="chat.starters">
+            ${STARTERS.map((text) => html`<button class="chip" onClick=${() => send(text())}>${text()}</button>`)}
+          </div>
+        </div>`}`}
     </div>
     <div class="chat-composer">
       <textarea rows="2" data-help="chat.message" placeholder=${t("Ask the assistant about this case")} value=${chat.draft}
         onInput=${(e) => setDraft(caseId, e.target.value)} onKeyDown=${onKeyDown}></textarea>
       ${chat.running
         ? html`<button class="danger" data-help="chat.stop" onClick=${() => call("stop_chat", { caseId }).catch(() => {})}>${t("Stop")}</button>`
-        : html`<button class="primary" data-help="chat.send" disabled=${!chat.draft.trim()} onClick=${send}>${t("Send")}</button>`}
+        : html`<button class="primary" data-help="chat.send" disabled=${!chat.draft.trim()} onClick=${() => send()}>${t("Send")}</button>`}
     </div>`;
 }
 

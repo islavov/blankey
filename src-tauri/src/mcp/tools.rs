@@ -48,7 +48,12 @@ Cases keep one matter together: its profiles with their roles, the files the use
 sets and documents made for it. A blankey://case/<id> link the user pastes names a case: pass <id> as case_id to
 every tool. In a case find_profiles lists its profiles and get_case its files (casefile:<id>, found by the user's
 descriptions); what you save there stays in the case. Without case_id, tools see global data only.
+
+When the user asks how to do something in Blankey, or what it can do: get_help has the app's guide.
 "#;
+
+/// The app's guide for the user's "how do I…" questions, as `get_help` returns it.
+pub const HELP: &str = include_str!("help.md");
 
 /// Added to the instructions when the user is signed in to Blankey Online.
 pub const LINK_INSTRUCTIONS: &str = r#"Collection links collect data someone else holds: create_collection_link; once the user confirms it,
@@ -1465,6 +1470,13 @@ impl Tools {
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
+    }
+
+    #[tool(
+        description = "Blankey's user guide: what the pages are and how the user does things in the app (cases, files,\nprofiles, templates, filling, collection links, connecting assistants, locking). Read it before answering a\n\"how do I…\" or \"what can you do\" question."
+    )]
+    async fn get_help(&self) -> ToolResult {
+        raw(HELP.to_string())
     }
 
     #[tool(

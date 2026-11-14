@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use axum::body::Bytes;
 use axum::extract::{Path as UrlPath, Query, State as Shared};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
@@ -98,12 +99,14 @@ impl Stub {
         let routes = Router::new()
             .route("/.well-known/blankey-relay", get(discovery))
             .route("/.well-known/oauth-authorization-server", get(metadata))
-            .route("/register", post(|| async { Json(json!({"client_id": "client-1"})) }))
+            // each POST handler reads its body: answering before it has arrived makes the server drop the
+            // connection, which fails the client's read now and then
+            .route("/register", post(|_: Bytes| async { Json(json!({"client_id": "client-1"})) }))
             .route("/authorize", get(authorize))
             .route("/token", post(token))
             .route(
                 "/device/register",
-                post(|| async { Json(json!({"device_id": DEVICE_ID, "account": "you@example.com"})) }),
+                post(|_: Bytes| async { Json(json!({"device_id": DEVICE_ID, "account": "you@example.com"})) }),
             )
             .route("/device/grants/revoke", post(revoke))
             .route("/device/links", post(create_link).get(list_links))

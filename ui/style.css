@@ -228,6 +228,11 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .fields th { text-align: left; font-weight: 500; color: var(--muted); font-size: 11.5px; padding: 4px 6px; }
 .fields td { padding: 3px 6px; }
 .fields td input, .fields td select { padding: 4px 7px; }
+.fields .value-cell { display: flex; align-items: center; gap: 2px; }
+.fields .value-cell input { flex: 1; min-width: 0; }
+.fields .eye { padding: 3px 5px; color: var(--muted); display: grid; place-items: center; }
+.fields .eye:hover { color: var(--text); }
+.fields .eye svg { width: 15px; height: 15px; }
 .fields .remove { padding: 2px 8px; color: var(--muted); }
 .detail-actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
 .check-row { display: flex; align-items: center; gap: 6px; }
@@ -237,6 +242,8 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 /* -- previews --------------------------------------------------------------------- */
 .preview-area { background: var(--backdrop); border-radius: 8px; padding: 16px; overflow: auto; }
 .zoom { --zoom: 1; min-width: 100%; }
+.preview-image { display: block; max-width: 100%; margin: 0 auto; border-radius: 4px; zoom: var(--zoom); }
+.file-view .preview-area { min-height: 100%; }
 .zoom .paper { zoom: var(--zoom); }
 .paper {
   background: #fff; color: #111; padding: 32px 40px; border-radius: 2px;
@@ -263,6 +270,7 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .sheet-head .head-text { flex: 1; min-width: 0; display: flex; gap: 12px; }
 .sheet-head .head-icon { width: 34px; height: 34px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; }
 .sheet-head .head-icon svg { width: 18px; height: 18px; }
+.sheet-head .head-actions { display: flex; gap: 8px; align-items: center; flex: none; }
 .sheet-head h2 { margin: 0; font-size: 15px; }
 .sheet-head .reason { color: var(--muted); margin-top: 2px; }
 .sheet-form { display: grid; grid-template-columns: auto minmax(220px, 320px); gap: 6px 10px; align-items: center; }
@@ -354,6 +362,10 @@ input.case-title:focus { background: var(--input); }
 .file-label { font-weight: 500; }
 .case-link { text-align: left; }
 .drop-overlay { position: fixed; inset: 8px; z-index: 4; pointer-events: none; display: grid; place-items: center; background: var(--accent-soft); border: 2px dashed var(--accent); border-radius: 10px; }
+.drop-zone { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 100%; padding: 36px 24px; border: 2px dashed var(--line); border-radius: 10px; background: transparent; color: var(--muted); cursor: pointer; }
+.drop-zone svg { width: 28px; height: 28px; }
+.drop-zone:hover, .drop-zone.over { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.copied { color: var(--accent); }
 .drop-text { background: var(--bg); padding: 10px 18px; border-radius: 8px; font-weight: 500; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12); }
 .import-list { max-width: 760px; margin: 18px auto; padding: 0 24px; display: grid; gap: 8px; }
 .import-row { display: grid; grid-template-columns: minmax(120px, 220px) 1fr auto; gap: 10px; align-items: center; }
@@ -375,6 +387,8 @@ input.case-title:focus { background: var(--input); }
 }
 .chat-thread > * { flex: none; }
 .chat-thread > .empty { margin: auto 0; }
+.chat-starters { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; }
+.chat-starters .chip { padding: 5px 14px; color: var(--text); }
 .chat-msg.user {
   align-self: flex-end; max-width: 78%; padding: 7px 12px; border-radius: 12px 12px 4px 12px; background: var(--accent-soft);
   white-space: pre-wrap; overflow-wrap: anywhere;
@@ -492,3 +506,18 @@ input.case-title:focus { background: var(--input); }
 .relay-head { font-size: 11px; font-weight: 600; color: var(--muted); }
 /* lines up with the buttons in the rows above */
 .grid td.end { text-align: right; padding-right: 16px; }
+
+/* -- printing the open file or document ------------------------------------------- */
+@media print {
+  @page { margin: 0; }
+  html, body { height: auto; overflow: visible; background: #fff; }
+  body > :not(#sheet-root) { display: none !important; }
+  .sheet { position: static; display: block; background: #fff; }
+  .sheet-drag, .sheet-head { display: none; }
+  .file-view, .file-view .preview-area { overflow: visible; min-height: 0; padding: 0; border-radius: 0; background: #fff; }
+  .file-view .zoom { --zoom: 1; }
+  .file-view .pdf-page { max-width: none; margin: 0; box-shadow: none; break-after: page; }
+  .file-view .pdf-page:last-child { break-after: auto; }
+  .file-view .pdf-page .box { display: none; }
+  .file-view .preview-image { zoom: 1; border-radius: 0; }
+}

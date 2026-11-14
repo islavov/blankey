@@ -275,11 +275,80 @@ async fn import_case_files(state: State<'_, AppState>, case_id: i64, items: Vec<
     tauri::async_runtime::spawn_blocking(move || app.import_case_files(case_id, &files)).await.map_err(err)?
 }
 
+/// Changes a case file's description, its name, or both.
 #[tauri::command]
-fn update_case_file(state: State<AppState>, id: i64, description: String) -> CmdResult<()> {
-    state.app.vault().set_file_description(id, description.trim()).map_err(err)?;
+fn update_case_file(
+    state: State<AppState>,
+    id: i64,
+    description: Option<String>,
+    name: Option<String>,
+) -> CmdResult<()> {
+    let vault = state.app.vault();
+    if let Some(description) = description {
+        vault.set_file_description(id, description.trim()).map_err(err)?;
+    }
+    if let Some(name) = name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        vault.set_file_name(id, name).map_err(err)?;
+    }
+    drop(vault);
     state.app.audit("user", "update_case_file", &id.to_string());
     Ok(())
+}
+
+/// Image types the window can show as they are.
+const SHOWN_IMAGES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// A case file shown inside Blankey: a Word file as HTML, a PDF as its pages, an image as it is.
+fn case_file_preview_of(app: &Blankey, id: i64) -> Result<Preview, String> {
+    let file = app.vault().get_collected_file(id).map_err(err)?;
+    let content = || app.vault().load_collected_file(id).map(|(_, content)| content).map_err(err);
+    Ok(match crate::cases::readable_kind(&file.file_type) {
+        Some("pdf") => preview::pdf_view(&content()?),
+        Some(_) => preview::docx_view(&review_path(app, &crate::cases::case_file_source(id))?.0),
+        None if SHOWN_IMAGES.contains(&file.file_type.as_str()) => Preview::image(&file.file_type, &content()?),
+        None => Preview::Error { message: t(&app.language(), "Blankey cannot show this kind of file") },
+    })
+}
+
+/// A generated document shown inside Blankey, with what its heading says.
+#[derive(Serialize)]
+struct DocumentView {
+    title: String,
+    filename: String,
+    preview: Preview,
+}
+
+fn document_view(app: &Blankey, id: i64) -> Result<DocumentView, String> {
+    let (filename, content) = app.vault().load_document(id).map_err(err)?;
+    let title = app.vault().list_documents().map_err(err)?.into_iter().find(|d| d.id == id).map(|d| d.title);
+    let preview = if filename.to_lowercase().ends_with(".pdf") {
+        preview::pdf_view(&content)
+    } else {
+        preview::docx_view(&app.scratch_file(&format!("document-{id}.docx"), &content)?)
+    };
+    Ok(DocumentView { title: title.unwrap_or_else(|| filename.clone()), filename, preview })
+}
+
+#[tauri::command]
+async fn document_preview(state: State<'_, AppState>, id: i64) -> CmdResult<DocumentView> {
+    let app = state.app.clone();
+    let view = tauri::async_runtime::spawn_blocking(move || document_view(&app, id)).await.map_err(err)??;
+    state.app.audit("user", "open_document", &id.to_string());
+    Ok(view)
+}
+
+/// The system's print dialog for what the window shows; the print styles leave only the open file or document.
+#[tauri::command]
+fn print_window(window: tauri::WebviewWindow) -> CmdResult<()> {
+    window.print().map_err(err)
+}
+
+#[tauri::command]
+async fn case_file_preview(state: State<'_, AppState>, id: i64) -> CmdResult<Preview> {
+    let app = state.app.clone();
+    let preview = tauri::async_runtime::spawn_blocking(move || case_file_preview_of(&app, id)).await.map_err(err)??;
+    state.app.audit("user", "open_collected_file", &id.to_string());
+    Ok(preview)
 }
 
 #[derive(Serialize)]
@@ -1630,6 +1699,9 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         pick_files,
         import_case_files,
         update_case_file,
+        case_file_preview,
+        document_preview,
+        print_window,
         linkable_profiles,
         link_case_profile,
         remove_case_profile,

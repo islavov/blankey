@@ -418,6 +418,14 @@ impl Blankey {
         self.config.data_dir.join("scratch")
     }
 
+    /// A decrypted file the preview reads by path, in the scratch folder; cleared with it.
+    pub fn scratch_file(&self, name: &str, content: &[u8]) -> Result<PathBuf, String> {
+        let dir = self.scratch_dir();
+        let path = dir.join(name);
+        write_private(&dir, &path, content)?;
+        Ok(path)
+    }
+
     pub fn clear_scratch(&self) {
         let _ = std::fs::remove_dir_all(self.scratch_dir());
     }
