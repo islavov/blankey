@@ -275,7 +275,7 @@ app holds a set. `engine` is the version of the app's engine.
 | `204` | no set this engine can run | drops the set it holds |
 | `402` | the account may not have sets | drops the set it holds |
 
-The set's files are opaque to this protocol: the app's engine parses them (`src-tauri/src/doctypes/set.rs`), leaves
+The set's files are opaque to this protocol: the app's engine parses them (`src-tauri/doctypes/src/set.rs`), leaves
 out what it cannot run and refuses a set it cannot parse, keeping the one it held. The app asks after each connect,
 every 30 minutes while connected, and when the user asks in Settings. A set is used for 24 hours after the relay last
 answered `200` or `304`; after that, and after signing out, the app reads no file as a document until it has one

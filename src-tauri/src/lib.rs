@@ -6,7 +6,6 @@ pub mod convert;
 pub mod core;
 pub mod crypto;
 pub mod docsets;
-pub mod doctypes;
 pub mod fieldtypes;
 pub mod i18n;
 pub mod keychain;
@@ -23,3 +22,4 @@ pub mod templates;
 pub mod vault;
 
 pub use app::run;
+pub use blankey_doctypes as doctypes;

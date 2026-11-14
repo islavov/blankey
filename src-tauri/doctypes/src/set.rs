@@ -167,13 +167,15 @@ struct ConfigFile {
     print: Vec<String>,
 }
 
-#[derive(Deserialize)]
+/// The codes several documents print, each with the field it is: a file under `tables/`.
+#[derive(Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
-struct TableFile {
-    id: String,
+pub struct Table {
+    pub id: String,
+    /// what documents of the table print besides their values
     #[serde(default)]
-    print: Vec<String>,
-    codes: Vec<Field>,
+    pub print: Vec<String>,
+    pub codes: Vec<Field>,
 }
 
 #[derive(Deserialize)]
@@ -204,13 +206,34 @@ pub struct Config {
     pub print: Vec<String>,
 }
 
+impl Config {
+    /// A table read as if it were a document, with every code of it a field: for seeing what a page of an unknown
+    /// document prints beside its codes.
+    pub fn of_table(table: &Table) -> Config {
+        let codes = || table.codes.iter();
+        Config {
+            id: table.id.clone(),
+            name: Text::default(),
+            family: String::new(),
+            priority: 0,
+            profile: ProfileSpec { kind: String::new(), name: String::new(), number: String::new() },
+            sides: Vec::new(),
+            fields: table.codes.clone(),
+            checks: Vec::new(),
+            known_codes: codes().filter_map(|f| f.code.as_deref()).map(canonical).collect(),
+            item_codes: codes().filter(|f| f.items).filter_map(|f| f.code.as_deref()).map(canonical).collect(),
+            print: table.print.clone(),
+        }
+    }
+}
+
 /// The code without dots, as it is compared: "C.1.1" is "C11".
 pub fn canonical(code: &str) -> String {
     code.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_uppercase()
 }
 
 /// One document of a set, or (its id, why this engine cannot run it).
-fn compile(source: &str, tables: &[TableFile], patterns: &Patterns) -> Result<Config, (String, String)> {
+fn compile(source: &str, tables: &[Table], patterns: &Patterns) -> Result<Config, (String, String)> {
     let file: ConfigFile = serde_yaml::from_str(source).map_err(|e| (String::new(), e.to_string()))?;
     let refuse = |reason: String| (file.id.clone(), reason);
     if !ID.is_match(&file.id) {
@@ -238,7 +261,7 @@ fn compile(source: &str, tables: &[TableFile], patterns: &Patterns) -> Result<Co
             Some("is not a field key")
         } else if fields[..at].iter().any(|f| f.key == field.key) {
             Some("is there twice")
-        } else if !crate::fieldtypes::is_type(&field.field_type) {
+        } else if !crate::values::is_type(&field.field_type) {
             Some("has an unknown type")
         } else if field.pattern.as_ref().is_some_and(|pattern| !patterns.has(pattern)) {
             Some("names a pattern this engine does not have")
@@ -289,6 +312,8 @@ pub struct Set {
     pub ocr: OcrSettings,
     pub patterns: Patterns,
     /// in the order of their paths
+    pub tables: Vec<Table>,
+    /// in the order of their paths
     pub documents: Vec<Config>,
     /// what this engine left out: (a document's id, a pattern's name or a file's path, why)
     pub skipped: Vec<(String, String)>,
@@ -305,9 +330,9 @@ impl Set {
             return Err(format!("The document config set needs engine {}; this is {ENGINE}", file.engine));
         }
         let (patterns, mut skipped) = Patterns::compile(file.patterns);
-        let mut tables: Vec<TableFile> = Vec::new();
+        let mut tables: Vec<Table> = Vec::new();
         for (path, source) in files.iter().filter(|(path, _)| path.starts_with("tables/")) {
-            match serde_yaml::from_str::<TableFile>(source) {
+            match serde_yaml::from_str::<Table>(source) {
                 Ok(table) => tables.push(table),
                 Err(e) => skipped.push((path.clone(), e.to_string())),
             }
@@ -322,12 +347,12 @@ impl Set {
                 Err((id, reason)) => skipped.push((if id.is_empty() { path.clone() } else { id }, reason)),
             }
         }
-        Ok(Set { version: version.to_string(), ocr: file.ocr, patterns, documents, skipped })
+        Ok(Set { version: version.to_string(), ocr: file.ocr, patterns, tables, documents, skipped })
     }
 
-    /// The set in a folder laid out as the relay keeps it (`set.yaml`, `tables/`, `documents/`): for the checker
-    /// and the diagnostic, which read a set from a checkout.
-    pub fn from_dir(dir: &std::path::Path) -> Result<Set, String> {
+    /// The files of a set in a folder laid out as the relay keeps it (`set.yaml`, `tables/`, `documents/`), by
+    /// path: what `parse` takes. `tests/` is not part of the set.
+    pub fn files_in(dir: &std::path::Path) -> BTreeMap<String, String> {
         fn collect(root: &std::path::Path, dir: &std::path::Path, files: &mut BTreeMap<String, String>) {
             for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
                 let path = entry.path();
@@ -345,6 +370,11 @@ impl Set {
         }
         let mut files = BTreeMap::new();
         collect(dir, dir, &mut files);
-        Set::parse("local", &files)
+        files
+    }
+
+    /// The set in a folder: for the config set tool, which reads one from a checkout.
+    pub fn from_dir(dir: &std::path::Path) -> Result<Set, String> {
+        Set::parse("local", &Set::files_in(dir))
     }
 }

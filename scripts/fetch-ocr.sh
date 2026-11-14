@@ -1,6 +1,6 @@
 #!/bin/sh
 # Download the OCR models (PaddleOCR PP-OCRv5: text detection and Cyrillic recognition, as ONNX) into src-tauri/ocr/.
-# Blankey runs them itself (src-tauri/src/doctypes/ocr.rs); a file is kept only when its checksum is the pinned one.
+# Blankey runs them itself (src-tauri/doctypes/src/ocr.rs); a file is kept only when its checksum is the pinned one.
 set -eu
 BASE="https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5"
 DEST="$(cd "$(dirname "$0")/.." && pwd)/src-tauri/ocr"

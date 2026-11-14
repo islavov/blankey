@@ -7,7 +7,7 @@ use regex::Regex;
 
 use super::patterns::digit;
 use super::{fold, Line};
-use crate::pii::{egn_birth_date, valid_egn};
+use crate::values::{egn_birth_date, valid_egn};
 
 /// One value of the zone. `checked` is whether its check digit holds; None when it has none.
 pub struct Part {

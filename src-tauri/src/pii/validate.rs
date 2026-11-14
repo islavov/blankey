@@ -4,49 +4,7 @@ use chrono::NaiveDate;
 
 pub use crate::fieldtypes::{valid_email, valid_iban, valid_lnch};
 
-const EIK9_WEIGHTS: [[u32; 8]; 2] = [[1, 2, 3, 4, 5, 6, 7, 8], [3, 4, 5, 6, 7, 8, 9, 10]];
-const EIK13_WEIGHTS: [[u32; 4]; 2] = [[2, 7, 3, 5], [4, 9, 5, 7]];
-
-fn digits(value: &str) -> Option<Vec<u32>> {
-    value.chars().map(|c| c.to_digit(10)).collect()
-}
-
-/// The EGN checksum holds and its first six digits are a real birth date.
-pub fn valid_egn(value: &str) -> bool {
-    crate::fieldtypes::valid_egn(value) && egn_birth_date(value).is_some()
-}
-
-pub fn egn_birth_date(value: &str) -> Option<NaiveDate> {
-    let d = digits(value.get(..6)?)?;
-    let (yy, mm, dd) = (d[0] * 10 + d[1], d[2] * 10 + d[3], d[4] * 10 + d[5]);
-    let (century, month) = match mm {
-        1..=12 => (1900, mm),
-        21..=32 => (1800, mm - 20),
-        41..=52 => (2000, mm - 40),
-        _ => return None,
-    };
-    NaiveDate::from_ymd_opt((century + yy) as i32, month, dd)
-}
-
-fn eik_digit<const N: usize>(d: &[u32], weights: &[[u32; N]; 2]) -> u32 {
-    for w in weights {
-        let sum = d.iter().zip(w).map(|(d, w)| d * w).sum::<u32>() % 11;
-        if sum != 10 {
-            return sum;
-        }
-    }
-    0
-}
-
-/// A 9-digit EIK/BULSTAT, or a 13-digit one for a branch.
-pub fn valid_eik(value: &str) -> bool {
-    let Some(d) = digits(value) else { return false };
-    match d.len() {
-        9 => eik_digit(&d[..8], &EIK9_WEIGHTS) == d[8],
-        13 => eik_digit(&d[..8], &EIK9_WEIGHTS) == d[8] && eik_digit(&d[8..12], &EIK13_WEIGHTS) == d[12],
-        _ => false,
-    }
-}
+pub use blankey_doctypes::values::{valid_egn, valid_eik};
 
 /// A Bulgarian VAT number: BG and a valid EIK or EGN.
 pub fn valid_vat_bg(value: &str) -> bool {

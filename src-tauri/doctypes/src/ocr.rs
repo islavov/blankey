@@ -96,7 +96,7 @@ pub fn model_dir() -> Option<PathBuf> {
         beside("ocr"),
         beside("../Resources/ocr"),
         beside("../lib/blankey/ocr"),
-        Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ocr")),
+        Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ocr")),
     ];
     candidates
         .into_iter()
@@ -106,12 +106,17 @@ pub fn model_dir() -> Option<PathBuf> {
 
 impl Engine {
     pub fn load(dir: &Path) -> Result<Engine, String> {
+        Engine::load_model(dir, RECOGNITION_MODEL)
+    }
+
+    /// The engine with another recognition model of the folder: for trying a set against one the app does not ship.
+    pub fn load_model(dir: &Path, recognition: &str) -> Result<Engine, String> {
         let text = |e: TractError| format!("OCR model: {e}");
         // the files name the sizes inside the network by symbols that clash with a fixed input size: left out, the
         // sizes are worked out from the input
         let onnx = tract_onnx::onnx().with_ignore_value_info(true);
         let detection = onnx.model_for_path(dir.join(DETECTION_MODEL)).map_err(text)?;
-        let proto = onnx.proto_model_for_path(dir.join(RECOGNITION_MODEL)).map_err(text)?;
+        let proto = onnx.proto_model_for_path(dir.join(recognition)).map_err(text)?;
         // the model file carries its own character list, one per line
         let listed =
             proto.metadata_props.iter().find(|entry| entry.key == "character").ok_or("OCR model: no character list")?;
@@ -409,6 +414,25 @@ pub fn shown_size(content: &[u8]) -> Option<(u32, u32)> {
     let (width, height) = decoder.dimensions();
     let swapped = matches!(decoder.orientation().ok()?, Rotate90 | Rotate270 | Rotate90FlipH | Rotate270FlipH);
     Some(if swapped { (height, width) } else { (width, height) })
+}
+
+/// A box of the picture stood upright and laid level, as it lies in the picture as shown (`width` by `height`):
+/// the picture leans by `skew` once it stands upright, which takes `turned` quarter turns clockwise.
+pub fn shown_rect(rect: [f64; 4], width: f64, height: f64, turned: u8, skew: f64) -> [f64; 4] {
+    // back to its lean, about the middle of the upright picture; the box keeps its size
+    let (cx, cy) = if turned % 2 == 1 { (height / 2.0, width / 2.0) } else { (width / 2.0, height / 2.0) };
+    let (mx, my) = ((rect[0] + rect[2]) / 2.0 - cx, (rect[1] + rect[3]) / 2.0 - cy);
+    let (mx, my) = (cx + mx * skew.cos() - my * skew.sin(), cy + mx * skew.sin() + my * skew.cos());
+    let (half_w, half_h) = ((rect[2] - rect[0]) / 2.0, (rect[3] - rect[1]) / 2.0);
+    let rect = [mx - half_w, my - half_h, mx + half_w, my + half_h];
+    let point = |x: f64, y: f64| match turned % 4 {
+        1 => (y, height - x),
+        2 => (width - x, height - y),
+        3 => (width - y, x),
+        _ => (x, y),
+    };
+    let (a, b) = (point(rect[0], rect[1]), point(rect[2], rect[3]));
+    [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]
 }
 
 /// The middle value of some angles: the lean of a picture, from the leans of its lines. 0 when too few say.

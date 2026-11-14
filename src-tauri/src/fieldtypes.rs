@@ -1,37 +1,15 @@
-use chrono::NaiveDate;
-
 use serde_json::Value;
 
 use crate::i18n::mark;
 
-pub const TYPES: &[&str] = &["text", "number", "date", "bool", "egn", "iban", "email", "phone"];
+pub use blankey_doctypes::values::{egn_checksum as valid_egn, is_type, parse_date, valid_lnch, TYPES};
+
 pub const TRUE_VALUES: &[&str] = &["1", "true", "да", "yes", "x"];
-const EGN_WEIGHTS: [u32; 9] = [2, 4, 8, 5, 10, 9, 7, 3, 6];
-const LNCH_WEIGHTS: [u32; 9] = [21, 19, 17, 13, 11, 9, 7, 3, 1];
-
-/// The digits of a 10-digit personal number, EGN or ЛНЧ.
-fn ten_digits(value: &str) -> Option<Vec<u32>> {
-    (value.len() == 10 && value.bytes().all(|b| b.is_ascii_digit()))
-        .then(|| value.bytes().map(|b| (b - b'0') as u32).collect())
-}
-
-fn weighted(digits: &[u32], weights: [u32; 9]) -> u32 {
-    digits[..9].iter().zip(weights).map(|(d, w)| d * w).sum()
-}
-
-pub fn valid_egn(value: &str) -> bool {
-    ten_digits(value).is_some_and(|d| weighted(&d, EGN_WEIGHTS) % 11 % 10 == d[9])
-}
-
-/// ЛНЧ, the personal number a foreigner has in place of an EGN.
-pub fn valid_lnch(value: &str) -> bool {
-    ten_digits(value).is_some_and(|d| weighted(&d, LNCH_WEIGHTS) % 10 == d[9])
-}
 
 /// Why an `egn` field refuses a value; it takes an EGN or a ЛНЧ. The collection form runs the same check
 /// (public/collect/validate.js on the relay).
 fn egn_problem(value: &str) -> Option<&'static str> {
-    if ten_digits(value).is_none() {
+    if blankey_doctypes::values::ten_digits(value).is_none() {
         return Some(mark("An EGN or LNCh has 10 digits"));
     }
     (!valid_egn(value) && !valid_lnch(value)).then_some(mark("Not a valid EGN or LNCh: check for a mistyped digit"))
@@ -56,10 +34,6 @@ pub fn valid_iban(value: &str) -> bool {
     remainder == 1
 }
 
-pub fn parse_date(value: &str) -> Option<NaiveDate> {
-    NaiveDate::parse_from_str(value.trim(), "%d.%m.%Y").ok()
-}
-
 pub fn valid_email(value: &str) -> bool {
     let Some((local, domain)) = value.split_once('@') else { return false };
     let clean = |s: &str| !s.is_empty() && !s.contains(char::is_whitespace) && !s.contains('@');
@@ -79,10 +53,6 @@ pub fn validate(field_type: &str, value: &str) -> Option<&'static str> {
         "email" => (!valid_email(value)).then_some(mark("Invalid email")),
         _ => None,
     }
-}
-
-pub fn is_type(field_type: &str) -> bool {
-    TYPES.contains(&field_type)
 }
 
 pub fn is_true(value: &str) -> bool {

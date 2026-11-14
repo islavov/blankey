@@ -12,8 +12,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::core::{Blankey, Problem, ProfileSave, Target};
-use crate::doctypes::ocr::Engine;
-use crate::doctypes::ocr::OcrSettings;
+use crate::doctypes::ocr::{shown_rect, Engine, OcrSettings};
 use crate::doctypes::{self, Line, Page, Reading, Status};
 use crate::render::preview as pdf;
 use crate::templates::preview::{PagePreview, Preview};
@@ -64,25 +63,6 @@ pub struct DocumentCheck {
     /// profile's own and the picture has no boxes, until `keep_reading` has read it again
     #[serde(skip)]
     pub unread: bool,
-}
-
-/// A box of the picture stood upright and laid level, as it lies in the picture as shown (`width` by `height`):
-/// the picture leans by `skew` once it stands upright, which takes `turned` quarter turns clockwise.
-fn shown_rect(rect: [f64; 4], width: f64, height: f64, turned: u8, skew: f64) -> [f64; 4] {
-    // back to its lean, about the middle of the upright picture; the box keeps its size
-    let (cx, cy) = if turned % 2 == 1 { (height / 2.0, width / 2.0) } else { (width / 2.0, height / 2.0) };
-    let (mx, my) = ((rect[0] + rect[2]) / 2.0 - cx, (rect[1] + rect[3]) / 2.0 - cy);
-    let (mx, my) = (cx + mx * skew.cos() - my * skew.sin(), cy + mx * skew.sin() + my * skew.cos());
-    let (half_w, half_h) = ((rect[2] - rect[0]) / 2.0, (rect[3] - rect[1]) / 2.0);
-    let rect = [mx - half_w, my - half_h, mx + half_w, my + half_h];
-    let point = |x: f64, y: f64| match turned % 4 {
-        1 => (y, height - x),
-        2 => (width - x, height - y),
-        3 => (width - y, x),
-        _ => (x, y),
-    };
-    let (a, b) = (point(rect[0], rect[1]), point(rect[2], rect[3]));
-    [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]
 }
 
 impl Blankey {

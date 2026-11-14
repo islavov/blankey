@@ -12,17 +12,33 @@ pub mod ocr;
 mod patterns;
 mod select;
 mod set;
+pub mod trace;
+pub mod values;
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-pub(crate) use tests::example_set_files;
+
+/// The invented config set the engine's tests run on, as the relay would serve one: path -> YAML.
+#[cfg(any(test, feature = "example"))]
+pub fn example_set_files() -> std::collections::BTreeMap<String, String> {
+    [
+        ("set.yaml", include_str!("testdata/example/set.yaml")),
+        ("tables/example_codes.yaml", include_str!("testdata/example/tables/example_codes.yaml")),
+        ("documents/example_member_card.yaml", include_str!("testdata/example/documents/example_member_card.yaml")),
+        ("documents/example_permit.yaml", include_str!("testdata/example/documents/example_permit.yaml")),
+    ]
+    .into_iter()
+    .map(|(path, text)| (path.to_string(), text.to_string()))
+    .collect()
+}
 
 use serde::{Deserialize, Serialize};
 
 use locate::Scan;
-use set::{Check, Config, Side};
-pub use set::{Set, Text, ENGINE};
+pub use patterns::Patterns;
+use set::Check;
+pub use set::{canonical, Config, Field, Match, Script, Set, Side, Table, Text, ENGINE};
+use trace::{Explained, FieldTrace, PageTry, RuleTrace, ScanTrace, Survey, Tracer, ZoneFound, ZoneTrace};
 
 /// One line of text on a page.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -157,13 +173,103 @@ fn read_as(set: &Set, config: &Config, sides: &[(usize, &Side)], pages: &[Page],
     }
 }
 
+/// Every document of the set against the pages: what each side asked of each page and got, and which was picked.
+pub fn survey(set: &Set, pages: &[Page]) -> Survey {
+    select::survey(set, pages)
+}
+
+/// Whether a line of the page says the phrase, as a side's `match` hears it: letters only, a few misread.
+pub fn says(page: &Page, phrase: &str) -> bool {
+    let needle = fold::skeleton(phrase);
+    !needle.is_empty()
+        && page
+            .lines
+            .iter()
+            .any(|l| fold::find(&fold::skeleton(&l.text), &needle, locate::slack(needle.len())).is_some())
+}
+
+/// The machine-readable zone of the page, when it has one.
+pub fn zone(page: &Page) -> Option<ZoneFound> {
+    let zone = mrz::find(&page.lines)?;
+    let parts =
+        zone.parts.iter().map(|p| ZoneTrace { name: p.name.to_string(), value: p.value.clone(), checked: p.checked });
+    Some(ZoneFound { state: zone.state.clone(), lines: zone.lines.clone(), parts: parts.collect() })
+}
+
+/// The page as a table of the set divides it: the codes of the table printed on it and the values beside them. None
+/// when the set has no such table.
+pub fn table_scan(set: &Set, table: &str, page: &Page) -> Option<ScanTrace> {
+    let config = Config::of_table(set.tables.iter().find(|t| t.id == table)?);
+    Some(Scan::new(page, &config, &set.patterns).describe(&config))
+}
+
+/// A pattern of the set run over a text, step by step; None when the set has no such pattern.
+pub fn explain_pattern(set: &Set, name: &str, text: &str) -> Option<Vec<RuleTrace>> {
+    set.patterns.explain(name, text)
+}
+
+/// `read`, with how it came about: the survey of all documents, each page as the document's config divides it, and
+/// for every field of the document what each locator tried. With `document`, the pages are read as that document
+/// whether or not it would be picked: on the pages that are its sides, or on all of them when none is.
+pub fn explain(set: &Set, pages: &[Page], language: &str, document: Option<&str>) -> Explained {
+    let survey = select::survey(set, pages);
+    let chosen = match document {
+        None => select::pick(set, pages),
+        Some(id) => set.documents.iter().find(|config| config.id == id).map(|config| {
+            let found = select::sides(config, pages);
+            let side = config.sides.iter().find(|side| side.read).or(config.sides.first());
+            let all = || (0..pages.len()).filter_map(|page| Some((page, side?))).collect();
+            (config, if found.is_empty() { all() } else { found })
+        }),
+    };
+    let Some((config, sides)) = chosen else {
+        return Explained {
+            survey,
+            document: None,
+            forced: false,
+            reading: None,
+            scans: Vec::new(),
+            fields: Vec::new(),
+        };
+    };
+    let reading = read_as(set, config, &sides, pages, language);
+    let scans: Vec<Scan> = pages.iter().map(|page| Scan::new(page, config, &set.patterns)).collect();
+    let fields = config.fields.iter().enumerate().map(|(index, field)| {
+        let tries = sides.iter().filter(|(_, side)| side.read).map(|(page, side)| {
+            let mut tracer = Tracer::on();
+            scans[*page].field_traced(index, field, &mut tracer);
+            PageTry { page: *page, side: side.id.clone(), attempts: tracer.done() }
+        });
+        let read = reading.fields.iter().find(|read| read.key == field.key);
+        FieldTrace {
+            key: field.key.clone(),
+            status: match read.map(|read| read.status) {
+                Some(Status::Ok) => "ok",
+                Some(Status::Unchecked) => "unchecked",
+                Some(Status::Failed) => "failed",
+                None => "not_found",
+            },
+            value: read.map(|read| read.value.clone()),
+            tries: tries.collect(),
+        }
+    });
+    Explained {
+        survey,
+        document: Some(config.id.clone()),
+        forced: document.is_some(),
+        fields: fields.collect(),
+        scans: scans.iter().map(|scan| scan.describe(config)).collect(),
+        reading: Some(reading),
+    }
+}
+
 /// Fails the fields a cross-check finds at odds.
 fn apply(check: &Check, fields: &mut [FieldRead]) {
     let [egn, date] = &check.egn_birth;
     let value =
         |key: &String| fields.iter().find(|f| &f.key == key && f.status != Status::Failed).map(|f| f.value.clone());
     let (Some(number), Some(printed)) = (value(egn), value(date)) else { return };
-    let born = crate::pii::egn_birth_date(&number).map(|d| d.format("%d.%m.%Y").to_string());
+    let born = crate::values::egn_birth_date(&number).map(|d| d.format("%d.%m.%Y").to_string());
     if born.as_deref() != Some(printed.as_str()) {
         fields.iter_mut().filter(|f| &f.key == egn || &f.key == date).for_each(|f| f.status = Status::Failed);
     }

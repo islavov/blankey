@@ -6,6 +6,9 @@ license = "MIT"
 edition = "2021"
 default-run = "blankey"
 
+[workspace]
+members = [".", "doctypes", "docset"]
+
 [lib]
 name = "blankey_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -48,9 +51,8 @@ pdfium-render = { version = "0.9", default-features = false, features = ["pdfium
 ttf-parser = "0.25"
 subsetter = "0.2"
 tiny-skia = "0.11"
-# OCR of scans and photos (doctypes::ocr): the image decoders, and a pure-Rust runtime for the ONNX models
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
-tract-onnx = { version = "0.23", default-features = false }
+# the known-documents engine, with its OCR: a crate of its own so the config set tool (docset) builds without the app
+blankey-doctypes = { path = "doctypes" }
 ab_glyph = "0.2"
 roxmltree = "0.20"
 zip = { version = "2", default-features = false, features = ["deflate"] }
@@ -92,6 +94,7 @@ objc2-local-authentication = "0.3"
 block2 = "0.6"
 
 [dev-dependencies]
+blankey-doctypes = { path = "doctypes", features = ["example"] }
 tempfile = "3"
 
 # Argon2 (64 MiB), PDF and Typst work are unbearably slow unoptimized

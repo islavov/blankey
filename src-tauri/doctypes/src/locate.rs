@@ -9,6 +9,7 @@ use regex::Regex;
 use super::mrz::{self, Mrz};
 use super::patterns::Patterns;
 use super::set::{canonical, Config, Field, Script};
+use super::trace::{Attempt, Candidate, LabelTrace, LineTrace, ScanTrace, Tracer, ZoneTrace};
 use super::{fold, patterns, Line, Page};
 
 /// A field's value on the page. `checked`: whether its check holds; None when it has none.
@@ -16,6 +17,17 @@ pub struct Found {
     pub value: String,
     pub place: Option<[f64; 4]>,
     pub checked: Option<bool>,
+}
+
+/// A text tried as a field's value, for the tracer.
+fn tried(text: &str, found: &Found, note: &str) -> Candidate {
+    Candidate {
+        text: text.to_string(),
+        rect: found.place,
+        value: found.value.clone(),
+        checked: found.checked,
+        note: note.to_string(),
+    }
 }
 
 /// A printed label of a field inside a line: chars `start..end` of its text.
@@ -156,6 +168,11 @@ impl<'a> Scan<'a> {
 
     /// The field on this page: the first locator that finds a value that holds, else the first that failed.
     pub fn field(&self, index: usize, field: &Field) -> Option<Found> {
+        self.field_traced(index, field, &mut Tracer::off())
+    }
+
+    /// `field`, telling the tracer what each locator had to go by and tried.
+    pub fn field_traced(&self, index: usize, field: &Field, tracer: &mut Tracer) -> Option<Found> {
         let mut failed = None;
         let mut keep = |found: Option<Found>| match found {
             Some(found) if found.checked != Some(false) => Some(found),
@@ -164,42 +181,89 @@ impl<'a> Scan<'a> {
                 None
             }
         };
-        let zone = field.mrz.as_ref().and_then(|name| self.mrz.as_ref()?.parts.iter().find(|p| p.name == name));
-        if let Some(found) = keep(zone.map(|p| Found {
-            value: p.value.clone(),
-            place: Some(self.page.lines[p.line].rect),
-            checked: p.checked,
-        })) {
-            return Some(found);
+        if let Some(name) = &field.mrz {
+            let part = self.mrz.as_ref().and_then(|zone| zone.parts.iter().find(|p| p.name == name));
+            let found = part.map(|p| Found {
+                value: p.value.clone(),
+                place: Some(self.page.lines[p.line].rect),
+                checked: p.checked,
+            });
+            tracer.attempt(|| Attempt {
+                locator: "mrz",
+                anchor: part.map(|p| p.line),
+                candidates: found.iter().map(|found| tried(&found.value, found, "")).collect(),
+                note: match (&self.mrz, part) {
+                    (None, _) => "no machine-readable zone on the page".into(),
+                    (Some(_), None) => format!("the zone has no part {name}"),
+                    _ => String::new(),
+                },
+            });
+            if let Some(found) = keep(found) {
+                return Some(found);
+            }
         }
-        let coded = field.code.as_ref().and_then(|code| self.codes.get(&canonical(code))?.get(field.line - 1));
-        if let Some(found) = keep(coded.map(|(text, rect)| shape(field, text, *rect, self.patterns))) {
-            return Some(found);
+        if let Some(code) = &field.code {
+            let code = canonical(code);
+            let rows = self.codes.get(&code);
+            let row = rows.and_then(|rows| rows.get(field.line - 1));
+            let found = row.map(|(text, rect)| shape(field, text, *rect, self.patterns));
+            tracer.attempt(|| Attempt {
+                locator: "code",
+                anchor: self.roles.iter().position(|role| matches!(role, Role::Code(printed, _) if *printed == code)),
+                candidates: row
+                    .zip(found.as_ref())
+                    .map(|((text, _), found)| tried(text, found, ""))
+                    .into_iter()
+                    .collect(),
+                note: match (rows, row) {
+                    (None, _) => "the code is not printed on the page".into(),
+                    (Some(rows), None) if rows.is_empty() => "the code has no value beside it".into(),
+                    (Some(rows), None) => format!("its value has {} lines, not {}", rows.len(), field.line),
+                    _ => String::new(),
+                },
+            });
+            if let Some(found) = keep(found) {
+                return Some(found);
+            }
         }
-        if let Some(found) = keep(self.labelled(index, field)) {
-            return Some(found);
+        if !field.label_of.is_empty() {
+            tracer.attempt(|| Attempt { locator: "label", anchor: None, candidates: Vec::new(), note: String::new() });
+            if let Some(found) = keep(self.labelled(index, field, tracer)) {
+                return Some(found);
+            }
         }
-        let anywhere = field.pattern.as_ref().filter(|_| field.code.is_none()).and_then(|pattern| {
-            let lines = self.page.lines.iter().filter(|l| l.confidence >= MIN_CONFIDENCE);
-            lines
-                .filter_map(|l| {
-                    Some(Found {
-                        value: self.patterns.extract(pattern, &l.text)?,
-                        place: Some(l.rect),
-                        checked: Some(true),
-                    })
-                })
-                .next()
-        });
-        keep(anywhere).or(failed)
+        if let Some(pattern) = field.pattern.as_ref().filter(|_| field.code.is_none()) {
+            let lines = self.page.lines.iter().enumerate().filter(|(_, l)| l.confidence >= MIN_CONFIDENCE);
+            let hit = lines.filter_map(|(at, l)| Some((at, l, self.patterns.extract(pattern, &l.text)?))).next();
+            let found = hit.as_ref().map(|(_, l, value)| Found {
+                value: value.clone(),
+                place: Some(l.rect),
+                checked: Some(true),
+            });
+            tracer.attempt(|| Attempt {
+                locator: "pattern",
+                anchor: hit.as_ref().map(|(at, ..)| *at),
+                candidates: hit
+                    .iter()
+                    .zip(found.as_ref())
+                    .map(|((_, l, _), found)| tried(&l.text, found, ""))
+                    .collect(),
+                note: if hit.is_none() { format!("no line holds the pattern {pattern}") } else { String::new() },
+            });
+            return keep(found).or(failed);
+        }
+        failed
     }
 
     /// The value after the field's label in its line, else in the line to its right; with `below`, also the lines
     /// under it up to the next label.
-    fn labelled(&self, index: usize, field: &Field) -> Option<Found> {
+    fn labelled(&self, index: usize, field: &Field, tracer: &mut Tracer) -> Option<Found> {
         let mut failed = None;
+        let mut printed = false;
         for (at, hits) in self.labels.iter().enumerate() {
             let Some(last) = hits.iter().rposition(|h| h.field == index) else { continue };
+            printed = true;
+            tracer.anchor(at);
             let line = &self.page.lines[at];
             let chars: Vec<char> = line.text.chars().collect();
             let next = hits.get(last + 1).map(|h| h.start);
@@ -229,22 +293,77 @@ impl<'a> Scan<'a> {
                     .collect::<Vec<_>>()
                     .join(", ");
                 let place = parts.iter().map(|(_, rect)| *rect).reduce(union);
-                return (!text.is_empty()).then_some(Found { value: text, place, checked: None });
+                if text.is_empty() {
+                    tracer.note("nothing beside the label or under it");
+                    return None;
+                }
+                let found = Found { value: text, place, checked: None };
+                let read = parts.iter().map(|(text, _)| text.as_str()).collect::<Vec<_>>().join(" | ");
+                tracer.candidate(|| tried(&read, &found, ""));
+                return Some(found);
             }
             let candidates = [(raw.as_str(), line.rect), (rest, line.rect)]
                 .into_iter()
                 .chain(beside.map(|l| (l.text.as_str(), l.rect)));
+            let mut any = false;
             for (text, rect) in candidates.filter(|(text, _)| text.chars().any(char::is_alphanumeric)) {
+                any = true;
                 let found = shape(field, value_start(text), rect, self.patterns);
                 let enough =
                     found.value.chars().filter(|c| c.is_alphanumeric()).count() >= if field.part > 0 { 1 } else { 2 };
                 if found.checked != Some(false) && enough {
+                    tracer.candidate(|| tried(text, &found, ""));
                     return Some(found);
                 }
+                tracer.candidate(|| {
+                    tried(text, &found, if found.checked == Some(false) { "not a valid value" } else { "too short" })
+                });
                 failed = failed.or(Some(found).filter(|f| f.checked == Some(false)));
             }
+            if !any {
+                tracer.note("nothing after the label in its line or to its right");
+            }
+        }
+        if !printed {
+            tracer.note("none of its labels is on the page");
         }
         failed
+    }
+
+    /// The page as this config divides it: what each line was taken for, the values beside the codes, the zone.
+    pub fn describe(&self, config: &Config) -> ScanTrace {
+        let lines = self.page.lines.iter().enumerate().map(|(index, line)| LineTrace {
+            index,
+            text: line.text.clone(),
+            rect: line.rect,
+            confidence: line.confidence,
+            role: match &self.roles[index] {
+                Role::Value => "value",
+                Role::Code(..) => "code",
+                Role::Bracket => "bracket",
+                Role::Item => "item",
+                Role::Print => "print",
+                Role::Zone => "zone",
+            },
+            code: match &self.roles[index] {
+                Role::Code(code, _) => Some(code.clone()),
+                _ => None,
+            },
+            labels: self.labels[index]
+                .iter()
+                .map(|hit| LabelTrace { field: config.fields[hit.field].key.clone(), start: hit.start, end: hit.end })
+                .collect(),
+        });
+        let codes =
+            self.codes.iter().map(|(code, rows)| (code.clone(), rows.iter().map(|(text, _)| text.clone()).collect()));
+        let parts = self.mrz.iter().flat_map(|zone| &zone.parts);
+        ScanTrace {
+            lines: lines.collect(),
+            codes: codes.collect(),
+            mrz: parts
+                .map(|p| ZoneTrace { name: p.name.to_string(), value: p.value.clone(), checked: p.checked })
+                .collect(),
+        }
     }
 
     /// The nearest line on the same row to the right that is not a label itself.
@@ -434,7 +553,7 @@ fn shape(field: &Field, raw: &str, rect: [f64; 4], patterns: &Patterns) -> Found
     match field.field_type.as_str() {
         "date" => {
             let date = DATE.captures(raw).map(|c| format!("{}.{}.{}", &c[1], &c[2], &c[3]));
-            found(date.filter(|date| crate::fieldtypes::parse_date(date).is_some()))
+            found(date.filter(|date| crate::values::parse_date(date).is_some()))
         }
         "number" => found(NUMBER.find(raw).map(|m| m.as_str().to_string())),
         "egn" => found(patterns::egn(raw)),
