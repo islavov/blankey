@@ -234,3 +234,85 @@ fn the_document_is_picked_among_all_that_could_be_it() {
         "priority goes before both"
     );
 }
+
+#[test]
+fn a_reading_is_explained_as_it_was_read() {
+    let set = example();
+    for pages in
+        [vec![member_card()], vec![permit()], vec![permit(), member_card()], vec![page(&[("A LEASE", 40.0, 20.0)])]]
+    {
+        let told = explain(&set, &pages, "en", None);
+        let reading = read(&set, &pages, "en");
+        let fields = |reading: &Option<Reading>| {
+            reading
+                .as_ref()
+                .map(|r| r.fields.iter().map(|f| (f.key.clone(), f.value.clone(), f.status)).collect::<Vec<_>>())
+        };
+        assert_eq!(told.document, reading.as_ref().map(|r| r.doctype.clone()));
+        assert_eq!(fields(&told.reading), fields(&reading));
+        let picked: Vec<&str> = told.survey.documents.iter().filter(|d| d.picked).map(|d| d.id.as_str()).collect();
+        assert_eq!(picked, told.document.iter().map(String::as_str).collect::<Vec<_>>());
+    }
+}
+
+#[test]
+fn the_survey_tells_what_each_side_asked_and_got() {
+    let survey = survey(&example(), &[member_card()]);
+    let card = &survey.documents[0];
+    assert_eq!((card.id.as_str(), card.picked, card.score), ("example_member_card", true, Some((1, 0, 2))));
+    let front = card.sides.iter().find(|s| s.side == "front").unwrap();
+    let got: Vec<(&str, &str, bool)> = front.conditions.iter().map(|c| (c.kind, c.wanted.as_str(), c.held)).collect();
+    assert_eq!(
+        got,
+        [
+            ("text_all", "example library", true),
+            ("text_any", "member card", true),
+            ("text_any", "членска карта", false)
+        ]
+    );
+    assert_eq!(front.conditions[0].seen.as_deref(), Some("EXAMPLE LIBRARY"));
+    assert!(front.holds, "one of the `text_any` phrases is enough");
+    assert!(!card.sides.iter().find(|s| s.side == "rules").unwrap().holds);
+    let permit_doc = &survey.documents[1];
+    assert_eq!((permit_doc.picked, permit_doc.score), (false, None));
+    assert!(permit_doc.sides[0].conditions.iter().any(|c| c.kind == "codes_none" && c.held), "F is not printed");
+
+    let survey = super::survey(&example(), &[permit()]);
+    assert_eq!(survey.pages[0].codes["example_codes"], ["A", "B", "C.1", "D", "E"]);
+}
+
+#[test]
+fn a_field_tells_what_each_locator_tried() {
+    let set = example();
+    let mut card = member_card();
+    card.lines.retain(|line| !line.text.starts_with("Born"));
+    for line in &mut card.lines {
+        line.text = line.text.replace("M12O456", "M12");
+    }
+    let told = explain(&set, &[card], "en", None);
+    let field = |key: &str| told.fields.iter().find(|f| f.key == key).unwrap();
+    let name = field("name");
+    assert_eq!((name.status, name.value.as_deref()), ("unchecked", Some("JANE EXAMPLE")));
+    let attempt = &name.tries[0].attempts[0];
+    assert_eq!((attempt.locator, attempt.anchor), ("label", Some(2)));
+    let born = field("birth_date");
+    assert_eq!(
+        (born.status, born.tries[0].attempts[0].note.as_str()),
+        ("not_found", "none of its labels is on the page")
+    );
+    let number = field("member.number");
+    assert_eq!(number.status, "failed");
+    assert_eq!(number.tries[0].attempts[0].candidates[0].note, "not a valid value");
+    assert_eq!(number.tries[0].attempts[1].locator, "pattern", "then anywhere on the page");
+    let roles: Vec<&str> = told.scans[0].lines.iter().map(|l| l.role).collect();
+    assert_eq!(&roles[..3], ["print", "value", "print"], "a caption, a title no config names, a label");
+    assert_eq!(told.scans[0].lines[2].labels[0].field, "name");
+
+    // a document that would not be picked is read as itself when asked for
+    let forced = explain(&set, &[permit()], "en", Some("example_member_card"));
+    assert_eq!((forced.document.as_deref(), forced.forced), (Some("example_member_card"), true));
+    assert!(forced.fields.iter().all(|f| f.status == "not_found"));
+    let coded = explain(&set, &[permit()], "en", None);
+    let remarks = coded.fields.iter().find(|f| f.key == "weight").unwrap();
+    assert_eq!((remarks.tries[0].attempts[0].locator, remarks.tries[0].attempts[0].anchor), ("code", Some(6)));
+}

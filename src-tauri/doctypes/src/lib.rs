@@ -12,6 +12,7 @@ pub mod ocr;
 mod patterns;
 mod select;
 mod set;
+pub mod trace;
 pub mod values;
 
 #[cfg(test)]
@@ -34,8 +35,9 @@ pub fn example_set_files() -> std::collections::BTreeMap<String, String> {
 use serde::{Deserialize, Serialize};
 
 use locate::Scan;
-use set::{Check, Config, Side};
-pub use set::{Set, Text, ENGINE};
+use set::Check;
+pub use set::{Config, Field, Match, Set, Side, Table, Text, ENGINE};
+use trace::{Explained, FieldTrace, PageTry, RuleTrace, Survey, Tracer};
 
 /// One line of text on a page.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -167,6 +169,71 @@ fn read_as(set: &Set, config: &Config, sides: &[(usize, &Side)], pages: &[Page],
         turned: pages.iter().map(|page| page.turned).collect(),
         skew: pages.iter().map(|page| page.skew).collect(),
         fields,
+    }
+}
+
+/// Every document of the set against the pages: what each side asked of each page and got, and which was picked.
+pub fn survey(set: &Set, pages: &[Page]) -> Survey {
+    select::survey(set, pages)
+}
+
+/// A pattern of the set run over a text, step by step; None when the set has no such pattern.
+pub fn explain_pattern(set: &Set, name: &str, text: &str) -> Option<Vec<RuleTrace>> {
+    set.patterns.explain(name, text)
+}
+
+/// `read`, with how it came about: the survey of all documents, each page as the document's config divides it, and
+/// for every field of the document what each locator tried. With `document`, the pages are read as that document
+/// whether or not it would be picked: on the pages that are its sides, or on all of them when none is.
+pub fn explain(set: &Set, pages: &[Page], language: &str, document: Option<&str>) -> Explained {
+    let survey = select::survey(set, pages);
+    let chosen = match document {
+        None => select::pick(set, pages),
+        Some(id) => set.documents.iter().find(|config| config.id == id).map(|config| {
+            let found = select::sides(config, pages);
+            let side = config.sides.iter().find(|side| side.read).or(config.sides.first());
+            let all = || (0..pages.len()).filter_map(|page| Some((page, side?))).collect();
+            (config, if found.is_empty() { all() } else { found })
+        }),
+    };
+    let Some((config, sides)) = chosen else {
+        return Explained {
+            survey,
+            document: None,
+            forced: false,
+            reading: None,
+            scans: Vec::new(),
+            fields: Vec::new(),
+        };
+    };
+    let reading = read_as(set, config, &sides, pages, language);
+    let scans: Vec<Scan> = pages.iter().map(|page| Scan::new(page, config, &set.patterns)).collect();
+    let fields = config.fields.iter().enumerate().map(|(index, field)| {
+        let tries = sides.iter().filter(|(_, side)| side.read).map(|(page, side)| {
+            let mut tracer = Tracer::on();
+            scans[*page].field_traced(index, field, &mut tracer);
+            PageTry { page: *page, side: side.id.clone(), attempts: tracer.done() }
+        });
+        let read = reading.fields.iter().find(|read| read.key == field.key);
+        FieldTrace {
+            key: field.key.clone(),
+            status: match read.map(|read| read.status) {
+                Some(Status::Ok) => "ok",
+                Some(Status::Unchecked) => "unchecked",
+                Some(Status::Failed) => "failed",
+                None => "not_found",
+            },
+            value: read.map(|read| read.value.clone()),
+            tries: tries.collect(),
+        }
+    });
+    Explained {
+        survey,
+        document: Some(config.id.clone()),
+        forced: document.is_some(),
+        fields: fields.collect(),
+        scans: scans.iter().map(|scan| scan.describe(config)).collect(),
+        reading: Some(reading),
     }
 }
 

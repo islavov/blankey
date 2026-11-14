@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 use super::fold;
 use super::set::Script;
+use super::trace::{CheckTrace, PatternCandidate, RuleTrace, StepTrace};
 use crate::values::{valid_egn, valid_eik, valid_lnch};
 
 static DIGITS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+").unwrap());
@@ -125,45 +126,78 @@ impl Rule {
         }])
     }
 
-    fn extract(&self, text: &str) -> Option<String> {
+    /// The text as the rule looks at it: folded, squeezed, its characters replaced. Each step taken is told.
+    fn prepare(&self, text: &str, mut told: impl FnMut(&'static str, &str)) -> String {
         let mut text = match self.fold {
             Some(Script::Latin) => fold::latin(text).to_uppercase(),
             Some(Script::Cyrillic) => fold::cyrillic(text).to_uppercase(),
             None => text.to_string(),
         };
+        if self.fold.is_some() {
+            told("fold", &text);
+        }
         if self.squeeze {
             text.retain(|c| !c.is_whitespace() && c != '-');
+            told("squeeze", &text);
         }
         if !self.replace.is_empty() {
             text = text.chars().map(|c| self.replace.get(&c).cloned().unwrap_or_else(|| c.to_string())).collect();
+            told("replace", &text);
         }
-        let holds = |value: &String| !value.is_empty() && self.check.iter().all(|check| check.holds(value));
+        text
+    }
+
+    /// What the prepared text holds that could be the value, left to right, each as the value it would be.
+    fn candidates<'t>(&'t self, text: &'t str) -> Box<dyn Iterator<Item = String> + 't> {
         match &self.find {
-            Find::Runs(lengths) => DIGITS
-                .find_iter(&text)
-                .map(|m| m.as_str().to_string())
-                .filter(|run| lengths.contains(&run.len()))
-                .find(holds),
-            Find::Match(regex) => regex
-                .captures_iter(&text)
-                .map(|found| {
-                    let group = |n: usize| {
-                        let part = found.get(n).map_or("", |m| m.as_str());
-                        if self.digits.contains(&n) {
-                            part.chars().map(digit).collect()
-                        } else {
-                            part.to_string()
-                        }
-                    };
-                    match &self.value {
-                        Some(template) => GROUP
-                            .replace_all(template, |c: &regex::Captures| group(c[1].parse().unwrap_or(0)))
-                            .into_owned(),
-                        None => group(0),
+            Find::Runs(lengths) => Box::new(
+                DIGITS.find_iter(text).map(|m| m.as_str().to_string()).filter(|run| lengths.contains(&run.len())),
+            ),
+            Find::Match(regex) => Box::new(regex.captures_iter(text).map(|found| {
+                let group = |n: usize| {
+                    let part = found.get(n).map_or("", |m| m.as_str());
+                    if self.digits.contains(&n) {
+                        part.chars().map(digit).collect()
+                    } else {
+                        part.to_string()
                     }
-                })
-                .find(holds),
+                };
+                match &self.value {
+                    Some(template) => {
+                        GROUP.replace_all(template, |c: &regex::Captures| group(c[1].parse().unwrap_or(0))).into_owned()
+                    }
+                    None => group(0),
+                }
+            })),
         }
+    }
+
+    fn holds(&self, value: &str) -> bool {
+        !value.is_empty() && self.check.iter().all(|check| check.holds(value))
+    }
+
+    fn extract(&self, text: &str) -> Option<String> {
+        let text = self.prepare(text, |_, _| ());
+        let value = self.candidates(&text).find(|value| self.holds(value));
+        value
+    }
+
+    fn explain(&self, text: &str) -> RuleTrace {
+        let mut steps = Vec::new();
+        let text = self.prepare(text, |step, text| steps.push(StepTrace { step, text: text.to_string() }));
+        let candidates: Vec<PatternCandidate> = self
+            .candidates(&text)
+            .map(|value| PatternCandidate {
+                checks: self
+                    .check
+                    .iter()
+                    .map(|check| CheckTrace { check: format!("{check:?}").to_lowercase(), held: check.holds(&value) })
+                    .collect(),
+                value,
+            })
+            .collect();
+        let value = candidates.iter().map(|c| &c.value).find(|value| self.holds(value)).cloned();
+        RuleTrace { steps, candidates, value }
     }
 }
 
@@ -192,6 +226,17 @@ impl Patterns {
 
     pub fn has(&self, name: &str) -> bool {
         self.rules.contains_key(name)
+    }
+
+    pub fn names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.rules.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        names
+    }
+
+    /// The pattern's rules run over the text, each step by step; None when the set has no such pattern.
+    pub fn explain(&self, name: &str, text: &str) -> Option<Vec<RuleTrace>> {
+        Some(self.rules.get(name)?.iter().map(|rule| rule.explain(text)).collect())
     }
 
     /// The first value of the pattern in the text, normalized; None when there is none that holds.
@@ -240,6 +285,14 @@ mod tests {
         assert_eq!(patterns.extract("either", "ref ABC-12").as_deref(), Some("ABC-12"));
         assert_eq!(patterns.extract("card", "ABO1IB").as_deref(), Some("AB0118"), "letters among the digits");
         assert_eq!(patterns.extract("unknown", "ABC"), None);
+        let told = &patterns.explain("serial", "AB-12 O4 7Z").unwrap()[0];
+        let steps: Vec<(&str, &str)> = told.steps.iter().map(|s| (s.step, s.text.as_str())).collect();
+        assert_eq!(steps, [("fold", "AB-12 O4 7Z"), ("squeeze", "AB12O47Z"), ("replace", "AB12047Z")]);
+        assert_eq!(told.value.as_deref(), Some("AB12047Z"));
+        let told = &patterns.explain("egn", "9508010133 7501020018").unwrap()[0];
+        let held: Vec<bool> = told.candidates.iter().map(|c| c.checks[0].held).collect();
+        assert_eq!((held, told.value.as_deref()), (vec![false, true], Some("7501020018")), "each candidate is told");
+        assert!(patterns.explain("unknown", "ABC").is_none());
         assert_eq!(egn("ЕГН7501020018").as_deref(), Some("7501020018"));
     }
 

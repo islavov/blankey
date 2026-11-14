@@ -167,13 +167,15 @@ struct ConfigFile {
     print: Vec<String>,
 }
 
-#[derive(Deserialize)]
+/// The codes several documents print, each with the field it is: a file under `tables/`.
+#[derive(Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
-struct TableFile {
-    id: String,
+pub struct Table {
+    pub id: String,
+    /// what documents of the table print besides their values
     #[serde(default)]
-    print: Vec<String>,
-    codes: Vec<Field>,
+    pub print: Vec<String>,
+    pub codes: Vec<Field>,
 }
 
 #[derive(Deserialize)]
@@ -210,7 +212,7 @@ pub fn canonical(code: &str) -> String {
 }
 
 /// One document of a set, or (its id, why this engine cannot run it).
-fn compile(source: &str, tables: &[TableFile], patterns: &Patterns) -> Result<Config, (String, String)> {
+fn compile(source: &str, tables: &[Table], patterns: &Patterns) -> Result<Config, (String, String)> {
     let file: ConfigFile = serde_yaml::from_str(source).map_err(|e| (String::new(), e.to_string()))?;
     let refuse = |reason: String| (file.id.clone(), reason);
     if !ID.is_match(&file.id) {
@@ -289,6 +291,8 @@ pub struct Set {
     pub ocr: OcrSettings,
     pub patterns: Patterns,
     /// in the order of their paths
+    pub tables: Vec<Table>,
+    /// in the order of their paths
     pub documents: Vec<Config>,
     /// what this engine left out: (a document's id, a pattern's name or a file's path, why)
     pub skipped: Vec<(String, String)>,
@@ -305,9 +309,9 @@ impl Set {
             return Err(format!("The document config set needs engine {}; this is {ENGINE}", file.engine));
         }
         let (patterns, mut skipped) = Patterns::compile(file.patterns);
-        let mut tables: Vec<TableFile> = Vec::new();
+        let mut tables: Vec<Table> = Vec::new();
         for (path, source) in files.iter().filter(|(path, _)| path.starts_with("tables/")) {
-            match serde_yaml::from_str::<TableFile>(source) {
+            match serde_yaml::from_str::<Table>(source) {
                 Ok(table) => tables.push(table),
                 Err(e) => skipped.push((path.clone(), e.to_string())),
             }
@@ -322,7 +326,7 @@ impl Set {
                 Err((id, reason)) => skipped.push((if id.is_empty() { path.clone() } else { id }, reason)),
             }
         }
-        Ok(Set { version: version.to_string(), ocr: file.ocr, patterns, documents, skipped })
+        Ok(Set { version: version.to_string(), ocr: file.ocr, patterns, tables, documents, skipped })
     }
 
     /// The set in a folder laid out as the relay keeps it (`set.yaml`, `tables/`, `documents/`): for the checker
