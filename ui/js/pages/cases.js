@@ -19,18 +19,49 @@ import { openProfileSheet } from "./profiles.js";
 let shown = null;
 // adds dropped files to the open Import sheet
 let importing = null;
+// opens the case that files are held over
+let opener = null;
+const OPEN_AFTER_MS = 2000;
 
-/** Files dropped on the window: into the Import sheet when it is open, else a new import into the open case. */
-export function dropFiles(paths) {
+/** The element under a drag position: Tauri gives physical pixels on Windows, CSS pixels on macOS and Linux. */
+function dragTarget(position) {
+  if (!position) return null;
+  const scale = navigator.userAgent.includes("Windows") ? window.devicePixelRatio || 1 : 1;
+  return document.elementFromPoint(position.x / scale, position.y / scale);
+}
+
+/** Files dragged over the window: the open case lights up under them, and another case opens when they stay on it. */
+export function dragAt(position) {
+  const target = dragTarget(position);
+  const into = !!target?.closest(".case-detail");
+  const over = Number(target?.closest(".case-item")?.dataset.case) || null;
+  const opening = over !== shown?.id ? over : null;
+  if (opening !== state.drag?.opening) {
+    clearTimeout(opener);
+    if (opening) opener = setTimeout(() => update({ caseId: opening, drag: state.drag && { ...state.drag, opening: null } }), OPEN_AFTER_MS);
+  }
+  if (into !== state.drag?.into || opening !== state.drag?.opening) update({ drag: { into, opening } });
+}
+
+/** The dragged files left the window or were dropped. */
+export function dragEnd() {
+  clearTimeout(opener);
+  if (state.drag) update({ drag: null });
+}
+
+/** Files dropped on the window: into the Import sheet when it is open, else, dropped on the open case, a new import into it. */
+export function dropFiles(paths, position) {
+  const target = dragTarget(position);
+  dragEnd();
   if (!paths.length) return;
   if (importing) return importing(paths);
   if (isSheetOpen() || isDialogOpen()) return;
   if (state.page !== "cases" || !shown) return toast(t("Open a case to import files into it"));
-  openImport(shown, paths);
+  if (target?.closest(".case-detail")) openImport(shown, paths);
 }
 
 export function Cases() {
-  const { caseId, dragging } = useStore();
+  const { caseId, drag } = useStore();
   const running = useRunning();
   const cases = useLoad(() => call("list_cases"), []);
   if (!cases) return null;
@@ -85,8 +116,8 @@ export function Cases() {
               <div class="list" data-help="cases.list">
                 ${visible.map(
                   (c) => html`
-                    <div key=${c.id} class=${`list-item case-item ${c.id === current?.id ? "active" : ""} ${running.has(c.id) ? "running" : ""}`} onMouseDown=${keepText}
-                      onClick=${() => update({ caseId: c.id })}>
+                    <div key=${c.id} data-case=${c.id} onMouseDown=${keepText} onClick=${() => update({ caseId: c.id })}
+                      class=${`list-item case-item ${c.id === current?.id ? "active" : ""} ${running.has(c.id) ? "running" : ""} ${drag?.opening === c.id ? "opening" : ""}`}>
                       <div class="title">${c.title}</div>
                       ${running.has(c.id) && html`<${Spinner} />`}
                       ${c.profiles.length > 0 && html`<div class="muted small line">${c.profiles.join(", ")}</div>`}
@@ -95,16 +126,19 @@ export function Cases() {
                 )}
                 ${!visible.length && html`<div class="muted small list-note">${t("No cases match.")}</div>`}
               </div>
-              <div class="detail case-detail">${current && html`<${CaseDetail} key=${current.id} caseId=${current.id} />`}</div>
+              <div class="detail case-detail">
+                ${current && html`<${CaseDetail} key=${current.id} caseId=${current.id} />`}
+                ${drag && current &&
+                html`<div class=${`drop-overlay ${drag.into ? "over" : ""}`}>
+                  <div class="drop-text">${t("Drop the files into “{title}”", { title: current.title })}</div>
+                </div>`}
+              </div>
             </div>`
         : html`<${Empty}>
             ${t("No cases yet. A case keeps one matter together: the people in it, the documents they brought and what you fill in for them.")}
             <div style="margin-top:14px"><button class="primary" onClick=${create}>${t("New case")}</button></div>
           </${Empty}>`}
-      ${dragging &&
-      html`<div class="drop-overlay">
-        <div class="drop-text">${current ? t("Drop the files into “{title}”", { title: current.title }) : t("Make a case first")}</div>
-      </div>`}
+      ${drag && !current && html`<div class="drop-overlay"><div class="drop-text">${t("Make a case first")}</div></div>`}
     </${Page}>`;
 }
 
@@ -191,11 +225,11 @@ function CaseHead({ info }) {
     </div>`;
 }
 
-/** The empty Files tab: where the case's documents are dropped, lit while files are dragged; a click opens Import. */
+/** The empty Files tab: where the case's documents are dropped, lit while files are dragged over the case; a click opens Import. */
 function DropZone({ onImport }) {
-  const { dragging } = useStore();
+  const { drag } = useStore();
   return html`
-    <button class=${`drop-zone ${dragging ? "over" : ""}`} onClick=${onImport}>
+    <button class=${`drop-zone ${drag?.into ? "over" : ""}`} onClick=${onImport}>
       <${Icon} name="upload" />
       <span>${t("No files yet. Drop what the client brought here, such as IDs, deeds and contracts, or use Import…")}</span>
     </button>`;

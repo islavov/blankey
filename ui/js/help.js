@@ -26,7 +26,7 @@ const HELP = {
   "sidebar.settings": () => [t("Settings"), t("Language, updates, this help, the MCP server and Blankey Online.")],
   search: () => [t("Search"), t("Narrows the list on this page as you type. Cleared when you go to another page.")],
 
-  "page.cases": () => [t("Cases"), t("Pick a case on the left. Drop files on the window to import them into it.")],
+  "page.cases": () => [t("Cases"), t("Pick a case on the left. Drop files on it to import them; held over another case, they open it.")],
   "page.activity": () => [t("Activity"), t("Requests from your AI assistant. Double-click one to open it: a waiting one to answer it, a done one to see what it made.")],
   "page.fillsets": () => [t("Fill sets"), t("Click to select, Cmd/Ctrl-click or Shift-click for several. Double-click to open the fill form.")],
   "page.documents": () => [t("Documents"), t("Double-click to open; Cmd/Ctrl-click or Shift-click selects several.")],
@@ -36,7 +36,7 @@ const HELP = {
   "page.settings": () => [t("Settings"), t("How Blankey works on this computer, and Blankey Online for web agents.")],
 
   "cases.new": () => [t("New case"), t("Starts an empty case. Give it a title your AI assistant can find it by.")],
-  "cases.import": () => [t("Import…"), t("Picks files to keep in the open case, encrypted in the vault. Dropping them on the window does the same.")],
+  "cases.import": () => [t("Import…"), t("Picks files to keep in the open case, encrypted in the vault. Dropping them on the case does the same.")],
   "cases.delete": () => [t("Delete case"), t("Deletes the case with its files, fill sets, documents and templates, and the profiles that exist only in it.")],
   "cases.list": () => [t("Cases"), t("Click one to open it. The most recently changed come first.")],
   "case.title": () => [t("Title"), t("What the case is about. Click to change it.")],

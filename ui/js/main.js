@@ -5,7 +5,7 @@ import { chatEvent, resetChat, stopOpenChat } from "./chat.js";
 import { enterApp, Gate, resetQuickUnlock } from "./gate.js";
 import { t } from "./i18n.js";
 import { reload, state, update, useStore } from "./lib.js";
-import { dropFiles } from "./pages/cases.js";
+import { dragAt, dragEnd, dropFiles } from "./pages/cases.js";
 import { processRequests } from "./requests.js";
 import { cancelDialog, closeDialog, isDialogOpen } from "./ui/feedback.js";
 import { hidePopup, isMenuOpen } from "./ui/menu.js";
@@ -94,13 +94,11 @@ listen("cases-changed", () => {
 });
 // a case chat turn streaming in the backend; it goes on whichever case or page is open
 listen("chat-event", ({ payload }) => chatEvent(payload));
-// files dragged from the desktop onto the window: Tauri gives their paths, the open case imports them
-listen("tauri://drag-enter", () => update({ dragging: true }));
-listen("tauri://drag-leave", () => update({ dragging: false }));
-listen("tauri://drag-drop", ({ payload }) => {
-  update({ dragging: false });
-  dropFiles(payload?.paths || []);
-});
+// files dragged from the desktop onto the window: Tauri gives their paths and where the pointer is
+listen("tauri://drag-enter", ({ payload }) => dragAt(payload?.position));
+listen("tauri://drag-over", ({ payload }) => dragAt(payload?.position));
+listen("tauri://drag-leave", () => dragEnd());
+listen("tauri://drag-drop", ({ payload }) => dropFiles(payload?.paths || [], payload?.position));
 
 (async () => {
   const status = await refreshStatus();

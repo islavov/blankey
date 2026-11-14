@@ -40,7 +40,12 @@ before(async () => {
       { id: 3, title: "Sale contract (Oak)", template_id: "oak-sale", filename: "oak-sale.docx", pages: 0, created_at: "2026-11-02T10:00:00", case_id: 1 },
     ],
   });
+  document.elementFromPoint = (x) => spots[x]?.() ?? null;
 });
+
+// happy-dom lays nothing out: a drag position stands for the element the test puts under the pointer
+const spots = [];
+const at = (find) => ({ x: spots.push(find) - 1, y: 0 });
 
 // a row's cells, and the lines inside a cell, joined with spaces
 const cell = (td) => (td.children.length ? [...td.children] : [td]).map((el) => el.textContent.trim()).join(" ");
@@ -57,6 +62,9 @@ const rowMenu = async (part, item) => {
 };
 const tab = (label) => click($$(".case-tabs .chip").find((el) => el.textContent.trim().startsWith(label)));
 const caseItem = (title) => byText(".split.cases .list-item .title", title).parentElement;
+const onCase = at(() => $(".case-tab"));
+const onList = at(() => $(".split.cases .list"));
+const onItem = (title) => at(() => $(".title", caseItem(title)));
 
 test("the app opens on Cases with the most recently changed case and its files", () => {
   assert.equal(text(".toolbar h2"), "Cases");
@@ -97,10 +105,14 @@ test("title and notes are saved when they lose focus; an empty title is put back
 });
 
 test("a drag shows where the files go; the drop opens Import with descriptions from the file names", async () => {
-  backend.emit("tauri://drag-enter", { paths: [], position: { x: 10, y: 10 } });
+  backend.emit("tauri://drag-enter", { paths: [], position: onList });
   await settle();
-  assert.equal(text(".drop-overlay"), "Drop the files into “Sale of the flat, 12 Oak Street”");
-  backend.emit("tauri://drag-drop", { paths: ["/Users/test/paul_id-card.jpg", "/Users/test/power-of-attorney.docx"], position: { x: 10, y: 10 } });
+  assert.equal(text(".case-detail > .drop-overlay"), "Drop the files into “Sale of the flat, 12 Oak Street”");
+  assert.equal($(".drop-overlay.over"), null, "not lit outside the case");
+  backend.emit("tauri://drag-over", { position: onCase });
+  await settle();
+  assert.ok($(".case-detail > .drop-overlay.over"), "lit over the case");
+  backend.emit("tauri://drag-drop", { paths: ["/Users/test/paul_id-card.jpg", "/Users/test/power-of-attorney.docx"], position: onCase });
   await settle();
   assert.equal($(".drop-overlay"), null);
   assert.equal(text(".sheet h2"), "Import into “Sale of the flat, 12 Oak Street”");
@@ -125,6 +137,34 @@ test("a drag shows where the files go; the drop opens Import with descriptions f
   assert.equal(rows().length, 4);
 });
 
+test("files land only on the open case; held over another case, they open it", async () => {
+  backend.emit("tauri://drag-enter", { paths: [], position: onList });
+  backend.emit("tauri://drag-drop", { paths: ["/Users/test/deed.pdf"], position: onList });
+  await settle();
+  assert.equal($(".sheet"), null, "a drop beside the case is ignored");
+  assert.equal($(".drop-overlay"), null);
+
+  backend.emit("tauri://drag-enter", { paths: [], position: onItem("Sale of the flat, 12 Oak Street") });
+  await settle();
+  assert.equal($(".case-item.opening"), null, "the open case does not open again");
+  backend.emit("tauri://drag-over", { position: onItem("Lease, Main Road") });
+  await settle();
+  assert.ok(caseItem("Lease, Main Road").classList.contains("opening"), "the case shows that it is about to open");
+  assert.equal($(".case-title").value, "Sale of the flat, 12 Oak Street");
+  await settle(2000);
+  assert.equal($(".case-title").value, "Lease, Main Road");
+  assert.ok(caseItem("Lease, Main Road").classList.contains("active"));
+  assert.equal($(".case-item.opening"), null);
+  assert.equal(text(".case-detail > .drop-overlay"), "Drop the files into “Lease, Main Road”");
+
+  backend.emit("tauri://drag-over", { position: onCase });
+  backend.emit("tauri://drag-drop", { paths: ["/Users/test/deed.pdf"], position: onCase });
+  await settle();
+  assert.equal(text(".sheet h2"), "Import into “Lease, Main Road”");
+  await click(byText(".sheet-foot button", "Cancel"));
+  await click(caseItem("Sale of the flat, 12 Oak Street"));
+});
+
 test("Import… picks files; a drop while a dialog is open is ignored", async () => {
   backend.db.pickPaths = ["/Users/test/car-registration.pdf"];
   await action("Import…");
@@ -140,7 +180,7 @@ test("Import… picks files; a drop while a dialog is open is ignored", async ()
 });
 
 test("Escape closes what is on top: the dialog first, then the sheet", async () => {
-  backend.emit("tauri://drag-drop", { paths: ["/Users/test/deed.pdf"] });
+  backend.emit("tauri://drag-drop", { paths: ["/Users/test/deed.pdf"], position: onCase });
   await settle();
   assert.ok($(".sheet"));
   await key("Escape", $(".import-row input"));
@@ -361,9 +401,12 @@ test("a new case opens ready for files", async () => {
   assert.equal($(".case-title").value, "Power of attorney, car");
   assert.equal(text(".case-tab .empty"), "No files yet. Drop what the client brought here, such as IDs, deeds and contracts, or use Import…");
   assert.ok($(".case-tab .drop-zone svg"), "the empty tab is a drop zone");
-  backend.emit("tauri://drag-enter", { paths: [], position: { x: 10, y: 10 } });
+  backend.emit("tauri://drag-enter", { paths: [], position: onList });
   await settle();
-  assert.ok($(".drop-zone.over"), "lit while files are dragged");
+  assert.equal($(".drop-zone.over"), null);
+  backend.emit("tauri://drag-over", { position: onCase });
+  await settle();
+  assert.ok($(".drop-zone.over"), "lit while files are dragged over the case");
   backend.emit("tauri://drag-leave");
   await settle();
   assert.equal($(".drop-zone.over"), null);
@@ -394,7 +437,7 @@ test("importing an old Word file asks before it converts it; Cancel goes back to
 
 test("where it cannot be converted, importing an old Word file says the assistant cannot read it, and how to fix that", async () => {
   backend.db.convertsDoc = false;
-  backend.emit("tauri://drag-drop", { paths: ["/Users/test/old-contract.doc"] });
+  backend.emit("tauri://drag-drop", { paths: ["/Users/test/old-contract.doc"], position: onCase });
   await settle();
   assert.ok($$(".import-row .import-name").some((el) => el.textContent === "old-contract.doc"));
   await click($(".sheet-foot button.primary"));
