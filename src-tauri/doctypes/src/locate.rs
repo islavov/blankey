@@ -434,7 +434,7 @@ fn shape(field: &Field, raw: &str, rect: [f64; 4], patterns: &Patterns) -> Found
     match field.field_type.as_str() {
         "date" => {
             let date = DATE.captures(raw).map(|c| format!("{}.{}.{}", &c[1], &c[2], &c[3]));
-            found(date.filter(|date| crate::fieldtypes::parse_date(date).is_some()))
+            found(date.filter(|date| crate::values::parse_date(date).is_some()))
         }
         "number" => found(NUMBER.find(raw).map(|m| m.as_str().to_string())),
         "egn" => found(patterns::egn(raw)),

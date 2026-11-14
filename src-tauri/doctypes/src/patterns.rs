@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use super::fold;
 use super::set::Script;
-use crate::pii::{valid_egn, valid_eik, valid_lnch};
+use crate::values::{valid_egn, valid_eik, valid_lnch};
 
 static DIGITS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+").unwrap());
 static GROUP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$(\d)").unwrap());

@@ -2,6 +2,7 @@ use super::document::{self, Document};
 use super::types::Block;
 use super::validate::*;
 use super::*;
+use crate::doctypes::values::egn_birth_date;
 
 const EGN: &str = "8503151235";
 const LNCH: &str = "1001001001";

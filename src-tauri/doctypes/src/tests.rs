@@ -5,19 +5,6 @@ use std::collections::BTreeMap;
 
 use super::*;
 
-/// The example set as the relay would serve one: path -> YAML.
-pub fn example_set_files() -> BTreeMap<String, String> {
-    [
-        ("set.yaml", include_str!("testdata/example/set.yaml")),
-        ("tables/example_codes.yaml", include_str!("testdata/example/tables/example_codes.yaml")),
-        ("documents/example_member_card.yaml", include_str!("testdata/example/documents/example_member_card.yaml")),
-        ("documents/example_permit.yaml", include_str!("testdata/example/documents/example_permit.yaml")),
-    ]
-    .into_iter()
-    .map(|(path, text)| (path.to_string(), text.to_string()))
-    .collect()
-}
-
 fn example() -> Set {
     Set::parse("test", &example_set_files()).unwrap()
 }

@@ -238,7 +238,7 @@ fn compile(source: &str, tables: &[TableFile], patterns: &Patterns) -> Result<Co
             Some("is not a field key")
         } else if fields[..at].iter().any(|f| f.key == field.key) {
             Some("is there twice")
-        } else if !crate::fieldtypes::is_type(&field.field_type) {
+        } else if !crate::values::is_type(&field.field_type) {
             Some("has an unknown type")
         } else if field.pattern.as_ref().is_some_and(|pattern| !patterns.has(pattern)) {
             Some("names a pattern this engine does not have")

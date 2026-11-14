@@ -12,11 +12,24 @@ pub mod ocr;
 mod patterns;
 mod select;
 mod set;
+pub mod values;
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-pub(crate) use tests::example_set_files;
+
+/// The invented config set the engine's tests run on, as the relay would serve one: path -> YAML.
+#[cfg(any(test, feature = "example"))]
+pub fn example_set_files() -> std::collections::BTreeMap<String, String> {
+    [
+        ("set.yaml", include_str!("testdata/example/set.yaml")),
+        ("tables/example_codes.yaml", include_str!("testdata/example/tables/example_codes.yaml")),
+        ("documents/example_member_card.yaml", include_str!("testdata/example/documents/example_member_card.yaml")),
+        ("documents/example_permit.yaml", include_str!("testdata/example/documents/example_permit.yaml")),
+    ]
+    .into_iter()
+    .map(|(path, text)| (path.to_string(), text.to_string()))
+    .collect()
+}
 
 use serde::{Deserialize, Serialize};
 
@@ -163,7 +176,7 @@ fn apply(check: &Check, fields: &mut [FieldRead]) {
     let value =
         |key: &String| fields.iter().find(|f| &f.key == key && f.status != Status::Failed).map(|f| f.value.clone());
     let (Some(number), Some(printed)) = (value(egn), value(date)) else { return };
-    let born = crate::pii::egn_birth_date(&number).map(|d| d.format("%d.%m.%Y").to_string());
+    let born = crate::values::egn_birth_date(&number).map(|d| d.format("%d.%m.%Y").to_string());
     if born.as_deref() != Some(printed.as_str()) {
         fields.iter_mut().filter(|f| &f.key == egn || &f.key == date).for_each(|f| f.status = Status::Failed);
     }
