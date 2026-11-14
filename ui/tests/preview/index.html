@@ -44,7 +44,10 @@
       e.preventDefault();
       if (depth++ === 0) backend.emit("tauri://drag-enter", { paths: [], position: position(e) });
     });
-    window.addEventListener("dragover", (e) => e.preventDefault());
+    window.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      backend.emit("tauri://drag-over", { position: position(e) });
+    });
     window.addEventListener("dragleave", () => {
       if (--depth === 0) backend.emit("tauri://drag-leave", null);
     });

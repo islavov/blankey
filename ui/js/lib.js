@@ -59,7 +59,8 @@ export const Icon = ({ name }) => html`<svg viewBox="0 0 16 16" dangerouslySetIn
 
 // -- app-wide state ------------------------------------------------------------------------
 // Only what crosses components: the rest lives in component state. caseId and caseTab: the case open on the Cases
-// page and its tab, null for the default one; dragging: files are being dragged over the window.
+// page and its tab, null for the default one; drag: files dragged over the window, { into: over the open case,
+// opening: the case they are held over }, else null.
 
 export const state = {
   status: null,
@@ -67,7 +68,7 @@ export const state = {
   page: "cases",
   caseId: null,
   caseTab: null,
-  dragging: false,
+  drag: null,
   search: "",
   gateReason: "",
   recoveryKey: null,

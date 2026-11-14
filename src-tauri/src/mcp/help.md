@@ -21,8 +21,9 @@ client brought, and the templates, fill sets and documents made for it.
 - Tabs of a case: AI assistant (on accounts that have it), Files, Profiles, Templates, Fill sets, Documents, Activity.
 - Files are the originals the case starts from: what the client brought and what the user imports. Documents are the
   results: what Blankey filled in from a template.
-- Add files: drop them on the window while the case is open, or Files → Import…. Give each a description (what it is
-  and whose); the assistant finds files by that description and never sees the file name.
+- Add files: drop them on the open case, or Files → Import…. Files held over another case in the list for two
+  seconds open it. Give each a description (what it is and whose); the assistant finds files by that description and
+  never sees the file name.
 - A file's ⋮ menu: Open (shown inside Blankey), Export… (a copy outside the vault), Rename…, Description…, Personal
   data… (what is hidden from the assistant in a PDF or Word file), Delete.
 - Copy link, at the top of a case, copies blankey://case/<id>. Pasted to an assistant outside Blankey, it tells that
