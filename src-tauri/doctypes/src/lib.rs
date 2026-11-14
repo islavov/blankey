@@ -35,9 +35,10 @@ pub fn example_set_files() -> std::collections::BTreeMap<String, String> {
 use serde::{Deserialize, Serialize};
 
 use locate::Scan;
+pub use patterns::Patterns;
 use set::Check;
-pub use set::{Config, Field, Match, Set, Side, Table, Text, ENGINE};
-use trace::{Explained, FieldTrace, PageTry, RuleTrace, Survey, Tracer};
+pub use set::{canonical, Config, Field, Match, Script, Set, Side, Table, Text, ENGINE};
+use trace::{Explained, FieldTrace, PageTry, RuleTrace, ScanTrace, Survey, Tracer, ZoneFound, ZoneTrace};
 
 /// One line of text on a page.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -175,6 +176,31 @@ fn read_as(set: &Set, config: &Config, sides: &[(usize, &Side)], pages: &[Page],
 /// Every document of the set against the pages: what each side asked of each page and got, and which was picked.
 pub fn survey(set: &Set, pages: &[Page]) -> Survey {
     select::survey(set, pages)
+}
+
+/// Whether a line of the page says the phrase, as a side's `match` hears it: letters only, a few misread.
+pub fn says(page: &Page, phrase: &str) -> bool {
+    let needle = fold::skeleton(phrase);
+    !needle.is_empty()
+        && page
+            .lines
+            .iter()
+            .any(|l| fold::find(&fold::skeleton(&l.text), &needle, locate::slack(needle.len())).is_some())
+}
+
+/// The machine-readable zone of the page, when it has one.
+pub fn zone(page: &Page) -> Option<ZoneFound> {
+    let zone = mrz::find(&page.lines)?;
+    let parts =
+        zone.parts.iter().map(|p| ZoneTrace { name: p.name.to_string(), value: p.value.clone(), checked: p.checked });
+    Some(ZoneFound { state: zone.state.clone(), lines: zone.lines.clone(), parts: parts.collect() })
+}
+
+/// The page as a table of the set divides it: the codes of the table printed on it and the values beside them. None
+/// when the set has no such table.
+pub fn table_scan(set: &Set, table: &str, page: &Page) -> Option<ScanTrace> {
+    let config = Config::of_table(set.tables.iter().find(|t| t.id == table)?);
+    Some(Scan::new(page, &config, &set.patterns).describe(&config))
 }
 
 /// A pattern of the set run over a text, step by step; None when the set has no such pattern.

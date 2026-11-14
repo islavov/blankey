@@ -16,8 +16,8 @@ Built with Rust and Tauri.
 scripts/fetch-pdfium.sh          # once: PDFium for page rendering and text extraction
 cd src-tauri
 cargo run                        # debug builds use ~/Library/Application Support/Blankey Preview
-cargo test
-cargo fmt && cargo clippy --all-targets
+cargo test --workspace           # the app, the known-documents engine (doctypes/) and docset
+cargo fmt --all && cargo clippy --workspace --all-targets
 cd .. && npm install && npm test # UI tests (Node, happy-dom), no build step
 ```
 

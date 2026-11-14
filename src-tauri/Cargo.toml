@@ -7,7 +7,7 @@ edition = "2021"
 default-run = "blankey"
 
 [workspace]
-members = [".", "doctypes"]
+members = [".", "doctypes", "docset"]
 
 [lib]
 name = "blankey_lib"

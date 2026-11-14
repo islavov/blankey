@@ -1,17 +1,10 @@
-//! Checks a document config set against its test cases, with this app's engine: what the relay's set is run through
-//! before it is deployed.
-//!
-//!     cargo run --example check_doc_configs -- [--show] <set folder>
-//!
-//! The folder holds `set.yaml`, `tables/`, `documents/` and `tests/`: `tests/lines/<page>[.<model>].json` are the
-//! text lines of a page, `tests/cases/*.yaml` what pages must read as. It fails when the set does not parse whole,
-//! when a document has no case, and when a case reads as anything but what it expects, picked among all the
-//! documents of the set. Capitals and digits of what was read print as dots unless `--show` is given.
+//! The test cases of a document config set: `tests/cases/*.yaml` say what pages must read as, the pages being
+//! `tests/lines/<page>[.<model>].json` or lines written in the case itself.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use blankey_lib::doctypes::{self, Line, Page, Reading, Set, Status};
+use blankey_doctypes::{self as doctypes, Line, Page, Reading, Set, Status};
 use serde::Deserialize;
 
 fn english() -> String {
@@ -20,45 +13,45 @@ fn english() -> String {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Case {
-    name: String,
+pub struct Case {
+    pub name: String,
     /// the case runs once per model: its pages are `lines/<page>.<model>.json`
     #[serde(default)]
-    models: Vec<String>,
+    pub models: Vec<String>,
     #[serde(default = "english")]
-    language: String,
-    pages: Vec<PageSpec>,
-    expect: Expect,
+    pub language: String,
+    pub pages: Vec<PageSpec>,
+    pub expect: Expect,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PageSpec {
+pub struct PageSpec {
     /// a file under `tests/lines/`, without the model and `.json`
     #[serde(default)]
-    lines: Option<String>,
+    pub lines: Option<String>,
     /// instead: lines of text, one under another
     #[serde(default)]
-    text: Vec<String>,
+    pub text: Vec<String>,
     /// text swapped in every line
     #[serde(default)]
-    replace: BTreeMap<String, String>,
+    pub replace: BTreeMap<String, String>,
     /// a value printed to the right of the line that starts with the key
     #[serde(default)]
-    beside: BTreeMap<String, String>,
+    pub beside: BTreeMap<String, String>,
     #[serde(default)]
-    add: Vec<Added>,
+    pub add: Vec<Added>,
 }
 
 #[derive(Deserialize)]
-struct Added {
-    text: String,
-    rect: [f64; 4],
+pub struct Added {
+    pub text: String,
+    pub rect: [f64; 4],
 }
 
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum Expect {
+pub enum Expect {
     /// `none`: no document of the set
     Nothing(String),
     Reading(Box<Expected>),
@@ -66,53 +59,66 @@ enum Expect {
 
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-struct Expected {
-    doctype: String,
+pub struct Expected {
+    pub doctype: String,
     #[serde(default)]
-    sides: Option<Vec<String>>,
+    pub sides: Option<Vec<String>>,
     #[serde(default)]
-    kind: Option<String>,
+    pub kind: Option<String>,
     #[serde(default)]
-    family: Option<String>,
+    pub family: Option<String>,
     #[serde(default)]
-    name: Option<String>,
+    pub name: Option<String>,
     #[serde(default)]
-    number: Option<String>,
+    pub number: Option<String>,
     #[serde(default)]
-    no_number: bool,
+    pub no_number: bool,
     /// key -> value, with the status the map is named for
     #[serde(default)]
-    ok: BTreeMap<String, String>,
+    pub ok: BTreeMap<String, String>,
     #[serde(default)]
-    unchecked: BTreeMap<String, String>,
+    pub unchecked: BTreeMap<String, String>,
     #[serde(default)]
-    failed: BTreeMap<String, String>,
+    pub failed: BTreeMap<String, String>,
     /// key -> a part of its value
     #[serde(default)]
-    contains: BTreeMap<String, String>,
+    pub contains: BTreeMap<String, String>,
     /// key -> its label
     #[serde(default)]
-    labels: BTreeMap<String, String>,
+    pub labels: BTreeMap<String, String>,
     /// keys that must not be read
     #[serde(default)]
-    absent: Vec<String>,
+    pub absent: Vec<String>,
     /// no field at all
     #[serde(default)]
-    empty: bool,
+    pub empty: bool,
 }
 
-fn build(dir: &Path, spec: &PageSpec, model: Option<&str>) -> Result<Page, String> {
-    let mut page = match &spec.lines {
-        Some(name) => {
-            let file = match model {
-                Some(model) => format!("{name}.{model}.json"),
-                None => format!("{name}.json"),
-            };
-            let path = dir.join("tests/lines").join(file);
-            let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            serde_json::from_str::<Page>(&text).map_err(|e| format!("{}: {e}", path.display()))?
+/// Pages read anew from the pictures, to run the cases on in place of the lines kept: by page name, as one model
+/// read them.
+pub struct Fresh {
+    pub model: String,
+    pub pages: HashMap<String, Page>,
+}
+
+/// The lines kept for a page: `tests/lines/<name>.<model>.json`, or `<name>.json` when no model is named.
+pub fn kept_lines(dir: &Path, name: &str, model: Option<&str>) -> Result<Page, String> {
+    let file = match model {
+        Some(model) => format!("{name}.{model}.json"),
+        None => format!("{name}.json"),
+    };
+    let path = dir.join("tests/lines").join(file);
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    serde_json::from_str::<Page>(&text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn build(dir: &Path, spec: &PageSpec, model: Option<&str>, fresh: Option<&Fresh>) -> Result<Page, String> {
+    let mut page = match (&spec.lines, fresh) {
+        (Some(name), Some(fresh)) => {
+            fresh.pages.get(name).cloned().ok_or(format!("no picture tests/images/{name}.* to read anew"))?
         }
-        None => Page { width: 595.0, height: 842.0, lines: Vec::new(), turned: 0, skew: 0.0 },
+        (Some(name), None) => kept_lines(dir, name, model)?,
+        (None, _) => Page { width: 595.0, height: 842.0, lines: Vec::new(), turned: 0, skew: 0.0 },
     };
     for (at, text) in spec.text.iter().enumerate() {
         let y = 60.0 + 30.0 * at as f64;
@@ -203,69 +209,75 @@ fn compare(reading: &Reading, wanted: &Expected, masked: &dyn Fn(&str) -> String
     wrong
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let show = args.iter().any(|a| a == "--show");
-    let Some(dir) = args.iter().find(|a| !a.starts_with("--")).map(Path::new) else {
-        eprintln!("usage: check_doc_configs [--show] <set folder>");
-        std::process::exit(2);
-    };
-    let masked = move |text: &str| -> String {
-        if show {
-            return text.to_string();
-        }
-        text.chars().map(|c| if c.is_uppercase() || c.is_ascii_digit() { '•' } else { c }).collect()
-    };
-    let mut failures = 0;
-    let mut fail = |message: String| {
-        println!("FAIL  {message}");
-        failures += 1;
-    };
-    let set = match Set::from_dir(dir) {
-        Ok(set) => set,
-        Err(e) => {
-            println!("FAIL  {e}");
-            std::process::exit(1);
-        }
-    };
-    for (name, why) in &set.skipped {
-        fail(format!("{name} is left out: {why}"));
-    }
-    let mut tested: Vec<String> = Vec::new();
-    let mut cases = 0;
+/// One case as one model's lines read, or a thing about the set itself, with what is wrong with it.
+#[derive(serde::Serialize)]
+pub struct Outcome {
+    pub title: String,
+    pub wrong: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct Report {
+    pub documents: usize,
+    pub cases: usize,
+    pub failures: usize,
+    pub outcomes: Vec<Outcome>,
+}
+
+/// The case files of the set, by file name, in name order: (file, its cases or why it does not parse).
+pub fn load(dir: &Path) -> Vec<(String, Result<Vec<Case>, String>)> {
     let mut files: Vec<_> =
         std::fs::read_dir(dir.join("tests/cases")).into_iter().flatten().flatten().map(|e| e.path()).collect();
     files.sort();
-    for path in files.iter().filter(|p| p.extension().is_some_and(|e| e == "yaml")) {
-        let file = path.file_name().unwrap().to_string_lossy().to_string();
+    let yaml = files.iter().filter(|p| p.extension().is_some_and(|e| e == "yaml"));
+    yaml.map(|path| {
+        let file = path.file_name().unwrap_or_default().to_string_lossy().to_string();
         let parsed = std::fs::read_to_string(path)
             .map_err(|e| e.to_string())
             .and_then(|t| serde_yaml::from_str::<Vec<Case>>(&t).map_err(|e| e.to_string()));
+        (file, parsed)
+    })
+    .collect()
+}
+
+/// Runs every case of the set. It fails when the set leaves something out, when a document has no case, and when a
+/// case reads as anything but what it expects, picked among all the documents of the set. With `fresh`, the cases
+/// run on those pages and only for their model; documents left without a case are then not counted.
+pub fn run(dir: &Path, set: &Set, masked: &dyn Fn(&str) -> String, fresh: Option<&Fresh>) -> Report {
+    let mut outcomes: Vec<Outcome> = Vec::new();
+    for (name, why) in &set.skipped {
+        outcomes.push(Outcome { title: format!("{name} is left out"), wrong: vec![why.clone()] });
+    }
+    let mut tested: Vec<String> = Vec::new();
+    let mut cases = 0;
+    for (file, parsed) in load(dir) {
         let list = match parsed {
             Ok(list) => list,
             Err(e) => {
-                fail(format!("{file}: {e}"));
+                outcomes.push(Outcome { title: file, wrong: vec![e] });
                 continue;
             }
         };
         for case in list {
-            let models: Vec<Option<&str>> = if case.models.is_empty() {
-                vec![None]
-            } else {
-                case.models.iter().map(|m| Some(m.as_str())).collect()
+            let models: Vec<Option<&str>> = match fresh {
+                Some(fresh) if case.models.is_empty() || case.models.contains(&fresh.model) => vec![Some(&fresh.model)],
+                Some(_) => Vec::new(),
+                None if case.models.is_empty() => vec![None],
+                None => case.models.iter().map(|m| Some(m.as_str())).collect(),
             };
             for model in models {
                 cases += 1;
                 let title = format!("{file}: {}{}", case.name, model.map(|m| format!(" [{m}]")).unwrap_or_default());
-                let pages: Result<Vec<Page>, String> = case.pages.iter().map(|spec| build(dir, spec, model)).collect();
+                let pages: Result<Vec<Page>, String> =
+                    case.pages.iter().map(|spec| build(dir, spec, model, fresh)).collect();
                 let pages = match pages {
                     Ok(pages) => pages,
                     Err(e) => {
-                        fail(format!("{title}: {e}"));
+                        outcomes.push(Outcome { title, wrong: vec![e] });
                         continue;
                     }
                 };
-                let reading = doctypes::read(&set, &pages, &case.language);
+                let reading = doctypes::read(set, &pages, &case.language);
                 let wrong = match (&case.expect, &reading) {
                     (Expect::Nothing(word), None) if word == "none" => Vec::new(),
                     (Expect::Nothing(word), None) => vec![format!("expect: {word}?")],
@@ -275,22 +287,18 @@ fn main() {
                     (Expect::Reading(wanted), None) => vec![format!("expected {}, not recognized", wanted.doctype)],
                     (Expect::Reading(wanted), Some(reading)) => {
                         tested.push(wanted.doctype.clone());
-                        compare(reading, wanted, &masked)
+                        compare(reading, wanted, masked)
                     }
                 };
-                if wrong.is_empty() {
-                    println!("ok    {title}");
-                } else {
-                    fail(format!("{title}\n        {}", wrong.join("\n        ")));
-                }
+                outcomes.push(Outcome { title, wrong });
             }
         }
     }
-    for document in set.documents.iter().filter(|d| !tested.contains(&d.id)) {
-        fail(format!("{} has no test case", document.id));
+    if fresh.is_none() {
+        for document in set.documents.iter().filter(|d| !tested.contains(&d.id)) {
+            outcomes.push(Outcome { title: format!("{} has no test case", document.id), wrong: vec![String::new()] });
+        }
     }
-    println!("\n{} documents, {cases} cases, {failures} failed", set.documents.len());
-    if failures > 0 {
-        std::process::exit(1);
-    }
+    let failures = outcomes.iter().filter(|o| !o.wrong.is_empty()).count();
+    Report { documents: set.documents.len(), cases, failures, outcomes }
 }

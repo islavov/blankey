@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>docset view</title>
+<style>
+  :root { --ok: #2e9d5b; --unchecked: #d99a1c; --failed: #d1453b; --label: #3b7dd8; --line: #8a8f98; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.45 system-ui, sans-serif; color: #1d2026; background: #f3f4f6; display: flex; height: 100vh; }
+  #pages { flex: 1 1 58%; overflow: auto; padding: 12px; }
+  #panel { flex: 1 1 42%; max-width: 640px; overflow: auto; padding: 12px 16px; background: #fff; border-left: 1px solid #d9dce1; }
+  .page { position: relative; margin: 0 0 16px; background: #fff; border: 1px solid #d9dce1; }
+  .page h2 { margin: 0; padding: 4px 8px; font-size: 12px; font-weight: 600; background: #eceef1; }
+  .sheet { position: relative; }
+  .sheet img { display: block; width: 100%; }
+  .sheet svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .sheet.blank svg { position: static; display: block; background: #fff; }
+  rect.line { fill: transparent; stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: .55; }
+  rect.line.unsure { stroke-dasharray: 3 3; }
+  rect.line.label, rect.line.code { stroke: var(--label); opacity: .9; }
+  rect.line.zone { stroke: #7a5cc7; opacity: .9; }
+  rect.line:hover { fill: rgba(59, 125, 216, .15); opacity: 1; }
+  rect.place { stroke-width: 2; vector-effect: non-scaling-stroke; fill-opacity: .18; pointer-events: none; }
+  rect.place.ok { stroke: var(--ok); fill: var(--ok); }
+  rect.place.unchecked { stroke: var(--unchecked); fill: var(--unchecked); }
+  rect.place.failed { stroke: var(--failed); fill: var(--failed); }
+  rect.lit { stroke: #111; stroke-width: 3; vector-effect: non-scaling-stroke; fill: rgba(255, 221, 0, .35); pointer-events: none; }
+  text.words { fill: #1d2026; pointer-events: none; }
+  h1 { font-size: 16px; margin: 0 0 2px; }
+  h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #5b6170; margin: 18px 0 6px; }
+  .sub { color: #5b6170; }
+  .row { display: flex; gap: 8px; padding: 3px 6px; border-radius: 4px; cursor: pointer; align-items: baseline; }
+  .row:hover { background: #f0f2f5; }
+  .row.open { background: #e8eefb; }
+  .key { flex: 0 0 190px; font-family: ui-monospace, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+  .badge { flex: 0 0 76px; font-size: 11px; font-weight: 600; }
+  .badge.ok { color: var(--ok); } .badge.unchecked { color: var(--unchecked); }
+  .badge.failed { color: var(--failed); } .badge.not_found { color: #8a8f98; }
+  .value { flex: 1; word-break: break-word; }
+  .detail { margin: 2px 0 8px 14px; padding: 6px 8px; border-left: 2px solid #d9dce1; font-size: 12px; display: none; }
+  .open + .detail { display: block; }
+  .detail code { font-size: 11.5px; background: #f0f2f5; padding: 0 3px; border-radius: 3px; }
+  .yes { color: var(--ok); } .no { color: var(--failed); }
+  #hover { position: fixed; left: 12px; bottom: 10px; max-width: 56%; padding: 4px 8px; background: rgba(29, 32, 38, .92); color: #fff; border-radius: 4px; font-size: 12px; display: none; }
+  .legend span { display: inline-block; margin-right: 10px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border: 2px solid; vertical-align: -1px; }
+  .error { color: var(--failed); white-space: pre-wrap; font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<div id="pages"></div>
+<div id="panel"></div>
+<div id="hover"></div>
+<script id="data" type="application/json">/*DATA*/</script>
+<script>
+const data = JSON.parse(document.getElementById('data').textContent);
+const SVG = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs = {}, text) => {
+  const node = tag === 'svg' || tag === 'rect' || tag === 'text' || tag === 'g'
+    ? document.createElementNS(SVG, tag) : document.createElement(tag);
+  for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, value);
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
+const box = (rect, cls) => el('rect', { x: rect[0], y: rect[1], width: rect[2] - rect[0], height: rect[3] - rect[1], class: cls });
+const hover = document.getElementById('hover');
+const overlays = [];
+
+function drawPages() {
+  const pages = document.getElementById('pages');
+  const told = data.explained;
+  data.pages.forEach((page, at) => {
+    const wrap = el('div', { class: 'page' });
+    wrap.append(el('h2', {}, `page ${at}: ${page.name}` + (page.image ? '' : ' (lines only, no picture kept)')));
+    const sheet = el('div', { class: 'sheet' + (page.image ? '' : ' blank') });
+    if (page.image) sheet.append(el('img', { src: page.image, alt: '' }));
+    const svg = el('svg', { viewBox: `0 0 ${page.width} ${page.height}`, preserveAspectRatio: 'none' });
+    const scan = told && told.scans[at];
+    const lines = scan ? scan.lines : page.lines.map((line, index) => ({ ...line, index, role: 'value', labels: [] }));
+    for (const line of lines) {
+      const role = line.labels.length ? 'label' : line.role;
+      const rect = box(line.rect, `line ${role}` + (line.confidence < 0.6 ? ' unsure' : ''));
+      rect.dataset.line = line.index;
+      const labels = line.labels.map(l => l.field).join(', ');
+      const about = `line ${line.index} · ${role}${line.code ? ' ' + line.code : ''}${labels ? ' of ' + labels : ''} · ` +
+        `${line.confidence.toFixed(2)} · ${line.text}`;
+      rect.addEventListener('mouseenter', () => { hover.textContent = about; hover.style.display = 'block'; });
+      rect.addEventListener('mouseleave', () => { hover.style.display = 'none'; });
+      svg.append(rect);
+      if (!page.image) {
+        const size = Math.max(6, (line.rect[3] - line.rect[1]) * 0.7);
+        svg.append(el('text', { x: line.rect[0] + 1, y: line.rect[3] - (line.rect[3] - line.rect[1]) * 0.25, 'font-size': size, class: 'words' }, line.text));
+      }
+    }
+    for (const field of (told && told.reading ? told.reading.fields : [])) {
+      if (field.place && field.place[0] === at) svg.append(box(field.place[1], `place ${field.status}`));
+    }
+    const lit = el('g');
+    svg.append(lit);
+    overlays[at] = { svg, lit };
+    sheet.append(svg);
+    wrap.append(sheet);
+    pages.append(wrap);
+  });
+}
+
+function light(field) {
+  overlays.forEach(o => o.lit.replaceChildren());
+  if (!field) return;
+  const read = data.explained.reading && data.explained.reading.fields.find(f => f.key === field.key);
+  if (read && read.place) overlays[read.place[0]].lit.append(box(read.place[1], 'lit'));
+  for (const tried of field.tries) {
+    for (const attempt of tried.attempts) {
+      if (attempt.anchor !== null) {
+        const line = data.explained.scans[tried.page].lines[attempt.anchor];
+        if (line) overlays[tried.page].lit.append(box(line.rect, 'lit'));
+      }
+      for (const candidate of attempt.candidates) {
+        if (candidate.rect) overlays[tried.page].lit.append(box(candidate.rect, 'lit'));
+      }
+    }
+  }
+  const first = overlays.find(o => o.lit.firstChild);
+  if (first) first.lit.firstChild.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function drawPanel() {
+  const panel = document.getElementById('panel');
+  if (data.error) {
+    panel.append(el('h1', {}, 'The set does not load'), el('div', { class: 'error' }, data.error));
+    return;
+  }
+  const told = data.explained;
+  const reading = told.reading;
+  panel.append(el('h1', {}, told.document || 'Not a known document'));
+  panel.append(el('div', { class: 'sub' }, reading
+    ? `${told.forced ? 'asked for, not picked · ' : ''}sides ${reading.sides.join(', ')} · ` +
+      `number ${reading.number || 'not read'} · ${reading.name}`
+    : 'no side of any document holds on any page'));
+  const legend = el('div', { class: 'legend sub' });
+  for (const [name, color] of [['ok', 'var(--ok)'], ['unchecked', 'var(--unchecked)'], ['failed', 'var(--failed)'], ['label or code', 'var(--label)'], ['line', 'var(--line)']]) {
+    const item = el('span');
+    const swatch = el('i');
+    swatch.style.borderColor = color;
+    item.append(swatch, name);
+    legend.append(item);
+  }
+  panel.append(legend);
+
+  panel.append(el('h3', {}, 'Selection'));
+  for (const doc of told.survey.documents) {
+    const row = el('div', { class: 'row' });
+    const score = doc.score ? `${doc.score[0]} pages · priority ${doc.score[1]} · ${doc.score[2]} asked` : 'no side on any page';
+    row.append(el('span', { class: 'key' }, doc.id), el('span', { class: 'badge ' + (doc.picked ? 'ok' : 'not_found') }, doc.picked ? 'picked' : (doc.score ? 'could be' : '-')), el('span', { class: 'value sub' }, score));
+    const detail = el('div', { class: 'detail' });
+    for (const side of doc.sides) {
+      const line = el('div');
+      line.append(el('b', {}, `page ${side.page} · ${side.side}: `), el('span', { class: side.holds ? 'yes' : 'no' }, side.holds ? 'holds' : 'does not hold'));
+      for (const c of side.conditions) {
+        const item = el('div');
+        item.append(el('code', {}, `${c.kind} ${c.wanted}`), ' ', el('span', { class: c.held ? 'yes' : 'no' }, c.held ? 'yes' : 'no'), c.seen ? ` (${c.seen})` : '');
+        line.append(item);
+      }
+      detail.append(line);
+    }
+    row.addEventListener('click', () => row.classList.toggle('open'));
+    panel.append(row, detail);
+  }
+  told.survey.pages.forEach((page, at) => {
+    const codes = Object.entries(page.codes).filter(([, codes]) => codes.length).map(([table, codes]) => `${table}: ${codes.join(' ')}`);
+    panel.append(el('div', { class: 'sub' }, `page ${at}: zone ${page.mrz || 'none'}${codes.length ? ' · codes ' + codes.join('; ') : ''}`));
+  });
+
+  if (!told.document) return;
+  panel.append(el('h3', {}, `Fields of ${told.document}`));
+  let open = null;
+  for (const field of told.fields) {
+    const row = el('div', { class: 'row' });
+    row.append(el('span', { class: 'key' }, field.key), el('span', { class: 'badge ' + field.status }, field.status.replace('_', ' ')), el('span', { class: 'value' }, field.value || ''));
+    const detail = el('div', { class: 'detail' });
+    for (const tried of field.tries) {
+      for (const attempt of tried.attempts) {
+        const line = el('div');
+        line.append(el('b', {}, `page ${tried.page} · ${attempt.locator}`), attempt.anchor !== null ? ` at line ${attempt.anchor}` : '', attempt.note ? `: ${attempt.note}` : '');
+        for (const c of attempt.candidates) {
+          const checked = c.checked === true ? 'holds' : c.checked === false ? 'fails its check' : 'nothing to check';
+          const item = el('div');
+          item.append(el('code', {}, c.text), ' → ', el('code', {}, c.value), ` (${checked}; ${c.note || 'taken'})`);
+          line.append(item);
+        }
+        detail.append(line);
+      }
+    }
+    if (!field.tries.length) detail.append('no side that holds fields is on these pages');
+    row.addEventListener('click', () => {
+      if (open && open !== row) open.classList.remove('open');
+      row.classList.toggle('open');
+      open = row.classList.contains('open') ? row : null;
+      light(open ? field : null);
+    });
+    panel.append(row, detail);
+  }
+}
+
+drawPages();
+drawPanel();
+if (data.watch) {
+  const panel = document.getElementById('panel'), pages = document.getElementById('pages');
+  const kept = JSON.parse(sessionStorage.getItem('scroll') || '[0,0]');
+  panel.scrollTop = kept[0]; pages.scrollTop = kept[1];
+  setInterval(async () => {
+    try {
+      const version = await (await fetch('/version', { cache: 'no-store' })).text();
+      if (version !== data.version) {
+        sessionStorage.setItem('scroll', JSON.stringify([panel.scrollTop, pages.scrollTop]));
+        location.reload();
+      }
+    } catch (_) { /* the tool was stopped */ }
+  }, 1000);
+}
+</script>
+</body>
+</html>

@@ -1598,6 +1598,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "docset"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "blankey-doctypes",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+]
+
+[[package]]
 name = "dom_query"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

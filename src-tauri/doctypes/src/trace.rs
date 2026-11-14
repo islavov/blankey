@@ -79,6 +79,16 @@ pub struct ZoneTrace {
     pub checked: Option<bool>,
 }
 
+/// The machine-readable zone of a page.
+#[derive(Serialize, Clone, Debug)]
+pub struct ZoneFound {
+    /// the state it names: "BGR"
+    pub state: String,
+    /// the lines of the page it takes
+    pub lines: Vec<usize>,
+    pub parts: Vec<ZoneTrace>,
+}
+
 /// A page as the picked document's config divides it.
 #[derive(Serialize, Clone, Debug)]
 pub struct ScanTrace {

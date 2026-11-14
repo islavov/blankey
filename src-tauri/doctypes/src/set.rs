@@ -206,6 +206,27 @@ pub struct Config {
     pub print: Vec<String>,
 }
 
+impl Config {
+    /// A table read as if it were a document, with every code of it a field: for seeing what a page of an unknown
+    /// document prints beside its codes.
+    pub fn of_table(table: &Table) -> Config {
+        let codes = || table.codes.iter();
+        Config {
+            id: table.id.clone(),
+            name: Text::default(),
+            family: String::new(),
+            priority: 0,
+            profile: ProfileSpec { kind: String::new(), name: String::new(), number: String::new() },
+            sides: Vec::new(),
+            fields: table.codes.clone(),
+            checks: Vec::new(),
+            known_codes: codes().filter_map(|f| f.code.as_deref()).map(canonical).collect(),
+            item_codes: codes().filter(|f| f.items).filter_map(|f| f.code.as_deref()).map(canonical).collect(),
+            print: table.print.clone(),
+        }
+    }
+}
+
 /// The code without dots, as it is compared: "C.1.1" is "C11".
 pub fn canonical(code: &str) -> String {
     code.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_uppercase()
@@ -329,9 +350,9 @@ impl Set {
         Ok(Set { version: version.to_string(), ocr: file.ocr, patterns, tables, documents, skipped })
     }
 
-    /// The set in a folder laid out as the relay keeps it (`set.yaml`, `tables/`, `documents/`): for the checker
-    /// and the diagnostic, which read a set from a checkout.
-    pub fn from_dir(dir: &std::path::Path) -> Result<Set, String> {
+    /// The files of a set in a folder laid out as the relay keeps it (`set.yaml`, `tables/`, `documents/`), by
+    /// path: what `parse` takes. `tests/` is not part of the set.
+    pub fn files_in(dir: &std::path::Path) -> BTreeMap<String, String> {
         fn collect(root: &std::path::Path, dir: &std::path::Path, files: &mut BTreeMap<String, String>) {
             for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
                 let path = entry.path();
@@ -349,6 +370,11 @@ impl Set {
         }
         let mut files = BTreeMap::new();
         collect(dir, dir, &mut files);
-        Set::parse("local", &files)
+        files
+    }
+
+    /// The set in a folder: for the config set tool, which reads one from a checkout.
+    pub fn from_dir(dir: &std::path::Path) -> Result<Set, String> {
+        Set::parse("local", &Set::files_in(dir))
     }
 }
