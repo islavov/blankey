@@ -4,8 +4,7 @@ Blankey's MCP server only listens on 127.0.0.1. A relay lets web-based agents (c
 remote MCP clients) reach it: the agent talks OAuth 2.1 + streamable HTTP MCP to the relay, and the relay forwards each
 MCP request over a WebSocket that the desktop app keeps open to it. The app never accepts inbound connections.
 
-The official relay is run by the Blankey project. Anyone can run their own: implement this document and point the app
-at it (Connections → "Use custom relay…"). Billing and accounts are up to each relay.
+The official relay is run by the Blankey project.
 
 ```
 agent --OAuth 2.1 + DCR--> relay (authorization server, MCP resource)
@@ -379,28 +378,3 @@ The key is the same for every build of a release (`BLANKEY_TELEMETRY_KEY` at bui
 nothing more. Turning the statistics off sends one last post with `"opt_out": true` and then nothing until they are
 turned on again. Replies: `204`; `401` wrong key; `400` invalid body; `404` when the relay has metrics off. Nothing
 about documents, profiles or templates themselves is ever sent.
-
-## Running your own relay
-
-Any stack works (Workers, Node, Go…) as long as it speaks the above over TLS. Checklist:
-
-- discovery document, OAuth metadata, DCR, PKCE, refresh tokens, `device` and `mcp` scopes
-- device registration and one WebSocket per device, `ping`/`pong`
-- `primary` claims; agent requests only to the primary device, falling back to another connected one
-- `approve` before issuing agent codes, and on a device's first request for a grant; tokens tied to the grant
-- `mcp` frames per request, 60 s wait, 503 when no device is online, 403 for a grant the device refused
-- revocation
-- optionally, collection links: `device_links`, `device_inbox`, the `inbox` frame and a form page that seals in the
-  browser
-- optionally, `report` frames: store the device's monthly numbers and answer `ok`
-- optionally, document config sets: `device_doc_configs` with the answers above
-- optionally, the case chat: `chat_url`, `chat` in the device profile, the turn request and its events, and the agent's
-  `mcp` frames under `case:` grants
-
-Anonymous metrics go to the official relay regardless of the relay the app is signed in to; a custom relay never
-sees them and does not need `/telemetry`.
-
-To test: run it locally, set the app's relay to `http://localhost:<port>`, sign in from the app, then connect
-[MCP Inspector](https://github.com/modelcontextprotocol/inspector) to `mcp_url`: it registers, you accept it in
-Blankey, and `tools/list` should list Blankey's tools. The app's own tests (`src-tauri/src/relay/`) run a stub relay
-that exercises the frame handling and can serve as a reference.

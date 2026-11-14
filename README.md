@@ -80,7 +80,7 @@ Only loopback connections are accepted and foreign Host/Origin headers are refus
 
 Web agents cannot reach `127.0.0.1`, so Blankey can keep an outbound WebSocket to an online server (Blankey Online)
 that forwards their MCP requests to the app. The app never accepts inbound connections. The official server is
-`https://relay.blankey.io`; anyone can run their own by implementing [the relay protocol](relay/README.md).
+`https://relay.blankey.io`; how the app talks to it is in [the relay protocol](relay/README.md).
 
 1. Menu bar → Online → "Sign in to Blankey Online…" (or the Connections page). The browser opens the server's
    sign-in page; the refresh token is kept in the OS keychain.
