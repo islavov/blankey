@@ -109,6 +109,8 @@ export function chatEvent({ case_id: caseId, turn_id: turnId, event, data = {} }
     think(turn);
     turn.status = null;
   } else if (event === "status") {
+    // the failed step runs again: what it wrote so far is not part of the answer
+    if (data.state === "retrying" && turn.steps.at(-1)?.type === "text") turn.steps.pop();
     turn.status = data.state;
   } else if (event === "done") {
     Object.assign(turn, { done: true, status: null, stopped: data.stopped ?? null, error: data.error ?? null, ms: data.timing?.ms ?? null, endedAt: end(caseId) });
@@ -203,6 +205,8 @@ const ERRORS = {
   device_offline: () => t("This computer is not connected to Blankey Online. Try again in a moment."),
   unavailable: () => t("The assistant is not available. Check that you are signed in to Blankey Online."),
   lost: () => t("The connection to the assistant was lost. Send the message again."),
+  model_timeout: () => t("The model did not answer in time. Try again in a moment."),
+  model_unavailable: () => t("The model is not available right now. Try again in a moment."),
 };
 /** What went wrong, in the user's language when the code is known. */
 const errorText = (error) => ERRORS[error.code]?.() || error.message;
@@ -210,6 +214,7 @@ const errorText = (error) => ERRORS[error.code]?.() || error.message;
 const STATUS = {
   compacting: () => t("Summarizing earlier messages"),
   waiting: () => t("Waiting for you in Blankey"),
+  retrying: () => t("The model did not answer. Trying again…"),
 };
 
 /** The time of day a message was sent, with its date when that is not today. */
