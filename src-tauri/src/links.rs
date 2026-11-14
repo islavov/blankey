@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use crate::core::{Blankey, Problem, ProfileSave, Target};
 use crate::crypto;
 use crate::fieldtypes;
+use crate::recognize::{recognize, Kind};
 use crate::vault::{Link, NewFile, SubmissionInfo};
 
 /// Same value as MAX_FILE_BYTES in the relay and its collect page.
@@ -469,13 +470,17 @@ impl Blankey {
         let mut kept = Vec::new();
         for (index, (file, bytes)) in header.files.iter().zip(&contents).enumerate() {
             if keep.contains(&index) {
+                // what the content is, not what the sender's browser called it
+                let seen = recognize(&file.name, bytes);
+                let file_type = if seen.kind == Kind::Unknown { &file.file_type } else { seen.kind.media_type() };
                 let new = NewFile {
                     profile_id: Some(profile_id),
                     link_id: &link.link_id,
                     case_id: None,
                     name: &file.name,
-                    file_type: &file.file_type,
+                    file_type,
                     description: "",
+                    sha256: &seen.sha256,
                 };
                 let id = self.vault().add_collected_file(new, bytes).map_err(|e| e.to_string())?;
                 kept.push(json!({"file_id": id, "size": file.size}));
@@ -540,10 +545,18 @@ impl Blankey {
         }
         let mut ids = Vec::new();
         for (path, description) in files {
-            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-            let name = name(path);
-            let new =
-                NewFile { profile_id, link_id: "", case_id, name: &name, file_type: file_type(&name), description };
+            let (mut bytes, mut name) = (std::fs::read(path).map_err(|e| e.to_string())?, name(path));
+            // the hash stays that of the file as the user has it, also when a .docx made from it is what is kept
+            let seen = recognize(&name, &bytes);
+            let mut kind = seen.kind;
+            if kind == Kind::OldWord {
+                if let Ok(docx) = self.converted(&bytes) {
+                    name = format!("{}.docx", name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem));
+                    (bytes, kind) = (docx, Kind::Docx);
+                }
+            }
+            let (file_type, sha256) = (kind.media_type(), seen.sha256.as_str());
+            let new = NewFile { profile_id, link_id: "", case_id, name: &name, file_type, description, sha256 };
             let id = self.vault().add_collected_file(new, &bytes).map_err(|e| e.to_string())?;
             match owner {
                 FileOwner::Profile(profile) => {
@@ -554,6 +567,14 @@ impl Blankey {
             ids.push(id);
         }
         Ok(ids)
+    }
+
+    /// An old Word file as .docx bytes, converted in the scratch folder; an error when this computer cannot.
+    pub(crate) fn converted(&self, doc: &[u8]) -> Result<Vec<u8>, String> {
+        let source = self.scratch_file(&format!("convert-{}.doc", uuid::Uuid::new_v4()), doc)?;
+        let docx = crate::convert::doc_to_docx(&source);
+        let _ = std::fs::remove_file(&source);
+        docx
     }
 
     /// Files the user keeps with a profile.
@@ -580,21 +601,6 @@ impl Blankey {
 pub enum FileOwner {
     Profile(i64),
     Case(i64),
-}
-
-/// The media type of a file the user adds, by its extension.
-fn file_type(name: &str) -> &'static str {
-    let extension = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
-    match extension.as_str() {
-        "pdf" => "application/pdf",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "heic" => "image/heic",
-        _ => "application/octet-stream",
-    }
 }
 
 #[cfg(test)]

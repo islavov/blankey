@@ -13,16 +13,23 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::core::Blankey;
+use crate::recognize::Kind;
 use crate::templates::Template;
 use crate::vault::{CaseInfo, CollectedFile, Profile};
 
-/// The media types of the case files tools can read, and their extension.
-const READABLE: &[(&str, &str)] =
-    &[("application/pdf", "pdf"), ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx")];
-
 /// pdf or docx for a file tools can read.
 pub fn readable_kind(file_type: &str) -> Option<&'static str> {
-    READABLE.iter().find(|(media, _)| *media == file_type).map(|(_, kind)| *kind)
+    let kind = Kind::from_media_type(file_type);
+    kind.readable().then(|| kind.extension()).flatten()
+}
+
+/// A Word 97-2003 file: recognized as one on import, or kept before files were recognized and still named .doc.
+pub fn is_old_word(file: &CollectedFile) -> bool {
+    match Kind::from_media_type(&file.file_type) {
+        Kind::OldWord => true,
+        Kind::Unknown => file.name.to_lowercase().ends_with(".doc"),
+        _ => false,
+    }
 }
 
 /// The id in an exact `casefile:<id>`.
@@ -289,7 +296,8 @@ impl Blankey {
             .iter()
             .map(|f| {
                 let source = case_file_source(f.id);
-                let mut item = json!({"file_id": source, "description": f.description, "type": f.file_type,
+                let file_type = if is_old_word(f) { Kind::OldWord.media_type() } else { f.file_type.as_str() };
+                let mut item = json!({"file_id": source, "description": f.description, "type": file_type,
                                       "size": f.size, "readable": readable_kind(&f.file_type).is_some()});
                 if let Some(grant) = grant {
                     item["shared"] = json!(self.file_shared(grant, &source));
@@ -438,8 +446,16 @@ impl Blankey {
         if file.case_id.is_none() {
             return Err(unknown());
         }
-        let kind = readable_kind(&file.file_type)
-            .ok_or_else(|| format!("{source} is not a PDF or Word file, so it cannot be read"))?;
+        let kind = readable_kind(&file.file_type).ok_or_else(|| {
+            if is_old_word(&file) {
+                format!(
+                    "{source} is an old Word file (.doc), which cannot be read. Ask the user to open it in Word, \
+                     save it as .docx and import that file into the case"
+                )
+            } else {
+                format!("{source} is not a PDF or Word (.docx) file, so it cannot be read")
+            }
+        })?;
         let dir = self.scratch_dir();
         let path = dir.join(format!("casefile-{id}.{kind}"));
         if !path.is_file() {
@@ -460,7 +476,7 @@ impl Blankey {
 mod tests {
     use super::*;
     use crate::core::FILE;
-    use crate::mcp::tools::tests::app;
+    use crate::mcp::tools::tests::{app, fixture};
     use crate::templates::{SaveTemplate, StrMap, TemplateKind};
 
     fn template(app: &Blankey, id: &str, case: Option<&str>) {
@@ -625,6 +641,70 @@ mod tests {
 
         app.lock();
         assert!(!path.exists(), "locking removes the decrypted copies");
+    }
+
+    #[test]
+    fn an_old_word_file_is_kept_but_not_read_whatever_it_is_called() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let case = app.create_case("Sale").unwrap();
+        // how a Word 97-2003 file starts, with the stream it keeps its text in
+        let old =
+            [&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1][..], &[0; 32], b"W\0o\0r\0d\0D\0o\0c\0u\0m\0e\0n\0t\0"]
+                .concat();
+        let (renamed, real) = (dir.path().join("contract.docx"), dir.path().join("contract.doc"));
+        std::fs::write(&renamed, &old).unwrap();
+        std::fs::copy(fixture("filled.docx"), &real).unwrap();
+        let files = vec![(renamed, "Sale contract".to_string()), (real, "Lease".to_string())];
+        assert_eq!(app.import_case_files(case, &files).unwrap(), 2);
+
+        let stored = app.vault().list_collected_files().unwrap();
+        let file = |name: &str| stored.iter().find(|f| f.name == name).unwrap();
+        let (doc, docx) = (file("contract.docx"), file("contract.doc"));
+        // these bytes are no real document, so no converter makes a .docx of them and the .doc is kept
+        assert_eq!(doc.file_type, "application/msword", "a .doc renamed to .docx is still a .doc");
+        assert!(is_old_word(doc) && !is_old_word(docx));
+        assert_eq!(doc.sha256.len(), 64);
+        assert_ne!(doc.sha256, docx.sha256);
+        let refused = app.case_file(&case_file_source(doc.id)).unwrap_err();
+        assert!(refused.contains("save it as .docx"), "{refused}");
+        assert!(app.case_file(&case_file_source(docx.id)).is_ok(), "a docx named .doc is read as the docx it is");
+
+        let overview = app.case_overview(case, None).unwrap();
+        let listed = overview["files"].as_array().unwrap();
+        let of = |id: i64| listed.iter().find(|f| f["file_id"] == case_file_source(id)).unwrap();
+        assert_eq!(
+            (of(doc.id)["type"].as_str(), of(doc.id)["readable"].as_bool()),
+            (Some("application/msword"), Some(false))
+        );
+        assert_eq!(of(docx.id)["readable"], true);
+    }
+
+    /// macOS always has a converter (textutil), so there a real .doc comes in as the .docx made from it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_real_old_word_file_is_imported_as_the_docx_made_from_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let case = app.create_case("Sale").unwrap();
+        let doc = dir.path().join("contract 2009.doc");
+        let made = std::process::Command::new("/usr/bin/textutil")
+            .args(["-convert", "doc", "-output"])
+            .arg(&doc)
+            .arg(fixture("filled.docx"))
+            .status();
+        assert!(made.unwrap().success());
+        assert_eq!(app.import_case_files(case, &[(doc.clone(), "Sale contract".into())]).unwrap(), 1);
+
+        let stored = app.vault().list_collected_files().unwrap();
+        let file = &stored[0];
+        assert_eq!((file.name.as_str(), readable_kind(&file.file_type)), ("contract 2009.docx", Some("docx")));
+        assert_eq!(file.sha256, crate::library::hash_file(&doc).unwrap(), "the hash is the .doc's, to know it again");
+        let (path, _) = app.case_file(&case_file_source(file.id)).unwrap();
+        assert!(!crate::templates::docx::inspect(&path).unwrap().is_empty(), "the tools read it");
+        let scratch: Vec<_> =
+            std::fs::read_dir(path.parent().unwrap()).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(scratch.len(), 1, "the conversion leaves nothing behind: {scratch:?}");
     }
 
     #[test]

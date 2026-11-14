@@ -294,8 +294,9 @@ impl Blankey {
             return Err(format!("Request {request_id} does not wait for a file"));
         }
         let kind = request.payload.get("kind").and_then(Value::as_str).unwrap_or_default();
-        let extension = source.extension().and_then(|e| e.to_str()).unwrap_or_default().to_lowercase();
-        if !FILE_KINDS.contains(&kind) || extension != kind {
+        // by what the file is, not what it is called
+        let found = crate::recognize::recognize_file(source).map_err(|e| e.to_string())?.kind;
+        if !FILE_KINDS.contains(&kind) || found.extension() != Some(kind) {
             return Err(format!("Choose a .{kind} file"));
         }
         let size = std::fs::metadata(source).map_err(|e| e.to_string())?.len();

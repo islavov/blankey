@@ -233,9 +233,14 @@ function TabTable({ rows, columns, actions = [], bulk = [], menu, onOpen, empty,
 
 const READABLE = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
 
-function fileKind(type) {
+/** A Word 97-2003 file, which the assistant cannot read: typed so on import, or an earlier import named .doc. */
+const isOldWord = ({ type, name }) => type === "application/msword" || (type === "application/octet-stream" && /\.doc$/i.test(name));
+
+function fileKind(file) {
+  const { type } = file;
   if (type === "application/pdf") return "PDF";
   if (type.includes("wordprocessingml")) return "Word";
+  if (isOldWord(file)) return "Word (.doc)";
   if (type.startsWith("image/")) return t("Image");
   return t("File");
 }
@@ -257,7 +262,8 @@ function CaseFiles({ info }) {
   const files = useLoad(() => call("list_collected_files", { caseId: info.id }), [info.id]);
   if (!files) return null;
 
-  const open = (file) => (READABLE.includes(file.type) || file.type.startsWith("image/") ? openFile(file) : openOutside(file));
+  const shown = (file) => READABLE.includes(file.type) || file.type.startsWith("image/") || isOldWord(file);
+  const open = (file) => (shown(file) ? openFile(file) : openOutside(file));
   const rename = async (file) => {
     const values = await dialog({ title: t("Rename {name}", { name: file.name }), fields: [{ name: "name", label: t("File name"), value: file.name }], ok: t("Rename") });
     const name = values?.name.trim();
@@ -306,7 +312,7 @@ function CaseFiles({ info }) {
         cell: (f) => html`<div class="file-label">${fileLabel(f)}</div>${f.description && html`<div class="muted small">${f.name}</div>`}`,
         cls: "wide",
       },
-      { title: t("Type"), cell: (f) => fileKind(f.type), cls: "nowrap" },
+      { title: t("Type"), cell: (f) => fileKind(f), cls: "nowrap" },
       { title: t("Size"), cell: (f) => megabytes(f.size), cls: "nowrap" },
       { title: t("Added"), cell: (f) => html`<span class="muted">${when(f.created_at)}</span>`, cls: "nowrap" },
     ]}
@@ -346,12 +352,30 @@ function ImportSheet({ info, paths, close }) {
   const more = async () => add(await call("pick_files").catch(() => []));
   const save = async () => {
     const chosen = items.map(({ path, name, description }) => ({ path, description: description.trim() || name }));
-    const n = await call("import_case_files", { caseId: info.id, items: chosen }).catch(() => null);
-    if (n == null) return;
-    toast(tn(n, "{n} file imported", "{n} files imported"));
+    // an old Word file is kept as the .docx made from it: say so first, since its layout can shift
+    const kinds = await call("recognize_files", { paths: items.map((i) => i.path) }).catch(() => []);
+    const old = items.filter((i) => kinds.some((k) => k.path === i.path && k.type === "application/msword"));
+    if (old.length) {
+      const go = await dialog({
+        title: t("Old Word files (.doc) need converting"),
+        text: t("{names}: Blankey makes a .docx of it so the assistant can read it. The layout can shift, so check it after the import.", { names: old.map((i) => i.name).join(", ") }),
+        ok: t("Convert and import"),
+      });
+      if (!go) return;
+    }
+    const imported = await call("import_case_files", { caseId: info.id, items: chosen }).catch(() => null);
+    if (!imported) return;
+    toast(tn(imported.count, "{n} file imported", "{n} files imported"));
     update({ caseId: info.id, caseTab: "files" });
     close();
     reload();
+    if (imported.old_word.length) {
+      dialog({
+        title: t("The assistant cannot read old Word files (.doc)"),
+        text: t("{names}: open it in Word, save it as .docx and import that file. The .doc stays in the case.", { names: imported.old_word.join(", ") }),
+        cancel: null,
+      });
+    }
   };
 
   return html`

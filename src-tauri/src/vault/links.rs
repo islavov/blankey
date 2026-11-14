@@ -89,7 +89,7 @@ impl Vault {
         let id = self.repo.insert_collected_file(file.profile_id, file.link_id, file.case_id, size, |id| {
             let key = crypto::new_key();
             let meta = serde_json::json!({"name": file.name, "type": file.file_type, "description": file.description,
-                                          "key": crypto::encode_b64(key.as_ref())});
+                                          "sha256": file.sha256, "key": crypto::encode_b64(key.as_ref())});
             let sealed = encrypt::collected_meta(&dek, id, &serde_json::to_vec(&meta)?);
             std::fs::write(dir.join(format!("{id}.bin")), encrypt::collected_data(&key, id, content))?;
             Ok(sealed)
@@ -162,6 +162,7 @@ impl Vault {
             file_type: text("type"),
             case_id: row.case_id,
             description: text("description"),
+            sha256: text("sha256"),
         };
         Ok((file, key))
     }

@@ -208,7 +208,7 @@ fn migrations_rerun_safely() {
 }
 
 fn file<'a>(case_id: Option<i64>, profile_id: Option<i64>, name: &'a str, description: &'a str) -> NewFile<'a> {
-    NewFile { profile_id, link_id: "", case_id, name, file_type: "application/pdf", description }
+    NewFile { profile_id, link_id: "", case_id, name, file_type: "application/pdf", description, sha256: "ab12" }
 }
 
 #[test]
@@ -287,6 +287,7 @@ fn case_file_descriptions_are_encrypted() {
     assert!(!String::from_utf8_lossy(&raw).contains("Sentinel"));
     let stored = vault.get_collected_file(id).unwrap();
     assert_eq!((stored.case_id, stored.description.as_str()), (Some(case), "Sentinel, buyer, ID card"));
+    assert_eq!(stored.sha256, "ab12", "the content hash is kept with the file");
 
     vault.set_file_description(id, "Seller, deed").unwrap();
     let (stored, content) = vault.load_collected_file(id).unwrap();

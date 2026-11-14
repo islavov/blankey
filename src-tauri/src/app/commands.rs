@@ -267,12 +267,50 @@ struct ImportItem {
     description: String,
 }
 
-/// Encrypts each file into the case with its description; the number imported.
+/// The media type each picked file really has, by its content, before it is imported: the Import sheet asks before
+/// it converts an old Word file. A file that cannot be read is left out.
 #[tauri::command]
-async fn import_case_files(state: State<'_, AppState>, case_id: i64, items: Vec<ImportItem>) -> CmdResult<usize> {
+async fn recognize_files(paths: Vec<PathBuf>) -> CmdResult<Vec<Value>> {
+    let recognized = move || {
+        let mut files = Vec::new();
+        for path in &paths {
+            if let Ok(file) = crate::recognize::recognize_file(path) {
+                files.push(json!({"path": path, "type": file.kind.media_type()}));
+            }
+        }
+        files
+    };
+    tauri::async_runtime::spawn_blocking(recognized).await.map_err(err)
+}
+
+/// What an import did: how many files it kept, the names of the old Word files (.doc) it kept as the .docx made
+/// from them, and of those it could not convert, which the assistant cannot read.
+#[derive(Serialize)]
+struct Imported {
+    count: usize,
+    converted: Vec<String>,
+    old_word: Vec<String>,
+}
+
+/// Encrypts each file into the case with its description.
+#[tauri::command]
+async fn import_case_files(state: State<'_, AppState>, case_id: i64, items: Vec<ImportItem>) -> CmdResult<Imported> {
     let app = state.app.clone();
     let files: Vec<(PathBuf, String)> = items.into_iter().map(|i| (i.path, i.description.trim().to_string())).collect();
-    tauri::async_runtime::spawn_blocking(move || app.import_case_files(case_id, &files)).await.map_err(err)?
+    tauri::async_runtime::spawn_blocking(move || {
+        let ids = app.keep_files(crate::links::FileOwner::Case(case_id), &files)?;
+        let vault = app.vault();
+        let kept: Vec<CollectedFile> = ids.iter().filter_map(|id| vault.get_collected_file(*id).ok()).collect();
+        // a converted file is kept under a .docx name its source did not have
+        let picked = |file: &CollectedFile| {
+            files.iter().any(|(path, _)| path.file_name().is_some_and(|n| n == file.name.as_str()))
+        };
+        let converted = kept.iter().filter(|file| !picked(file)).map(|file| file.name.clone()).collect();
+        let old_word = kept.into_iter().filter(crate::cases::is_old_word).map(|file| file.name).collect();
+        Ok(Imported { count: ids.len(), converted, old_word })
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Changes a case file's description, its name, or both.
@@ -298,7 +336,8 @@ fn update_case_file(
 /// Image types the window can show as they are.
 const SHOWN_IMAGES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
 
-/// A case file shown inside Blankey: a Word file as HTML, a PDF as its pages, an image as it is.
+/// A case file shown inside Blankey: a Word file as HTML (an old .doc converted first), a PDF as its pages, an
+/// image as it is.
 fn case_file_preview_of(app: &Blankey, id: i64) -> Result<Preview, String> {
     let file = app.vault().get_collected_file(id).map_err(err)?;
     let content = || app.vault().load_collected_file(id).map(|(_, content)| content).map_err(err);
@@ -306,6 +345,11 @@ fn case_file_preview_of(app: &Blankey, id: i64) -> Result<Preview, String> {
         Some("pdf") => preview::pdf_view(&content()?),
         Some(_) => preview::docx_view(&review_path(app, &crate::cases::case_file_source(id))?.0),
         None if SHOWN_IMAGES.contains(&file.file_type.as_str()) => Preview::image(&file.file_type, &content()?),
+        // an old Word file kept as it is: shown through the .docx made from it, when this computer can make one
+        None if crate::cases::is_old_word(&file) => match app.converted(&content()?) {
+            Ok(docx) => preview::docx_view(&app.scratch_file(&format!("casefile-{id}-view.docx"), &docx)?),
+            Err(_) => Preview::Error { message: t(&app.language(), "Blankey cannot show this kind of file") },
+        },
         None => Preview::Error { message: t(&app.language(), "Blankey cannot show this kind of file") },
     })
 }
@@ -1698,6 +1742,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         delete_case,
         pick_files,
         import_case_files,
+        recognize_files,
         update_case_file,
         case_file_preview,
         document_preview,

@@ -370,3 +370,42 @@ test("a new case opens ready for files", async () => {
   await click($(".drop-zone"));
   assert.ok(backend.called("pick_files").length > 0, "a click opens Import");
 });
+
+test("importing an old Word file asks before it converts it; Cancel goes back to the import", async () => {
+  // the Import sheet of the new case is open: the drop adds to it
+  backend.emit("tauri://drag-drop", { paths: ["/Users/test/lease-2009.doc"] });
+  await settle();
+  const imports = backend.called("import_case_files").length;
+  await click($(".sheet-foot button.primary"));
+  assert.equal(text(".modal h3"), "Old Word files (.doc) need converting");
+  assert.ok(text(".modal").includes("lease-2009.doc: Blankey makes a .docx of it"));
+  assert.deepEqual($$(".modal button").map((b) => b.textContent), ["Cancel", "Convert and import"]);
+  await click(byText(".modal button", "Cancel"));
+  assert.equal(backend.called("import_case_files").length, imports, "nothing is imported");
+  assert.ok($(".sheet"), "the import stays open");
+
+  await click($(".sheet-foot button.primary"));
+  await submit($(".modal form"));
+  assert.equal(backend.called("import_case_files").length, imports + 1);
+  assert.equal($(".modal"), null, "nothing more to say");
+  assert.ok(row("lease-2009.docx").textContent.includes("Word"));
+  assert.ok(!row("lease-2009.docx").textContent.includes("Word (.doc)"));
+});
+
+test("where it cannot be converted, importing an old Word file says the assistant cannot read it, and how to fix that", async () => {
+  backend.db.convertsDoc = false;
+  backend.emit("tauri://drag-drop", { paths: ["/Users/test/old-contract.doc"] });
+  await settle();
+  assert.ok($$(".import-row .import-name").some((el) => el.textContent === "old-contract.doc"));
+  await click($(".sheet-foot button.primary"));
+  await submit($(".modal form"));
+  assert.equal(text(".modal h3"), "The assistant cannot read old Word files (.doc)");
+  assert.ok(text(".modal").includes("old-contract.doc: open it in Word, save it as .docx and import that file."));
+  assert.deepEqual($$(".modal button").map((b) => b.textContent), ["OK"]);
+  await submit($(".modal form"));
+  assert.ok(row("old-contract.doc").textContent.includes("Word (.doc)"));
+  await dblclick(row("old-contract.doc"));
+  assert.ok($(".sheet .preview-area"), "it still opens inside Blankey");
+  assert.equal(backend.called("case_file_preview").at(-1).id, backend.db.collected.find((f) => f.name === "old-contract.doc").id);
+  await click(byText(".sheet-head button", "Close"));
+});
