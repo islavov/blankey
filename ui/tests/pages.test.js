@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { before, test } from "node:test";
-import { $, $$, action, byText, click, goTo, settle, startApp, submit, text, type } from "./setup.js";
+import { $, $$, action, byText, click, dblclick, goTo, settle, startApp, submit, text, type } from "./setup.js";
 
 let backend;
 before(async () => {
@@ -15,6 +15,36 @@ test("the app opens on Cases; activity lists the assistant's requests", async ()
   assert.equal(text(".toolbar h2"), "Activity");
   assert.equal(text(".toolbar .muted"), "Nothing waiting");
   assert.equal(rows().length, 1);
+});
+
+test("documents: one opens inside Blankey, to read, print or hand to its app; several open in their apps", async () => {
+  await goTo("Documents");
+  const buttons = () => $$(".sheet-head .head-actions button").map((b) => b.textContent);
+  const [loan, nzok] = $$(".grid tbody tr");
+  await dblclick(nzok);
+  assert.deepEqual(backend.called("document_preview").at(-1), { id: 1 });
+  assert.equal(text(".sheet h2"), "NZOK (acme)");
+  assert.equal(text(".sheet .reason"), "nzok.pdf");
+  assert.ok($(".sheet .preview-area .pdf-page"));
+  assert.deepEqual(buttons(), ["Print", "Open in default app", "Close"]);
+  await click(byText(".sheet-head button", "Print"));
+  assert.equal(backend.called("print_window").length, 1);
+  await click(byText(".sheet-head button", "Open in default app"));
+  assert.deepEqual(backend.called("open_documents").at(-1), { ids: [1] });
+  await click(byText(".sheet-head button", "Close"));
+
+  await dblclick(loan);
+  assert.ok($(".sheet .preview-area .paper"));
+  assert.deepEqual(buttons(), ["Open in default app", "Close"], "a Word document prints from its own app");
+  await click(byText(".sheet-head button", "Close"));
+
+  await click(loan);
+  await click(nzok, { metaKey: true });
+  await action("Open");
+  assert.equal($(".sheet"), null);
+  assert.deepEqual(backend.called("open_documents").at(-1), { ids: [2, 1] });
+  await click(nzok);
+  await click(nzok, { metaKey: true });
 });
 
 test("documents: cmd-click selects several, delete asks first", async () => {

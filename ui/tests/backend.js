@@ -355,6 +355,11 @@ export function createBackend(db = seed()) {
     open_submission_file: () => null,
     export_submission_file: () => "/tmp/id-card.png",
     open_documents: () => null,
+    document_preview: ({ id }) => {
+      const { title, filename } = db.docs.find((d) => d.id === id);
+      return { title, filename, preview: filename.endsWith(".pdf") ? pagesPreview : htmlPreview };
+    },
+    print_window: () => null,
     export_document: () => "/tmp/doc.pdf",
     delete_documents: ({ ids }) => {
       db.docs = db.docs.filter((d) => !ids.includes(d.id));

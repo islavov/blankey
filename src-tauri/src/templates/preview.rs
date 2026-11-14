@@ -15,6 +15,9 @@ use crate::render::preview::{self as pdf, Place};
 pub const DPI: f32 = 110.0;
 /// Pages shown for a library file; enough to recognise the document.
 pub const FILE_PAGES: usize = 10;
+/// A file or document opened to read or print: sharper, and all of it up to a size the window still handles.
+pub const VIEW_DPI: f32 = 150.0;
+pub const VIEW_PAGES: usize = 100;
 
 #[derive(Serialize)]
 pub struct PagePreview {
@@ -92,11 +95,36 @@ fn docx_preview(template: &Template, values: Option<&Values>) -> Result<Preview,
     Ok(Preview::Html { html: docx::to_html(&path, &template.labels, shown.as_ref())?, names: docx::variables(&path)? })
 }
 
+/// A PDF opened to read or print: its pages as they are, without field boxes.
+pub fn pdf_view(pdf_bytes: &[u8]) -> Preview {
+    match pages_at(pdf_bytes, &IndexMap::new(), VIEW_PAGES, VIEW_DPI) {
+        Ok(pages) => Preview::Pages { pages, names: Vec::new() },
+        Err(message) => Preview::Error { message },
+    }
+}
+
+/// A Word file opened to read, as HTML.
+pub fn docx_view(path: &std::path::Path) -> Preview {
+    match docx::to_html(path, &IndexMap::new(), None) {
+        Ok(html) => Preview::Html { html, names: Vec::new() },
+        Err(message) => Preview::Error { message },
+    }
+}
+
 /// The first `limit` pages as images with the given boxes.
 pub fn pages(pdf_bytes: &[u8], boxes: &IndexMap<String, Vec<Place>>, limit: usize) -> Result<Vec<PagePreview>, String> {
+    pages_at(pdf_bytes, boxes, limit, DPI)
+}
+
+fn pages_at(
+    pdf_bytes: &[u8],
+    boxes: &IndexMap<String, Vec<Place>>,
+    limit: usize,
+    dpi: f32,
+) -> Result<Vec<PagePreview>, String> {
     let sizes = pdf::page_sizes(pdf_bytes)?;
     let shown: Vec<usize> = (1..=sizes.len().min(limit)).collect();
-    let images = pdf::render_pages(pdf_bytes, &shown, DPI)?;
+    let images = pdf::render_pages(pdf_bytes, &shown, dpi)?;
     let encoder = base64::engine::general_purpose::STANDARD;
     Ok(images
         .into_iter()

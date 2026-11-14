@@ -171,9 +171,13 @@ test("files: double-click shows one inside Blankey; its ⋮ menu has what a file
   assert.deepEqual(backend.called("case_file_preview").at(-1), { id: 12 });
   assert.ok($(".sheet .preview-area .pdf-page, .sheet .preview-area .paper"), "the file is shown, not handed to another app");
   assert.equal(backend.called("open_collected_files").length, 0);
-  await click(byText(".sheet-foot button", "Open in another app"));
+  assert.deepEqual($$(".sheet-head .head-actions button").map((b) => b.textContent), ["Print", "Open in default app", "Close"]);
+  assert.equal($(".sheet-foot"), null, "the buttons are in the heading");
+  await click(byText(".sheet-head button", "Print"));
+  assert.equal(backend.called("print_window").length, 1);
+  await click(byText(".sheet-head button", "Open in default app"));
   assert.deepEqual(backend.called("open_collected_files").at(-1), { ids: [12] });
-  await click(byText(".sheet-foot button", "Close"));
+  await click(byText(".sheet-head button", "Close"));
   assert.equal($(".sheet"), null);
 
   assert.deepEqual(await menuOf("Title deed"), ["Open", "Export…", "Rename…", "Description…", "Personal data…", "Delete"]);
@@ -188,7 +192,7 @@ test("files: double-click shows one inside Blankey; its ⋮ menu has what a file
   await key("Escape", document.body);
   await rowMenu("mary-id.jpg", "Open");
   assert.ok($(".sheet img.preview-image"), "an image shows as it is");
-  await click(byText(".sheet-foot button", "Close"));
+  await click(byText(".sheet-head button", "Close"));
 
   await rowMenu("mary-id.jpg", "Rename…");
   assert.equal($(".modal input[name=name]").value, "mary-id.jpg");

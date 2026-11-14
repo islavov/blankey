@@ -4,6 +4,7 @@ import { CaseLink, html, matches, reload, useLoad, when } from "../lib.js";
 import { confirmDialog, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
 import { Table, useSelection } from "../ui/table.js";
+import { openDocuments } from "../viewer.js";
 
 export function Documents() {
   const docs = useLoad(() => call("list_documents"), []);
@@ -12,7 +13,7 @@ export function Documents() {
   const selected = picked.filter((id) => docs.some((d) => d.id === id));
 
   const need = (action) => () => (selected.length ? action(selected) : toast(t("Select a document")));
-  const open = (ids) => call("open_documents", { ids });
+  const open = (ids) => openDocuments(ids);
 
   const exportDocument = async ([id]) => {
     const path = await call("export_document", { id });

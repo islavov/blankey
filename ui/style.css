@@ -270,6 +270,7 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .sheet-head .head-text { flex: 1; min-width: 0; display: flex; gap: 12px; }
 .sheet-head .head-icon { width: 34px; height: 34px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; }
 .sheet-head .head-icon svg { width: 18px; height: 18px; }
+.sheet-head .head-actions { display: flex; gap: 8px; align-items: center; flex: none; }
 .sheet-head h2 { margin: 0; font-size: 15px; }
 .sheet-head .reason { color: var(--muted); margin-top: 2px; }
 .sheet-form { display: grid; grid-template-columns: auto minmax(220px, 320px); gap: 6px 10px; align-items: center; }
@@ -505,3 +506,18 @@ input.case-title:focus { background: var(--input); }
 .relay-head { font-size: 11px; font-weight: 600; color: var(--muted); }
 /* lines up with the buttons in the rows above */
 .grid td.end { text-align: right; padding-right: 16px; }
+
+/* -- printing the open file or document ------------------------------------------- */
+@media print {
+  @page { margin: 0; }
+  html, body { height: auto; overflow: visible; background: #fff; }
+  body > :not(#sheet-root) { display: none !important; }
+  .sheet { position: static; display: block; background: #fff; }
+  .sheet-drag, .sheet-head { display: none; }
+  .file-view, .file-view .preview-area { overflow: visible; min-height: 0; padding: 0; border-radius: 0; background: #fff; }
+  .file-view .zoom { --zoom: 1; }
+  .file-view .pdf-page { max-width: none; margin: 0; box-shadow: none; break-after: page; }
+  .file-view .pdf-page:last-child { break-after: auto; }
+  .file-view .pdf-page .box { display: none; }
+  .file-view .preview-image { zoom: 1; border-radius: 0; }
+}

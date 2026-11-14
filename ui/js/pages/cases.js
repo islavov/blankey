@@ -5,8 +5,8 @@ import { openFill } from "../fill/form.js";
 import { HelpNote } from "../help.js";
 import { t, tn } from "../i18n.js";
 import { html, Icon, KIND_NAMES, matches, megabytes, reload, state, update, useLoad, useStore, when } from "../lib.js";
-import { Preview } from "../preview.js";
 import { openReview } from "../review.js";
+import { openDocuments, openViewer } from "../viewer.js";
 import { confirmDialog, dialog, isDialogOpen, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
 import { isSheetOpen, openSheet, SheetHead } from "../ui/sheet.js";
@@ -244,21 +244,14 @@ const fileLabel = (f) => f.description || f.name;
 
 const openOutside = (file) => call("open_collected_files", { ids: [file.id] });
 
-/** Shows a case file inside Blankey, so no decrypted copy has to leave the vault for another app. */
+/** Shows a case file inside Blankey. */
 const openFile = (file) =>
-  openSheet((close) => html`
-    <div class="sheet-head"><${SheetHead} icon="doc" title=${fileLabel(file)} reason=${file.description ? file.name : ""} /></div>
-    <div class="sheet-body file-view"><${FileView} file=${file} /></div>
-    <div class="sheet-foot">
-      <button data-help="casefiles.outside" onClick=${() => openOutside(file)}>${t("Open in another app")}</button>
-      <span class="spacer"></span>
-      <button class="primary" onClick=${close}>${t("Close")}</button>
-    </div>`);
-
-function FileView({ file }) {
-  const preview = useLoad(() => call("case_file_preview", { id: file.id }), [file.id]);
-  return html`<${Preview} preview=${preview} interactive=${false} />`;
-}
+  openViewer({
+    title: fileLabel(file),
+    name: file.description ? file.name : "",
+    load: () => call("case_file_preview", { id: file.id }),
+    outside: () => openOutside(file),
+  });
 
 function CaseFiles({ info }) {
   const files = useLoad(() => call("list_collected_files", { caseId: info.id }), [info.id]);
@@ -587,7 +580,7 @@ function CaseDocuments({ info }) {
   const docs = useLoad(() => call("list_documents", { caseId: info.id }), [info.id]);
   if (!docs) return null;
 
-  const open = (doc) => call("open_documents", { ids: [doc.id] });
+  const open = (doc) => openDocuments([doc.id]);
   const exportDocument = async (doc) => {
     const path = await call("export_document", { id: doc.id });
     if (path) toast(t("Saved to {path}", { path }), 4000);
