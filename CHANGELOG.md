@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Updates: while a new version is still being built, checking for updates no longer says it failed.
+
 ## 0.4.0
 
 - First use: after the recovery key, a welcome shows what Blankey Online adds and lets you sign in, or stay offline

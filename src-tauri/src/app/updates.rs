@@ -172,9 +172,17 @@ impl Updates {
         let url = manifest_url();
         let text = crate::relay::blocking(move || {
             let http = ureq::AgentBuilder::new().timeout(TIMEOUT).build();
-            http.get(&url).call().map_err(|e| e.to_string())?.into_string().map_err(|e| e.to_string())
+            match http.get(&url).call() {
+                Ok(response) => response.into_string().map(Some).map_err(|e| e.to_string()),
+                // the latest release has no latest.json: nothing there to update to
+                Err(ureq::Error::Status(404, _)) => Ok(None),
+                Err(e) => Err(e.to_string()),
+            }
         })
         .await?;
+        let Some(text) = text else {
+            return Ok(Status::UpToDate);
+        };
         Ok(match newer(env!("CARGO_PKG_VERSION"), &text)? {
             Some(version) => {
                 self.announce(&version, mark("Blankey {version} is out. Download it from the Blankey menu."));
@@ -196,7 +204,13 @@ impl Updates {
             state(&handle).app.lock();
             super::platform::clear_opened_documents();
         });
-        let Some(update) = builder.build().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())? else {
+        let update = match builder.build().map_err(|e| e.to_string())?.check().await {
+            Ok(update) => update,
+            // the latest release has no latest.json: nothing there to update to
+            Err(tauri_plugin_updater::Error::ReleaseNotFound) => None,
+            Err(e) => return Err(e.to_string()),
+        };
+        let Some(update) = update else {
             return Ok(Status::UpToDate);
         };
         let version = update.version.clone();

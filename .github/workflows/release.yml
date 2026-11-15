@@ -1,12 +1,14 @@
 name: Release
 
+# A pushed version tag makes a draft release, builds, uploads, and publishes it last: installed apps look for updates
+# in the latest published release, so a release must not be the latest before its installers and latest.json are on it.
 on:
-  release:
-    types: [published]
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to upload to (e.g. v0.1.0); empty builds artifacts only
+        description: Existing release to upload to (e.g. v0.1.0); empty builds artifacts only
         required: false
       targets:
         description: Which installers to build, a comma list of macos, windows, deb, rpm
@@ -18,26 +20,39 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
 
 jobs:
   version:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
       - name: Check the tag matches the version
         if: env.TAG != ''
         run: |
           version=$(jq -r .version src-tauri/tauri.conf.json)
           [ "$TAG" = "v$version" ] || { echo "Tag $TAG does not match tauri.conf.json version $version"; exit 1; }
 
+  # The release the installers go to, unpublished until they are on it; its notes are the version's changelog section
+  draft:
+    needs: version
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 && exit 0
+          awk -v v="${TAG#v}" '$0 == "## " v {f = 1; next} /^## / {f = 0} f' CHANGELOG.md > notes.md
+          gh release create "$TAG" --draft --verify-tag --title "Blankey ${TAG#v}" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
+
   # Runs alongside the builds; only the upload waits for it
   test:
     uses: ./.github/workflows/ci.yml
     with:
-      ref: ${{ github.event.release.tag_name || github.sha }}
+      ref: ${{ github.sha }}
 
   macos:
     needs: version
@@ -45,8 +60,6 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -73,8 +86,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
@@ -112,8 +123,6 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends curl ca-certificates build-essential git
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -147,8 +156,6 @@ jobs:
       - name: Base tools
         run: dnf install -y curl ca-certificates gcc git
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -171,13 +178,11 @@ jobs:
 
   upload:
     # runs after the selected builds; a skipped platform is fine, a failed one is not
-    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && (github.event.release.tag_name || inputs.tag) }}
-    needs: [test, macos, windows, deb, rpm]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && (github.ref_type == 'tag' || inputs.tag) }}
+    needs: [draft, test, macos, windows, deb, rpm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -190,3 +195,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$TAG" --draft=false --latest --repo "$GITHUB_REPOSITORY"
