@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Updates: while a new version is still being built, checking for updates no longer says it failed.
+- Profiles: Edit as CSV, above the fields, shows them as text, one field per line, to copy them into another profile.
+  Repeated keys and other bad lines are listed before anything is saved.
 
 ## 0.4.0
 

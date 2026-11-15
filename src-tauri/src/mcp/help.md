@@ -39,6 +39,8 @@ A profile holds the data of one person, company or other party: names, ID number
 - Each field has a key (address.city) that templates use, a label for people, a type that checks the value (text,
   number, date, bool, egn, iban, email, phone) and the value.
 - Values show as dots. The eye beside a value shows that one value; Show values shows all of them.
+- Edit as CSV, above the fields, shows them as text, one field per line (key,label,type,value), to copy them into
+  another profile; Edit as table switches back.
 - Save stores the edited fields; problems are listed under the table.
 - The assistant can ask for a profile's values: a form opens in Blankey, the user types them there, and the assistant
   only learns that it was saved.

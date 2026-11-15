@@ -187,6 +187,62 @@ test("profiles: edits mark the profile unsaved, problems are shown, switching aw
   assert.equal(document.activeElement, $$("input.key")[2]);
 });
 
+test("profiles: the fields are edited as CSV and copied into another profile", async () => {
+  await goTo("Profiles");
+  const csv = () => $("textarea.fields-csv");
+  const toggle = (label) => click(byText(".fields-head button", label));
+  const save = () => click(byText(".detail-actions button", "Save"));
+  await toggle("Edit as CSV");
+  const copied = csv().value;
+  assert.equal(copied, "key,label,type,value\nname,Full name,text,John Watson\negn,EGN,egn,8001010000");
+  assert.equal($("table.fields"), null);
+
+  await click(byText(".list-item .title", "Acme").parentElement);
+  assert.equal(csv().value, "key,label,type,value", "the next profile opens as CSV too");
+  await type(csv(), `${copied}\n\naddress,"Baker St, 221B",,"say ""hi"""\n`);
+  assert.equal(text(".detail-actions > span.small"), "Unsaved changes");
+  await save();
+  assert.deepEqual(backend.called("save_fields").at(-1), {
+    id: 2,
+    fields: [
+      { key: "name", label: "Full name", type: "text", value: "John Watson" },
+      { key: "egn", label: "EGN", type: "egn", value: "8001010000" },
+      { key: "address", label: "Baker St, 221B", type: "text", value: 'say "hi"' },
+    ],
+    removed: [],
+  });
+  assert.equal(csv().value, `${copied}\naddress,"Baker St, 221B",text,"say ""hi"""`);
+
+  await type(csv(), "name,Full name,text,John Watson\ncity,City,text,London");
+  await toggle("Edit as table");
+  assert.deepEqual($$("input.key").map((input) => input.value), ["name", "city"]);
+  await save();
+  assert.deepEqual(backend.called("save_fields").at(-1).removed, ["egn", "address"], "saved fields the CSV left out are removed");
+
+  await toggle("Edit as CSV");
+  await type(csv(), 'name,Full name,text,John\ncity,City,place,London');
+  await toggle("Edit as table");
+  assert.equal(text(".problems"), 'Line 2: unknown type "place"');
+  const saves = backend.called("save_fields").length;
+  await type(csv(), "key,label,type,value\nname,Full name,text,John\ncity,City,text,London\nname,Name,text,Jon\n,No key,text,x\ncity,Town,place,Leeds\nname,Again,text,J");
+  await save();
+  assert.deepEqual($(".problems").textContent.split("\n"), [
+    'Line 4: the key "name" is already on line 2',
+    "Line 5: the key is missing",
+    'Line 6: the key "city" is already on line 3',
+    'Line 6: unknown type "place"',
+    'Line 7: the key "name" is already on line 2',
+  ], "every bad line is listed");
+  await type(csv(), 'name,Full name,text,"John');
+  await save();
+  assert.equal(text(".problems"), "Line 1: expected key, label, type, value");
+  assert.equal(backend.called("save_fields").length, saves, "CSV that does not parse is not saved");
+  await type(csv(), "name,Full name,text,John");
+  await toggle("Edit as table");
+  assert.deepEqual($$("input.value").map((input) => input.value), ["John"]);
+  assert.equal(text(".problems"), "");
+});
+
 test("the theme switch flips light and dark and remembers the choice", async () => {
   const theme = () => document.documentElement.dataset.theme;
   const first = theme();

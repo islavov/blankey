@@ -138,6 +138,73 @@ let nextRow = 0;
 const row = (f) => ({ uid: nextRow++, original: f.key, key: f.key, label: f.label, type: f.type, value: f.value ?? "" });
 const blankRow = () => row({ key: "", label: "", type: "text", value: "" });
 
+const CSV_HEAD = "key,label,type,value";
+const csvCell = (text) => (/[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text);
+
+/** The fields as CSV text under a header line, one field per line; rows left empty are skipped. */
+function toCsv(rows) {
+  const filled = rows.filter((r) => r.key || r.label || r.value);
+  return [CSV_HEAD, ...filled.map((r) => [r.key, r.label, r.type, r.value].map(csvCell).join(","))].join("\n");
+}
+
+/** The records of CSV text as [{ line, cells }], empty lines skipped; `cells` is null where a quote is left open. */
+function csvRecords(text) {
+  const records = [];
+  let cells = [];
+  let cell = "";
+  let quoted = false;
+  let line = 1;
+  let start = 1;
+  const end = () => {
+    cells.push(cell);
+    if (cells.some(Boolean)) records.push({ line: start, cells });
+    cells = [];
+    cell = "";
+  };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\n") line++;
+    if (quoted) {
+      if (c !== '"') cell += c;
+      else if (text[i + 1] === '"') cell += text[i++];
+      else quoted = false;
+    } else if (c === '"' && !cell) quoted = true;
+    else if (c === ",") {
+      cells.push(cell);
+      cell = "";
+    } else if (c === "\n") {
+      end();
+      start = line;
+    } else if (c !== "\r") cell += c;
+  }
+  if (quoted) records.push({ line: start, cells: null });
+  else end();
+  return records;
+}
+
+/** What CSV text holds, as { fields } or { error } with every bad line: the header line is optional and an empty type is text. */
+function fromCsv(text) {
+  const fields = [];
+  const errors = [];
+  const firstLine = new Map();
+  for (const [i, { line, cells }] of csvRecords(text).entries()) {
+    if (!cells || cells.length > 4) {
+      errors.push(t("Line {line}: expected key, label, type, value", { line }));
+      continue;
+    }
+    if (!i && cells.join(",").toLowerCase() === CSV_HEAD) continue;
+    const [name, label = "", kind = "", value = ""] = cells;
+    const key = name.trim();
+    const type = kind.trim() || "text";
+    if (!key) errors.push(t("Line {line}: the key is missing", { line }));
+    else if (firstLine.has(key)) errors.push(t("Line {line}: the key \"{key}\" is already on line {first}", { line, key, first: firstLine.get(key) }));
+    else firstLine.set(key, line);
+    if (!state.status.field_types.includes(type)) errors.push(t("Line {line}: unknown type \"{type}\"", { line, type }));
+    fields.push({ key, label, type, value });
+  }
+  return errors.length ? { error: errors.join("\n") } : { fields };
+}
+
 function ProfileDetail({ profile, onDirty, onSaved }) {
   const fields = useLoad(() => call("profile_fields", { id: profile.id }), [profile.id]);
   const [rows, setRows] = useState(null);
@@ -146,6 +213,10 @@ function ProfileDetail({ profile, onDirty, onSaved }) {
   const [status, setStatus] = useState("");
   const [problems, setProblems] = useState([]);
   const [focusUid, setFocusUid] = useState(null);
+  const [asCsv, setAsCsv] = useRemembered("profiles.csv", false);
+  // the CSV text once it is edited; until then it is written from the rows
+  const [csv, setCsv] = useState(null);
+  const [csvError, setCsvError] = useState("");
 
   useEffect(() => {
     if (fields) setRows(fields.length ? fields.map(row) : [blankRow()]);
@@ -167,13 +238,42 @@ function ProfileDetail({ profile, onDirty, onSaved }) {
     setFocusUid(r.uid);
   };
 
+  /** The rows of the edited CSV text and the saved keys it leaves out; null, with the error shown, when it does not parse. */
+  const csvRows = () => {
+    const { fields: parsed, error = "" } = fromCsv(csv);
+    setCsvError(error);
+    if (error) return null;
+    const saved = fields.map((f) => f.key);
+    return {
+      rows: parsed.map((f) => ({ ...row(f), original: saved.includes(f.key) ? f.key : "" })),
+      removed: saved.filter((key) => !parsed.some((f) => f.key === key)),
+    };
+  };
+  const editCsv = (text) => {
+    setCsv(text);
+    setStatus(t("Unsaved changes"));
+    onDirty();
+  };
+  const toggleCsv = () => {
+    if (asCsv && csv !== null) {
+      const edit = csvRows();
+      if (!edit) return;
+      setRows(edit.rows.length ? edit.rows : [blankRow()]);
+      setRemoved(edit.removed);
+      setCsv(null);
+    }
+    setAsCsv(!asCsv);
+  };
+
   const save = async () => {
-    const values = rows.map((r) => ({ key: r.key.trim(), label: r.label.trim(), type: r.type, value: r.value }));
-    const renamed = rows.filter((r, i) => r.original && r.original !== values[i].key).map((r) => r.original);
+    const edit = asCsv && csv !== null ? csvRows() : { rows, removed };
+    if (!edit) return setStatus(t("Fix the problems below"));
+    const values = edit.rows.map((r) => ({ key: r.key.trim(), label: r.label.trim(), type: r.type, value: r.value }));
+    const renamed = edit.rows.filter((r, i) => r.original && r.original !== values[i].key).map((r) => r.original);
     const result = await call("save_fields", {
       id: profile.id,
       fields: values.filter((f) => f.key),
-      removed: [...removed, ...renamed],
+      removed: [...edit.removed, ...renamed],
     });
     setProblems(result);
     if (result.length) return setStatus(t("Fix the problems below"));
@@ -183,27 +283,34 @@ function ProfileDetail({ profile, onDirty, onSaved }) {
 
   if (!rows) return null;
   return html`
-    <h3>${profile.name}</h3>
+    <div class="fields-head">
+      <h3>${profile.name}</h3>
+      <button data-help="profiles.csv" onClick=${toggleCsv}>${asCsv ? t("Edit as table") : t("Edit as CSV")}</button>
+    </div>
     <div class="muted small">${t("Your AI assistant sees field names, labels, types and how long the values are. Never the values.")}</div>
-    <table class="fields" data-help="profiles.fields">
-      <thead><tr><th>${t("Key")}</th><th>${t("Label")}</th><th>${t("Type")}</th><th>${t("Value")}</th><th></th></tr></thead>
-      <tbody>
-        ${rows.map(
-          (r) => html`<${FieldRow} key=${r.uid} r=${r} reveal=${reveal} focus=${r.uid === focusUid} problem=${problemsAt(problems, r.key.trim())}
-            onChange=${(patch) => change(r.uid, patch)} onRemove=${() => drop(r)} />`
-        )}
-      </tbody>
-    </table>
+    ${asCsv
+      ? html`<textarea class="fields-csv mono" data-help="profiles.fields" spellcheck="false" wrap="off" value=${csv ?? toCsv(rows)}
+          rows=${Math.max(8, (csv ?? toCsv(rows)).split("\n").length + 1)} onInput=${(e) => editCsv(e.target.value)}></textarea>`
+      : html`<table class="fields" data-help="profiles.fields">
+          <thead><tr><th>${t("Key")}</th><th>${t("Label")}</th><th>${t("Type")}</th><th>${t("Value")}</th><th></th></tr></thead>
+          <tbody>
+            ${rows.map(
+              (r) => html`<${FieldRow} key=${r.uid} r=${r} reveal=${reveal} focus=${r.uid === focusUid} problem=${problemsAt(problems, r.key.trim())}
+                onChange=${(patch) => change(r.uid, patch)} onRemove=${() => drop(r)} />`
+            )}
+          </tbody>
+        </table>`}
     <div class="detail-actions">
-      <button data-help="profiles.add" onClick=${add}>${t("Add field")}</button>
-      <label class="check-row small muted" data-help="profiles.reveal">
-        <input type="checkbox" checked=${reveal} onChange=${(e) => setReveal(e.target.checked)} /> ${t("Show values")}
-      </label>
+      ${!asCsv &&
+      html`<button data-help="profiles.add" onClick=${add}>${t("Add field")}</button>
+        <label class="check-row small muted" data-help="profiles.reveal">
+          <input type="checkbox" checked=${reveal} onChange=${(e) => setReveal(e.target.checked)} /> ${t("Show values")}
+        </label>`}
       <span class="spacer"></span>
       <span class="muted small">${status}</span>
       <button class="primary" data-help="profiles.save" onClick=${save}>${t("Save")}</button>
     </div>
-    <div class="problems">${problemsElsewhere(problems, rows.map((r) => r.key.trim()))}</div>
+    <div class="problems">${asCsv ? [csvError, problemsElsewhere(problems, [])].filter(Boolean).join("\n") : problemsElsewhere(problems, rows.map((r) => r.key.trim()))}</div>
     <${ProfileFiles} profile=${profile} />`;
 }
 

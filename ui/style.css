@@ -259,6 +259,10 @@ pre.source { background: var(--code); border-radius: 8px; padding: 12px; overflo
 .fields .eye:hover { color: var(--text); }
 .fields .eye svg { width: 15px; height: 15px; }
 .fields .remove { padding: 2px 8px; color: var(--muted); }
+.fields-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.fields-head h3 { flex: 1; min-width: 0; margin: 0; }
+.fields-head button { margin-left: auto; flex: none; }
+.fields-csv { display: block; width: 100%; margin-top: 10px; resize: vertical; white-space: pre; }
 .detail-actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
 .check-row { display: flex; align-items: center; gap: 6px; }
 .value.masked { -webkit-text-security: disc; }
@@ -441,7 +445,7 @@ input.case-title:focus { background: var(--input); }
 .chat-composer { flex: none; display: flex; gap: 8px; align-items: flex-end; padding: 10px 20px 14px; border-top: 1px solid var(--line); }
 .chat-composer textarea { flex: 1; resize: none; min-height: 52px; max-height: 160px; }
 .chat-composer button { height: 30px; }
-.profile-sheet > h3 { display: none; }
+.profile-sheet .fields-head h3 { display: none; }
 
 .fill-split { display: grid; grid-template-columns: minmax(380px, 1fr) minmax(360px, 1fr); height: 100%; }
 .fill-rows { overflow: auto; border-right: 1px solid var(--line); }
