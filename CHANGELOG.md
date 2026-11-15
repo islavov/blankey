@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1
 
 - Updates: while a new version is still being built, checking for updates no longer says it failed.
 - Profiles: Edit as CSV, above the fields, shows them as text, one field per line, to copy them into another profile.
