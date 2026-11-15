@@ -166,8 +166,9 @@ pub fn used_roles(
     used
 }
 
+/// Profile keys are flat: "address" is not a field because "address.city" is.
 pub fn has_field(infos: &[FieldInfo], key: &str) -> bool {
-    !key.is_empty() && infos.iter().any(|i| i.key == key || i.key.starts_with(&format!("{key}.")))
+    infos.iter().any(|i| i.key == key)
 }
 
 /// A var left to its template default that cannot give a vault value: the default is a bare "role.key" (plain
@@ -320,7 +321,8 @@ mod tests {
         assert!(uncovered(&var(&[("a", "buyer.full_name")]), &roles, &fields));
         assert!(uncovered(&var(&[("a", "{{ buyer.phone }}")]), &roles, &fields));
         assert!(!uncovered(&var(&[("a", "{{ buyer.full_name | upper }}")]), &roles, &fields));
-        assert!(!uncovered(&var(&[("a", "{{ buyer.address }}")]), &roles, &fields));
+        assert!(uncovered(&var(&[("a", "{{ buyer.address }}")]), &roles, &fields));
+        assert!(!uncovered(&var(&[("a", "{{ buyer.address.city }}")]), &roles, &fields));
         assert!(!uncovered(&var(&[("a", "{{ today() }}")]), &roles, &fields));
     }
 

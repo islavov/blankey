@@ -1,5 +1,6 @@
 //! Binding expressions: sandboxed Jinja (minijinja) with native result types, evaluated against role contexts.
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
 use std::str::FromStr;
 use std::sync::{LazyLock, OnceLock};
@@ -110,6 +111,7 @@ pub fn evaluate(expression: &str, context: &Value) -> Result<Value, String> {
     if expression.is_empty() {
         return Ok(Value::Null);
     }
+    let expression = &*reach_flat_keys(expression, context);
     if let Some(inner) = single_expression(expression) {
         let compiled = env.compile_expression(inner.trim()).map_err(describe)?;
         return compiled.eval(ctx).map(to_json).map_err(describe);
@@ -171,13 +173,49 @@ pub fn plain_path(expression: &str, roles: &HashSet<String>) -> Option<String> {
 
 fn scan_paths(code: &str, roles: &HashSet<String>, out: &mut BTreeSet<String>) {
     let chars: Vec<char> = code.chars().collect();
+    for (_, parts) in path_spans(&chars, roles) {
+        out.insert(parts.into_iter().map(|(part, _)| part).collect::<Vec<_>>().join("."));
+    }
+}
+
+/// Profiles are flat: "name" and "name.first" are two keys of a role. A path is rewritten to read the longest
+/// key the role holds, `owner.name.first` to `owner["name.first"]`; what follows the key stays as written.
+fn reach_flat_keys<'a>(expression: &'a str, context: &Value) -> Cow<'a, str> {
+    let Some(profiles) = context.as_object() else { return Cow::Borrowed(expression) };
+    let roles: HashSet<String> = profiles.keys().cloned().collect();
+    TAG_REGION.replace_all(expression, |tag: &regex::Captures| {
+        let whole = tag.get(0).expect("match");
+        let code = tag.get(1).or_else(|| tag.get(2)).expect("tag body");
+        let chars: Vec<char> = code.as_str().chars().collect();
+        let mut body = String::new();
+        let mut copied = 0;
+        for (start, parts) in path_spans(&chars, &roles) {
+            let role = &parts[0].0;
+            let held = (3..=parts.len()).rev().find_map(|count| {
+                let key = parts[1..count].iter().map(|(part, _)| part.as_str()).collect::<Vec<_>>().join(".");
+                profiles[role].get(&key).map(|_| (key, parts[count - 1].1))
+            });
+            if let Some((key, end)) = held.filter(|(key, _)| !key.contains(['"', '\\'])) {
+                body.extend(&chars[copied..start]);
+                body.push_str(&format!("{role}[\"{key}\"]"));
+                copied = end;
+            }
+        }
+        body.extend(&chars[copied..]);
+        format!("{}{body}{}", &expression[whole.start()..code.start()], &expression[code.end()..whole.end()])
+    })
+}
+
+/// Role-rooted paths in tag code: where each starts and its parts, each with the offset it ends at (in chars).
+fn path_spans(chars: &[char], roles: &HashSet<String>) -> Vec<(usize, Vec<(String, usize)>)> {
+    let mut spans = Vec::new();
     let mut i = 0;
     let ident_start = |c: char| c.is_alphabetic() || c == '_';
     let ident_char = |c: char| c.is_alphanumeric() || c == '_';
     while i < chars.len() {
         let c = chars[i];
         if c == '\'' || c == '"' {
-            i = skip_string(&chars, i);
+            i = skip_string(chars, i);
             continue;
         }
         if !ident_start(c) {
@@ -193,7 +231,7 @@ fn scan_paths(code: &str, roles: &HashSet<String>, out: &mut BTreeSet<String>) {
         if previous == Some(&'.') || !roles.contains(&name) {
             continue;
         }
-        let mut parts = vec![name];
+        let mut parts = vec![(name, i)];
         loop {
             let mut j = i;
             while j < chars.len() && chars[j].is_whitespace() {
@@ -220,18 +258,19 @@ fn scan_paths(code: &str, roles: &HashSet<String>, out: &mut BTreeSet<String>) {
                 if k < chars.len() && chars[k] == '(' {
                     break;
                 }
-                parts.push(attr);
+                parts.push((attr, j));
                 i = j;
             } else if j < chars.len() && chars[j] == '[' {
-                let Some((key, end)) = constant_index(&chars, j + 1) else { break };
-                parts.push(key);
+                let Some((key, end)) = constant_index(chars, j + 1) else { break };
+                parts.push((key, end));
                 i = end;
             } else {
                 break;
             }
         }
-        out.insert(parts.join("."));
+        spans.push((start, parts));
     }
+    spans
 }
 
 fn skip_string(chars: &[char], start: usize) -> usize {
@@ -272,39 +311,6 @@ fn constant_index(chars: &[char], mut i: usize) -> Option<(String, usize)> {
     (i < chars.len() && chars[i] == ']').then_some((key, i + 1))
 }
 
-/// {"a.b": 1, "list.0.x": 2} -> nested objects; all-numeric keys become lists.
-pub fn nest(flat: &IndexMap<String, Value>) -> Value {
-    let mut root = Map::new();
-    for (key, value) in flat {
-        let parts: Vec<&str> = key.split('.').collect();
-        let (leaf, parents) = parts.split_last().expect("split yields one part");
-        let mut node = &mut root;
-        for part in parents {
-            let entry = node.entry(part.to_string()).or_insert_with(|| Value::Object(Map::new()));
-            if !entry.is_object() {
-                *entry = Value::Object(Map::new());
-            }
-            node = entry.as_object_mut().expect("object");
-        }
-        if !node.get(*leaf).is_some_and(Value::is_object) {
-            node.insert(leaf.to_string(), value.clone());
-        }
-    }
-    listify(Value::Object(root))
-}
-
-fn listify(node: Value) -> Value {
-    let Value::Object(map) = node else { return node };
-    let converted: Map<String, Value> = map.into_iter().map(|(k, v)| (k, listify(v))).collect();
-    if !converted.is_empty() && converted.keys().all(|k| !k.is_empty() && k.chars().all(|c| c.is_ascii_digit())) {
-        let mut items: Vec<(u64, Value)> =
-            converted.into_iter().map(|(k, v)| (k.parse().unwrap_or(u64::MAX), v)).collect();
-        items.sort_by_key(|(k, _)| *k);
-        return Value::Array(items.into_iter().map(|(_, v)| v).collect());
-    }
-    Value::Object(converted)
-}
-
 fn flatten(data: &Value, prefix: &str, out: &mut IndexMap<String, Value>) {
     match data {
         Value::Object(map) => {
@@ -323,17 +329,18 @@ fn flatten(data: &Value, prefix: &str, out: &mut IndexMap<String, Value>) {
     }
 }
 
-/// key -> (type, value) of one profile as the nested object templates see.
+/// key -> (type, value) of one profile as the flat object templates read: {"name": .., "address.city": ..}.
 pub fn profile_context(values: &IndexMap<String, (String, String)>) -> Value {
-    let flat: IndexMap<String, Value> = values
-        .iter()
-        .filter(|(_, (_, value))| !value.is_empty())
-        .map(|(key, (field_type, value))| (key.clone(), fieldtypes::coerce(field_type, value)))
-        .collect();
-    nest(&flat)
+    Value::Object(
+        values
+            .iter()
+            .filter(|(_, (_, value))| !value.is_empty())
+            .map(|(key, (field_type, value))| (key.clone(), fieldtypes::coerce(field_type, value)))
+            .collect(),
+    )
 }
 
-/// An invented example dataset keyed by role, normalized like real profiles.
+/// An invented example dataset keyed by role, flat like real profiles.
 pub fn example_context(example: &Value) -> Value {
     let Some(roles) = example.as_object() else { return Value::Object(Map::new()) };
     Value::Object(
@@ -342,7 +349,7 @@ pub fn example_context(example: &Value) -> Value {
             .map(|(role, data)| {
                 let mut flat = IndexMap::new();
                 flatten(data, "", &mut flat);
-                (role.clone(), nest(&flat))
+                (role.clone(), Value::Object(flat.into_iter().collect()))
             })
             .collect(),
     )
@@ -399,12 +406,27 @@ mod tests {
     }
 
     #[test]
-    fn nest_builds_lists() {
-        let flat: IndexMap<String, Value> = [("a.b", json!(1)), ("l.1.x", json!("b")), ("l.0.x", json!("a"))]
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect();
-        assert_eq!(nest(&flat), json!({"a": {"b": 1}, "l": [{"x": "a"}, {"x": "b"}]}));
+    fn profile_keys_are_flat() {
+        let field = |key: &str, value: &str| (key.to_string(), ("text".to_string(), value.to_string()));
+        let values: IndexMap<String, (String, String)> = [
+            field("name.first", "Maria"),
+            field("name", "Maria Petrova"),
+            field("address.city", "Varna"),
+            field("phones.0.number", "0888"),
+        ]
+        .into_iter()
+        .collect();
+        let ctx = json!({"owner": profile_context(&values)});
+        let text = |expression: &str| evaluate(expression, &ctx).unwrap();
+        assert_eq!(text("{{ owner.name }}"), json!("Maria Petrova"));
+        assert_eq!(text("{{ owner.name.first }}"), json!("Maria"));
+        assert_eq!(text("{{ owner.name.first.upper() }} {{ owner.name | upper }}"), json!("MARIA MARIA PETROVA"));
+        assert_eq!(text("{{ owner.name[0] }}{{ owner.name.first[0] }}"), json!("MM"));
+        assert_eq!(text("{% if owner.name.first == 'Maria' %}yes{% endif %}"), json!("yes"));
+        assert_eq!(text("{{ owner.address }}"), Value::Null);
+        assert_eq!(text("{{ owner.address.city }}"), json!("Varna"));
+        assert_eq!(text("{{ owner.phones[0].number }}"), json!("0888"));
+        assert_eq!(text("{{ 'owner.name.first' }}"), json!("owner.name.first"));
     }
 
     #[test]
@@ -414,7 +436,7 @@ mod tests {
         );
         assert_eq!(evaluate("{{ loan.amount | money }}", &ctx).unwrap(), json!("150 000"));
         assert_eq!(evaluate("{{ loan.missing.deep }}", &ctx).unwrap(), Value::Null);
-        assert_eq!(evaluate("{{ loan.items | sum }}", &ctx).unwrap(), json!(3));
+        assert_eq!(evaluate("{{ loan.items[0] + loan.items[1] }}", &ctx).unwrap(), json!(3));
         assert_eq!(evaluate("{{ loan.amount > 1000 }}", &ctx).unwrap(), json!(true));
         assert_eq!(evaluate("{{ p.name | upper }} е", &ctx).unwrap(), json!("ИВАН е"));
         assert_eq!(evaluate("{{ p.name.upper() }}", &ctx).unwrap(), json!("ИВАН"));
@@ -448,6 +470,6 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        assert_eq!(profile_context(&values), json!({"amount": 1500, "address": {"city": "София"}, "married": true}));
+        assert_eq!(profile_context(&values), json!({"amount": 1500, "address.city": "София", "married": true}));
     }
 }

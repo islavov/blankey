@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Filling: a profile key that has other keys under it, such as `name` beside `name.first`, fills its own value and
+  no longer a list of the keys under it. A template that reads `address` when the profile only has `address.city`
+  is reported as missing that field.
+
 ## 0.4.1
 
 - Updates: while a new version is still being built, checking for updates no longer says it failed.
