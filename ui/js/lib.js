@@ -1,4 +1,4 @@
-import { html, useEffect, useState } from "../vendor/preact-htm.js";
+import { html, useEffect, useRef, useState } from "../vendor/preact-htm.js";
 import { number, t } from "./i18n.js";
 
 export { html };
@@ -60,7 +60,8 @@ export const Icon = ({ name }) => html`<svg viewBox="0 0 16 16" dangerouslySetIn
 // -- app-wide state ------------------------------------------------------------------------
 // Only what crosses components: the rest lives in component state. caseId and caseTab: the case open on the Cases
 // page and its tab, null for the default one; drag: files dragged over the window, { into: over the open case,
-// opening: the case they are held over }, else null.
+// opening: the case they are held over }, else null. generated: the documents just made, marked in the list that
+// shows them.
 
 export const state = {
   status: null,
@@ -69,6 +70,7 @@ export const state = {
   caseId: null,
   caseTab: null,
   drag: null,
+  generated: [],
   search: "",
   gateReason: "",
   recoveryKey: null,
@@ -95,6 +97,30 @@ export function useStore() {
     return () => listeners.delete(listener);
   }, []);
   return state;
+}
+
+/** Goes to the documents just generated, where they are marked: from the Cases page to the Documents tab of their
+ * case, from anywhere else to the Documents page. */
+export const showGenerated = (ids, caseId) =>
+  update({
+    ...(state.page === "cases" && caseId != null ? { caseId, caseTab: "documents" } : { page: "documents" }),
+    generated: ids,
+    search: "",
+    revision: state.revision + 1,
+  });
+
+/** The row class of a document list: marks the documents just generated, until the list is left. */
+export function useGenerated() {
+  const shown = useRef(state.generated);
+  shown.current = state.generated;
+  useEffect(
+    () => () => {
+      // a list left for the one that shows newer documents leaves those alone
+      if (state.generated === shown.current) state.generated = [];
+    },
+    []
+  );
+  return (doc) => (shown.current.includes(doc.id) ? "fresh" : "");
 }
 
 /** Reloads the data of the current page. */

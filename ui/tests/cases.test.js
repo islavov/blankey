@@ -368,6 +368,21 @@ test("templates: the case's own first; make global; fill goes into the case", as
   assert.deepEqual(rows(), ["NZOK request PDF 2 Global", "Sale contract, Oak Street Word 9 Global"]);
 });
 
+test("fill sets: Generate goes to the case's Documents tab and marks the new ones", async () => {
+  backend.db.sets.push({ id: 5, name: "oak", templates: ["oak-sale"], profiles: ["Mary"], updated_at: "2026-11-02T10:00:00", case_id: 1 });
+  await tab("Templates");
+  await tab("Fill sets");
+  await rowMenu("oak", "Generate");
+  await settle();
+  assert.equal(text(".toolbar h2"), "Cases");
+  assert.ok($(".case-tabs .chip.active").textContent.trim().startsWith("Documents"));
+  assert.equal(rows().length, 3);
+  assert.equal($$(".case-tab .grid tr.fresh").length, 2);
+  assert.equal(backend.called("open_documents").length, 0);
+  backend.db.sets.pop();
+  backend.db.docs.splice(-2);
+});
+
 test("the global pages: Profiles and Templates show global items, Documents names the case", async () => {
   await goTo("Profiles");
   const names = $$(".split .list-item .title").map((el) => el.textContent);

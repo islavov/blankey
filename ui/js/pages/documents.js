@@ -1,6 +1,6 @@
 import { call } from "../api.js";
 import { t, tn } from "../i18n.js";
-import { CaseLink, html, matches, reload, useLoad, when } from "../lib.js";
+import { CaseLink, html, matches, reload, useGenerated, useLoad, when } from "../lib.js";
 import { confirmDialog, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
 import { Table, useSelection } from "../ui/table.js";
@@ -9,6 +9,7 @@ import { openDocuments } from "../viewer.js";
 export function Documents() {
   const docs = useLoad(() => call("list_documents"), []);
   const [picked, pick, setSelected] = useSelection("documents");
+  const fresh = useGenerated();
   if (!docs) return null;
   const selected = picked.filter((id) => docs.some((d) => d.id === id));
 
@@ -43,6 +44,7 @@ export function Documents() {
             selected=${selected}
             onPick=${pick}
             onOpen=${(id) => open([id])}
+            rowClass=${fresh}
             columns=${[
               { title: t("Title"), cell: (d) => d.title },
               { title: t("Template"), cell: (d) => html`<span class="mono">${d.template_id}</span>` },

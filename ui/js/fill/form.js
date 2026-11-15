@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "../../vendor/preact-htm.js";
 import { call, invoke } from "../api.js";
 import { HelpNote } from "../help.js";
 import { t, tn } from "../i18n.js";
-import { html } from "../lib.js";
+import { html, showGenerated } from "../lib.js";
 import { Preview } from "../preview.js";
 import { refreshAfterRequests } from "../requests.js";
 import { alertDialog, isDialogOpen, toast } from "../ui/feedback.js";
@@ -174,6 +174,7 @@ function FillForm({ session: s, close }) {
       if (generate) {
         toast(tn(result.document_ids.length, "{n} document generated", "{n} documents generated"));
         finish();
+        showGenerated(result.document_ids, s.case_id);
       } else toast(t("Fill set saved"));
     } catch (e) {
       await alertDialog("Blankey", String(e));

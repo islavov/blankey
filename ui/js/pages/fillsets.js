@@ -1,17 +1,19 @@
 import { call, withBusy } from "../api.js";
 import { openFill } from "../fill/form.js";
 import { t, tn } from "../i18n.js";
-import { CaseLink, html, matches, reload, useLoad, when } from "../lib.js";
+import { CaseLink, html, matches, reload, showGenerated, useLoad, when } from "../lib.js";
 import { confirmDialog, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
 import { Table, useSelection } from "../ui/table.js";
 
-/** Makes the documents of fill sets again, with the profiles' current values. */
-export const generateFillSets = (ids) =>
+/** Makes the documents of fill sets again, with the profiles' current values, and shows them. caseId: the case
+ * they are generated from, when on its Fill sets tab. */
+export const generateFillSets = (ids, caseId) =>
   withBusy(async () => {
-    let made = 0;
-    for (const id of ids) made += (await call("generate_fill_set", { id })).length;
-    toast(tn(made, "{n} document generated", "{n} documents generated"));
+    const made = [];
+    for (const id of ids) made.push(...(await call("generate_fill_set", { id })));
+    toast(tn(made.length, "{n} document generated", "{n} documents generated"));
+    showGenerated(made, caseId);
   });
 
 export function FillSets() {
@@ -40,7 +42,7 @@ export function FillSets() {
   return html`
     <${Page} title=${t("Fill sets")} subtitle=${tn(sets.length, "{n} set", "{n} sets")} actions=${[
       [t("Open"), need((id) => openFill({ fill_set_id: id })), "", "fillsets.open"],
-      [t("Generate"), needAll(generateFillSets), "", "fillsets.generate"],
+      [t("Generate"), needAll((ids) => generateFillSets(ids)), "", "fillsets.generate"],
       [t("Delete"), needAll(remove), "danger", "fillsets.delete"],
     ]}>
       ${visible.length

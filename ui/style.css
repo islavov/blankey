@@ -212,6 +212,7 @@ table.grid { width: 100%; border-collapse: collapse; }
 .grid tbody tr:hover { background: var(--hover); }
 .grid tbody tr.selected { background: var(--accent-soft); }
 .grid tr.pending td:first-child { font-weight: 600; }
+.grid tr.fresh td:first-child { font-weight: 600; box-shadow: inset 3px 0 0 var(--accent); }
 .status { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 9px; background: var(--selected); white-space: nowrap; }
 .status.pending { background: var(--pending); }
 .status.stale, .status.unreadable, .status.scan { background: var(--warn-soft); color: var(--warn); }

@@ -121,4 +121,7 @@ test("Save and Generate answers the request and closes the form", async () => {
   assert.equal($(".sheet"), null);
   assert.equal(text("#toast"), "2 documents generated");
   assert.equal(backend.db.requests.length, 0);
+  await settle();
+  assert.equal(text(".toolbar h2"), "Documents");
+  assert.equal($$(".grid tr.fresh").length, 2, "the new documents are marked");
 });

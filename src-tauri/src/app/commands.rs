@@ -1118,12 +1118,7 @@ fn list_fill_sets(state: State<AppState>, case_id: Option<i64>) -> CmdResult<Vec
 #[tauri::command]
 async fn generate_fill_set(state: State<'_, AppState>, id: i64) -> CmdResult<Vec<i64>> {
     let app = state.app.clone();
-    let ids = tauri::async_runtime::spawn_blocking(move || app.generate_fill(id)).await.map_err(err)??;
-    for doc in &ids {
-        let (filename, content) = state.app.vault().load_document(*doc).map_err(err)?;
-        platform::open_document(&filename, &content)?;
-    }
-    Ok(ids)
+    tauri::async_runtime::spawn_blocking(move || app.generate_fill(id)).await.map_err(err)?.map_err(err)
 }
 
 #[tauri::command]
@@ -1650,14 +1645,7 @@ fn fill_profile_entries(state: State<AppState>, profile_id: i64) -> CmdResult<Ve
 #[tauri::command]
 async fn fill_save(handle: AppHandle, state: State<'_, AppState>, args: fill::SaveArgs) -> CmdResult<fill::Saved> {
     let app = state.app.clone();
-    let generate = args.generate;
     let saved = tauri::async_runtime::spawn_blocking(move || fill::save(&app, args)).await.map_err(err)??;
-    if generate {
-        for doc in &saved.document_ids {
-            let (filename, content) = state.app.vault().load_document(*doc).map_err(err)?;
-            platform::open_document(&filename, &content)?;
-        }
-    }
     tray::refresh(&handle);
     let _ = handle.emit("requests-changed", ());
     Ok(saved)

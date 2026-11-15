@@ -253,6 +253,17 @@ export function createBackend(db = seed()) {
   const removeRequest = (id) => (db.requests = db.requests.filter((r) => r.id !== id));
 
   const caseTitle = (id) => db.cases.find((c) => c.id === id)?.title ?? null;
+  /** Two new documents, in the case if any; returns their ids. */
+  const generate = (caseId) => {
+    const next = Math.max(0, ...db.docs.map((d) => d.id)) + 1;
+    const made = [
+      { id: next, title: "NZOK (acme)", template_id: "nzok", filename: "nzok.pdf", pages: 2 },
+      { id: next + 1, title: "Loan (acme)", template_id: "loan", filename: "loan.docx", pages: 0 },
+    ];
+    db.docs.push(...made.map((d) => ({ ...d, case_id: caseId ?? null, created_at: "2026-10-26T10:00:00" })));
+    return made.map((d) => d.id);
+  };
+
   // with a case: its rows; without one: every row, labelled with its case
   const inCase = (rows, caseId) =>
     caseId == null ? rows.map((r) => ({ ...r, case_id: r.case_id ?? null, case_title: caseTitle(r.case_id) })) : rows.filter((r) => r.case_id === caseId);
@@ -335,7 +346,7 @@ export function createBackend(db = seed()) {
         caseId
       ),
     list_fill_sets: ({ caseId } = {}) => inCase(db.sets, caseId),
-    generate_fill_set: () => [5, 6],
+    generate_fill_set: ({ id }) => generate(db.sets.find((s) => s.id === id)?.case_id),
     delete_fill_set: ({ id }) => {
       db.sets = db.sets.filter((s) => s.id !== id);
     },
@@ -689,7 +700,7 @@ export function createBackend(db = seed()) {
     fill_save: ({ args }) => {
       if (!args.name) throw "Enter a fill set name";
       if (args.request_id) removeRequest(args.request_id);
-      return { fill_set_id: 9, document_ids: args.generate ? [3, 4] : [] };
+      return { fill_set_id: 9, document_ids: args.generate ? generate(args.case_id) : [] };
     },
     fill_close: ({ args }) => removeRequest(args.request_id),
     catalog: ({ language }) => (language === "en" ? {} : JSON.parse(readFileSync(new URL(`../i18n/${language}.json`, import.meta.url), "utf8"))),
