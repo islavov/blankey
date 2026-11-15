@@ -115,6 +115,7 @@ const HELP = {
   "profiles.delete": () => [t("Delete profile"), t("Deletes the selected profiles with all their fields and files.")],
   "profiles.list": () => [t("Profiles"), t("Click one to edit it; Cmd/Ctrl-click or Shift-click selects several to delete.")],
   "profiles.fields": () => [t("Fields"), t("The key names the value for templates (address.city), the label is for people, the type checks the value. Edit, then Save.")],
+  "profiles.csv": () => [t("Edit as CSV"), t("Shows the fields as CSV text, one per line, to copy them into another profile. Edit as table switches back.")],
   "profiles.add": () => [t("Add field"), t("Adds an empty row for a new field.")],
   "profiles.eye": () => [t("Show value"), t("Shows or hides this one value, to check it.")],
   "profiles.reveal": () => [t("Show values"), t("Shows the values instead of dots.")],

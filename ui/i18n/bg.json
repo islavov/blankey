@@ -288,6 +288,12 @@
   "Fix the problems below": "Поправете проблемите по-долу",
   "Your AI assistant sees field names, labels, types and how long the values are. Never the values.": "AI асистентът ви вижда имената, етикетите и типовете на полетата и дължината на стойностите. Никога самите стойности.",
   "Show values": "Покажи стойностите",
+  "Edit as CSV": "Редактирай като CSV",
+  "Edit as table": "Редактирай като таблица",
+  "Line {line}: expected key, label, type, value": "Ред {line}: очакват се ключ, етикет, тип и стойност",
+  "Line {line}: unknown type \"{type}\"": "Ред {line}: непознат тип „{type}“",
+  "Line {line}: the key is missing": "Ред {line}: липсва ключ",
+  "Line {line}: the key \"{key}\" is already on line {first}": "Ред {line}: ключът „{key}“ вече е на ред {first}",
   "{n} profile": {
     "one": "{n} профил",
     "other": "{n} профила"
@@ -550,6 +556,7 @@
   "Changes the name or the kind of the selected profile.": "Променя името или вида на избрания профил.",
   "Click one to edit it; Cmd/Ctrl-click or Shift-click selects several to delete.": "Щракнете върху профил, за да го редактирате; с Cmd/Ctrl или Shift избирате няколко за изтриване.",
   "The key names the value for templates (address.city), the label is for people, the type checks the value. Edit, then Save.": "Ключът (напр. address.city) е името, по което шаблоните намират стойността, етикетът е за хората, а типът проверява дали стойността е валидна. Редактирайте и натиснете „Запази“.",
+  "Shows the fields as CSV text, one per line, to copy them into another profile. Edit as table switches back.": "Показва полетата като CSV текст, по едно на ред, за да ги копирате в друг профил. „Редактирай като таблица“ връща таблицата.",
   "Adds an empty row for a new field.": "Добавя празен ред за ново поле.",
   "Shows the values instead of dots.": "Показва стойностите вместо точки.",
   "Saves the edited fields to the vault. Problems are listed under the table.": "Запазва промените в трезора. Ако има грешки, ще ги видите под таблицата.",
