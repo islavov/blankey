@@ -140,14 +140,10 @@ pub fn check(
                 report.missing.push(path.clone());
                 continue;
             };
-            let matches: Vec<&FieldInfo> = infos
-                .iter()
-                .filter(|i| !key.is_empty() && (i.key == key || i.key.starts_with(&format!("{key}."))))
-                .collect();
-            if matches.is_empty() {
-                report.missing.push(path.clone());
-            } else if !matches.iter().any(|i| i.length > 0) {
-                report.empty.push(path.clone());
+            match infos.iter().find(|i| i.key == key) {
+                None => report.missing.push(path.clone()),
+                Some(info) if info.length == 0 => report.empty.push(path.clone()),
+                Some(_) => {}
             }
         }
         if !report.missing.is_empty() {
