@@ -4,7 +4,7 @@ import { CaseChat, Spinner, useRunning, useWorked } from "../chat.js";
 import { openFill } from "../fill/form.js";
 import { HelpNote } from "../help.js";
 import { t, tn } from "../i18n.js";
-import { html, Icon, KIND_NAMES, matches, megabytes, reload, state, update, useLoad, useStore, when } from "../lib.js";
+import { html, Icon, KIND_NAMES, matches, megabytes, reload, state, update, useGenerated, useLoad, useStore, when } from "../lib.js";
 import { openDocumentCheck } from "../docread.js";
 import { openReview } from "../review.js";
 import { openDocuments, openViewer } from "../viewer.js";
@@ -671,10 +671,7 @@ function CaseFillSets({ info }) {
     await openFill({ fill_set_id: set.id });
     reload();
   };
-  const generate = async (chosen) => {
-    await generateFillSets(chosen.map((s) => s.id));
-    reload();
-  };
+  const generate = (chosen) => generateFillSets(chosen.map((s) => s.id), info.id);
   const remove = async (chosen) => {
     const title = chosen.length === 1 ? t("Delete the fill set \"{name}\"?", { name: chosen[0].name }) : tn(chosen.length, "Delete {n} fill set?", "Delete {n} fill sets?");
     if (!(await confirmDialog(title, t("Generated documents are kept.")))) return;
@@ -706,6 +703,7 @@ function CaseFillSets({ info }) {
 
 function CaseDocuments({ info }) {
   const docs = useLoad(() => call("list_documents", { caseId: info.id }), [info.id]);
+  const fresh = useGenerated();
   if (!docs) return null;
 
   const open = (doc) => openDocuments([doc.id]);
@@ -737,6 +735,7 @@ function CaseDocuments({ info }) {
       { title: t("Size"), cell: (d) => (d.pages ? tn(d.pages, "{n} page", "{n} pages") : "-"), cls: "nowrap" },
       { title: t("Created"), cell: (d) => html`<span class="muted">${when(d.created_at)}</span>`, cls: "nowrap" },
     ]}
+    rowClass=${fresh}
     empty=${t("No documents yet. What Blankey fills in for this case from a template shows here.")} />`;
 }
 

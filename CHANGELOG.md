@@ -5,6 +5,8 @@
 - Filling: a profile key that has other keys under it, such as `name` beside `name.first`, fills its own value and
   no longer a list of the keys under it. A template that reads `address` when the profile only has `address.city`
   is reported as missing that field.
+- Generating: new documents no longer open in their apps. Blankey goes to the documents instead, the Documents tab
+  of the case or the Documents page, and marks the ones just made.
 
 ## 0.4.1
 

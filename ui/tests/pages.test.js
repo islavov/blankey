@@ -70,6 +70,23 @@ test("documents: cmd-click selects several, delete asks first", async () => {
   assert.equal(text(".empty"), "No documents yet. Documents are generated from fill sets.");
 });
 
+test("fill sets: Generate goes to Documents and marks the new ones, without opening them", async () => {
+  await goTo("Fill sets");
+  await click($(".grid tbody tr"));
+  const opened = backend.called("open_documents").length;
+  await action("Generate");
+  await settle();
+  assert.equal(text(".toolbar h2"), "Documents");
+  assert.equal(text("#toast"), "2 documents generated");
+  assert.equal(rows().length, 2);
+  assert.equal($$(".grid tr.fresh").length, 2);
+  assert.equal(backend.called("open_documents").length, opened);
+
+  await goTo("Fill sets");
+  await goTo("Documents");
+  assert.equal($$(".grid tr.fresh").length, 0, "marked only until the list is left");
+});
+
 test("search filters the current page and clears on navigation", async () => {
   await goTo("Fill sets");
   assert.equal(rows().length, 1);
