@@ -101,17 +101,32 @@ Online account.
 - In files the assistant reads, personal data is masked (like Xxxx Xxxxxx). Personal data… on a file shows what is
   hidden and lets the user hide more or less.
 
+## Workspaces and backup
+
+- A workspace is a separate set of profiles, cases, templates and documents with its own master password and its own
+  Blankey Online sign-in. The column at the far left lists them. Clicking another one restarts Blankey into it; the
+  assistant always works in the one that is open.
+- `+` under the workspaces adds one: "New workspace…" starts empty, "Restore from backup…" makes one from a backup
+  file.
+- Settings, under Workspace: "Local backup…" asks for the master password and saves the whole open workspace as one
+  `.blankey` file encrypted with it, to keep on another disk or move to another computer. The restored workspace
+  opens with the password the backup was made with.
+- "Delete workspace…" in Settings deletes the open workspace for good after its master password. The only workspace
+  cannot be deleted.
+
 ## Lock, password and safety
 
 - Everything is encrypted with the user's password on this computer. Lock (bottom of the sidebar) makes it unreadable
   until it is unlocked; the assistant cannot work on a locked vault.
 - A forgotten password cannot be reset by anyone. The recovery key shown when the vault was created is the only other
   way in.
-- Exported files and files opened in another app are copies outside the vault; Blankey does not protect those.
+- Exported files and files opened in another app are copies outside the vault; Blankey does not protect those. A
+  local backup is encrypted with the master password.
 
 ## Settings
 
-Language (English or Bulgarian), light or dark look, updates, the help box, the MCP server and Blankey Online.
+The open workspace with its backup, language (English or Bulgarian), light or dark look, updates, the help box, the
+MCP server and Blankey Online. All but the workspace and Blankey Online are the same in every workspace.
 
 ## When something does not work
 

@@ -14,7 +14,6 @@ use serde_json::{json, Value};
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
-use crate::config::Config;
 use crate::core::Blankey;
 use crate::relay::{blocking, oauth::platform};
 
@@ -108,7 +107,7 @@ impl Mixpanel {
             held(&self.queue).clear();
         }
         // as it is on disk now, so other settings changed since launch stay
-        let mut config = Config::load_from(self.app.config.data_dir.clone()).map_err(|e| e.to_string())?;
+        let mut config = self.app.config.reload().map_err(|e| e.to_string())?;
         config.beta_data = enabled;
         config.save().map_err(|e| e.to_string())?;
         self.app.audit("user", if enabled { "beta_data_on" } else { "beta_data_off" }, "");
@@ -298,13 +297,13 @@ mod tests {
         mixpanel.track("Page Viewed", json!({ "page": "profiles" }));
         mixpanel.set_enabled(false).unwrap();
         assert!(!mixpanel.enabled());
-        assert!(!Config::load_from(app.config.data_dir.clone()).unwrap().beta_data);
+        assert!(!app.config.reload().unwrap().beta_data);
         app.audit("user", "generate", "template=loan document=8");
         mixpanel.flush().await.unwrap();
         assert_eq!(posts.lock().unwrap().len(), 3, "nothing while off");
 
         mixpanel.set_enabled(true).unwrap();
-        assert!(Config::load_from(app.config.data_dir.clone()).unwrap().beta_data);
+        assert!(app.config.reload().unwrap().beta_data);
         mixpanel.flush().await.unwrap();
         let on = posts.lock().unwrap()[3].clone();
         assert_eq!((on.as_array().unwrap().len(), on[0]["event"].as_str()), (1, Some("beta_data_on")));

@@ -96,6 +96,14 @@ impl Repo {
         Ok(Self { conn: Mutex::new(conn) })
     }
 
+    /// A consistent copy of the whole database at `target`.
+    pub fn backup_to(&self, target: &Path) -> Result<(), String> {
+        let mut copy = Connection::open(target).map_err(string)?;
+        let conn = self.conn();
+        let backup = rusqlite::backup::Backup::new(&conn, &mut copy).map_err(string)?;
+        backup.run_to_completion(64, std::time::Duration::ZERO, None).map_err(string)
+    }
+
     fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock().expect("library connection")
     }

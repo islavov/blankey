@@ -6,6 +6,7 @@ import { html, reload, state, update, useStore } from "./lib.js";
 import { processRequests } from "./requests.js";
 import { toast } from "./ui/feedback.js";
 import { Select } from "./ui/select.js";
+import { deleteWorkspace } from "./workspaces.js";
 
 /** Shows the app after an unlock: Activity first when the assistant is waiting, then the waiting requests. */
 export async function enterApp() {
@@ -110,6 +111,8 @@ function Setup() {
       <input type="password" name="confirm" placeholder=${t("Repeat password")} />
       <label class="check small"><input type="checkbox" name="keyring" /> ${keyringLabel(status)}</label>
       <button class="primary">${t("Create vault")}</button>
+      ${status.workspaces.length > 1 &&
+      html`<button type="button" class="link" id="workspace-delete" onClick=${() => deleteWorkspace(status)}>${t("Delete this workspace")}</button>`}
     </${GateForm}>`;
 }
 

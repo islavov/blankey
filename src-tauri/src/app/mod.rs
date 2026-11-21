@@ -22,6 +22,10 @@ use crate::i18n;
 use crate::keychain::{self, OsKeyring};
 
 const AUTO_LOCK_CHECK: Duration = Duration::from_secs(30);
+/// In the root dir while Blankey starts again by itself, into another workspace.
+const RELAUNCH_MARK: &str = "relaunching";
+/// How long a relaunched Blankey waits for the one it replaces to go.
+const RELAUNCH_WAIT: Duration = Duration::from_secs(5);
 
 pub struct AppState {
     pub app: Arc<Blankey>,
@@ -226,11 +230,35 @@ pub fn quit(handle: &AppHandle) {
     handle.exit(0);
 }
 
+/// Locks and starts Blankey again, into the workspace workspaces.json names as open by now.
+pub(super) fn relaunch(handle: &AppHandle) -> ! {
+    let _ = std::fs::write(state(handle).app.config.root_dir.join(RELAUNCH_MARK), "");
+    stop_chats(handle);
+    state(handle).app.lock();
+    platform::clear_opened_documents();
+    handle.restart()
+}
+
+/// Whether another Blankey still answers after `RELAUNCH_WAIT`: the one that relaunched is on its way out.
+fn outlasts_relaunch(health_url: &str) -> bool {
+    let deadline = Instant::now() + RELAUNCH_WAIT;
+    while server_running(health_url) {
+        if Instant::now() > deadline {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
 pub fn run() {
     let mut config = Config::load().expect("cannot create the data directory");
-    let already_running = server_running(&config.health_url());
+    let relaunched = std::fs::remove_file(config.root_dir.join(RELAUNCH_MARK)).is_ok();
+    let health_url = config.health_url();
+    let already_running = if relaunched { outlasts_relaunch(&health_url) } else { server_running(&health_url) };
     let mut moved_from = None;
     if !already_running {
+        crate::workspaces::cleanup(&config.root_dir);
         let port = free_port(config.port);
         if port != config.port {
             // saved, so the stdio bridge and the copied connect commands use the new address from now on
@@ -331,7 +359,7 @@ pub fn run() {
             }
             let first_run = !app.vault().initialized();
             let pending = app.vault().count_requests("pending").unwrap_or(0) > 0;
-            if first_run || pending {
+            if first_run || pending || relaunched {
                 show_main(&handle);
             }
             // with Touch ID the vault stays locked until first use; without it the keychain unlocks it, off the

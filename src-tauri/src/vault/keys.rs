@@ -48,6 +48,14 @@ impl Vault {
         self.unwrap_dek(&kek, "wrapped_password")
     }
 
+    /// Whether this is the master password; changes nothing.
+    pub fn verify_password(&self, password: &str) -> bool {
+        let Ok(params) = self.load_kdf("kdf") else { return false };
+        let Ok(kek) = crypto::derive_key(password, &params) else { return false };
+        let wrapped = self.repo.meta("wrapped_password").ok().flatten();
+        wrapped.is_some_and(|wrapped| crypto::unwrap_key(kek.as_ref(), &wrapped).is_ok())
+    }
+
     pub fn unlock_with_recovery(&mut self, recovery_key: &str, new_password: &str) -> Result<()> {
         let params = self.load_kdf("recovery_kdf")?;
         let kek = crypto::derive_key(&crypto::normalize_recovery_key(recovery_key), &params)?;

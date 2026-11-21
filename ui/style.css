@@ -153,6 +153,14 @@ input[type=checkbox] { accent-color: var(--accent); }
 .link:hover { text-decoration: underline; background: none !important; }
 
 /* -- layout ------------------------------------------------------------------- */
+.shell { display: grid; grid-template-columns: 52px minmax(0, 1fr); height: 100%; }
+.rail { background: var(--sidebar); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 8px; padding-bottom: 10px; overflow: auto; }
+.rail-top { height: 36px; flex: none; align-self: stretch; }
+.rail button { width: 34px; height: 34px; flex: none; padding: 0; border-radius: 8px; font-size: 12px; font-weight: 600; }
+.rail-item { background: var(--selected); border-color: transparent; color: var(--muted); }
+.rail-item.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); cursor: default; }
+.rail-item.active:hover:not(:disabled) { background: var(--accent); }
+.rail-add { border-style: dashed; color: var(--muted); font-size: 16px; font-weight: 400; }
 .app { display: grid; grid-template-columns: 220px 1fr; height: 100%; }
 .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
 .sidebar-top { height: 44px; flex: none; }

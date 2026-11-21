@@ -13,6 +13,7 @@ import { hidePopup, isMenuOpen } from "./ui/menu.js";
 import { applyTheme } from "./theme.js";
 import { closeSheet, escapeSheet } from "./ui/sheet.js";
 import { Welcome } from "./welcome.js";
+import { WorkspaceRail } from "./workspaces.js";
 
 // script errors go to the app's log, where they can be read when the window comes up blank
 const report = (message) => invoke("log_error", { message: String(message) }).catch(() => {});
@@ -25,6 +26,10 @@ syncReplay().catch(report);
 function Root() {
   const { status, recoveryKey } = useStore();
   if (!status) return null;
+  return html`<div class="shell"><${WorkspaceRail} /><${Screen} status=${status} recoveryKey=${recoveryKey} /></div>`;
+}
+
+function Screen({ status, recoveryKey }) {
   if (recoveryKey || !status.initialized || !status.unlocked) return html`<${Gate} />`;
   if (status.first_use === "wizard") return html`<${Welcome} />`;
   return html`<${App} />`;

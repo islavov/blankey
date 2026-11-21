@@ -93,6 +93,11 @@ impl Library {
         Ok(Self { repo: Repo::open(path)?, scanned: Mutex::new(None), generation: AtomicU64::new(0) })
     }
 
+    /// A consistent copy of the whole database at `target`, for a local backup.
+    pub fn snapshot_to(&self, target: &Path) -> Result<(), String> {
+        self.repo.backup_to(target)
+    }
+
     pub fn roots(&self) -> Result<Vec<Root>, String> {
         self.repo.roots()
     }

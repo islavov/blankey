@@ -6,6 +6,10 @@ import { seed, stored } from "../backend.js";
 export function demo() {
   return {
     relay: { ...seed().relay, chat: true },
+    workspaces: [
+      { id: "default", name: "Personal", kind: "local" },
+      { id: "w-2", name: "Oak Street Office", kind: "local" },
+    ],
     chats: { 1: saleChat() },
     profiles: [
       { id: 1, name: "John", kind: "person" },

@@ -7,6 +7,7 @@ import { confirmDialog, dialog, toast } from "../ui/feedback.js";
 import { Empty, Page } from "../ui/page.js";
 import { Select } from "../ui/select.js";
 import { Table } from "../ui/table.js";
+import { backupWorkspace, deleteWorkspace, openWorkspace } from "../workspaces.js";
 
 export function stateLabel(state) {
   const labels = {
@@ -96,6 +97,16 @@ export function Settings() {
   const languages = [["", t("Default")], ...Object.entries(status.languages)];
   return html`
     <${Page} title=${t("Settings")}>
+      <div class="relay">
+        <div class="relay-head">${t("Workspace")}</div>
+        <div class="relay-row" data-help="settings.workspace">
+          <span class="muted">${t("Name")}</span>
+          <span class="selectable" id="workspace-name">${openWorkspace(status).name}</span>
+          <span class="spacer"></span>
+          <button id="backup-create" onClick=${backupWorkspace}>${t("Local backup…")}</button>
+          <button id="workspace-delete" class="danger" disabled=${status.workspaces.length < 2} onClick=${() => deleteWorkspace(status)}>${t("Delete workspace…")}</button>
+        </div>
+      </div>
       <div class="relay">
         <div class="relay-head">${t("General")}</div>
         <div class="relay-row" data-help="settings.language">

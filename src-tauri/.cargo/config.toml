@@ -1,0 +1,4 @@
+# Hardware AES-GCM on Apple Silicon: the aes and polyval crates use the ARM instructions only when asked to, and
+# run in software otherwise (Intel picks AES-NI by itself). Speeds up the vault and local backups.
+[target.'cfg(all(target_arch = "aarch64", target_os = "macos"))']
+rustflags = ["--cfg", "aes_armv8", "--cfg", "polyval_armv8"]

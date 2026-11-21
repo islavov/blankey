@@ -69,6 +69,11 @@ impl Vault {
     }
 }
 
+/// The newest database layout this build reads; a vault from a later one is refused.
+pub fn schema_version() -> i64 {
+    repo::schema::MIGRATIONS.len() as i64
+}
+
 pub fn now() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
 }

@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
-use crate::config::{Config, OFFICIAL_RELAY};
+use crate::config::OFFICIAL_RELAY;
 use crate::core::Blankey;
 use crate::relay::{blocking, oauth::platform};
 use crate::vault::kept_months;
@@ -77,7 +77,7 @@ impl Telemetry {
     pub async fn set_enabled(&self, enabled: bool) -> Result<(), String> {
         *self.enabled.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = enabled;
         // as it is on disk now, so other settings changed since launch stay
-        let mut config = Config::load_from(self.app.config.data_dir.clone()).map_err(|e| e.to_string())?;
+        let mut config = self.app.config.reload().map_err(|e| e.to_string())?;
         config.telemetry = enabled;
         config.save().map_err(|e| e.to_string())?;
         self.app.audit("user", if enabled { "telemetry_on" } else { "telemetry_off" }, "");
@@ -193,7 +193,7 @@ mod tests {
 
         telemetry.set_enabled(false).await.unwrap();
         assert!(!telemetry.enabled());
-        assert!(!Config::load_from(app.config.data_dir.clone()).unwrap().telemetry);
+        assert!(!app.config.reload().unwrap().telemetry);
         let (_, off) = stub.posts.lock().unwrap()[2].clone();
         assert_eq!(off["opt_out"], true);
         telemetry.send(false).await.unwrap();
@@ -202,7 +202,7 @@ mod tests {
         telemetry.set_enabled(true).await.unwrap();
         let (_, on) = stub.posts.lock().unwrap()[3].clone();
         assert_eq!(on["opt_out"], false);
-        assert!(Config::load_from(app.config.data_dir.clone()).unwrap().telemetry);
+        assert!(app.config.reload().unwrap().telemetry);
 
         // a relay that does not take the key: logged, nothing else
         stub.reject.store(true, Ordering::SeqCst);
@@ -210,7 +210,7 @@ mod tests {
         assert!(refused.contains("401"), "{refused}");
         telemetry.set_enabled(false).await.unwrap();
         assert!(!telemetry.enabled());
-        assert!(!Config::load_from(app.config.data_dir.clone()).unwrap().telemetry);
+        assert!(!app.config.reload().unwrap().telemetry);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -224,6 +224,6 @@ mod tests {
         assert!(telemetry.send(false).await.is_err());
         telemetry.set_enabled(false).await.unwrap();
         telemetry.set_enabled(true).await.unwrap();
-        assert!(Config::load_from(app.config.data_dir.clone()).unwrap().telemetry);
+        assert!(app.config.reload().unwrap().telemetry);
     }
 }

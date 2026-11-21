@@ -1,4 +1,5 @@
 mod app;
+pub mod backup;
 pub mod cases;
 pub mod chat;
 pub mod config;
@@ -22,6 +23,7 @@ pub mod sample;
 pub mod telemetry;
 pub mod templates;
 pub mod vault;
+pub mod workspaces;
 
 pub use app::run;
 pub use blankey_doctypes as doctypes;

@@ -1,20 +1,29 @@
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+use crate::workspaces::Workspaces;
 
 pub const APP_NAME: &str = "Blankey";
 pub const HEALTH_PATH: &str = "/health";
 pub const HEALTH_TEXT: &str = "blankey";
 const DEFAULT_PORT: u16 = 8765;
+const FILE: &str = "config.toml";
 pub const OFFICIAL_RELAY: &str = "https://relay.blankey.io";
 /// ports tried after the configured one before asking the OS for any free port
 const PORT_SEARCH: u16 = 50;
 
-/// config.toml in the data dir; missing keys take their defaults and unknown keys are ignored.
+/// config.toml; missing keys take their defaults and unknown keys are ignored. The settings are the app's, kept in
+/// the root dir, except the Blankey Online server (`relay_enabled`, `relay_url`), which each workspace has its own
+/// of: the first workspace's are in the root file too, any other workspace's in a config.toml in its dir.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// Where the app keeps its settings and the list of workspaces; also the first workspace's data dir.
+    #[serde(skip)]
+    pub root_dir: PathBuf,
+    /// The open workspace's data.
     #[serde(skip)]
     pub data_dir: PathBuf,
     pub port: u16,
@@ -42,6 +51,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            root_dir: PathBuf::new(),
             data_dir: PathBuf::new(),
             port: DEFAULT_PORT,
             auto_lock_minutes: 15,
@@ -62,26 +72,33 @@ impl Default for Config {
 impl Config {
     /// BLANKEY_DATA_DIR, else the per-user data dir (~/Library/Application Support/Blankey on macOS), the same
     /// place the Python app keeps its data. Debug builds use "Blankey Preview" so development never touches it.
+    /// The open workspace of that root dir.
     pub fn load() -> std::io::Result<Self> {
         let folder = if cfg!(debug_assertions) { "Blankey Preview" } else { APP_NAME };
-        let data_dir = match std::env::var_os("BLANKEY_DATA_DIR") {
+        let root_dir = match std::env::var_os("BLANKEY_DATA_DIR") {
             Some(dir) => PathBuf::from(dir),
             None => base_dir().join(folder),
         };
-        Self::load_from(data_dir)
+        std::fs::create_dir_all(&root_dir)?;
+        let workspaces = Workspaces::load(&root_dir);
+        let data_dir = workspaces.dir(&workspaces.active);
+        Self::load_dirs(root_dir, data_dir)
     }
 
+    /// A root dir with its first workspace.
     pub fn load_from(data_dir: PathBuf) -> std::io::Result<Self> {
+        Self::load_dirs(data_dir.clone(), data_dir)
+    }
+
+    pub fn load_dirs(root_dir: PathBuf, data_dir: PathBuf) -> std::io::Result<Self> {
+        std::fs::create_dir_all(&root_dir)?;
         std::fs::create_dir_all(&data_dir)?;
-        let path = data_dir.join("config.toml");
-        let mut config = match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                let invalid =
-                    |e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: {e}", path.display()));
-                Self { data_dir, ..toml::from_str(&text).map_err(invalid)? }
-            }
-            Err(_) => Self { data_dir, ..Self::default() },
-        };
+        let mut config: Self = read(&root_dir.join(FILE))?;
+        if data_dir != root_dir {
+            let own: Online = read(&data_dir.join(FILE))?;
+            (config.relay_enabled, config.relay_url) = (own.relay_enabled, own.relay_url);
+        }
+        (config.root_dir, config.data_dir) = (root_dir, data_dir);
         if config.telemetry_id.is_empty() {
             config.telemetry_id = format!("i-{}", uuid::Uuid::new_v4().simple());
             config.save()?;
@@ -96,13 +113,25 @@ impl Config {
         base_dir().join(APP_NAME)
     }
 
+    /// As it is on disk now, so settings changed since launch are there.
+    pub fn reload(&self) -> std::io::Result<Self> {
+        Self::load_dirs(self.root_dir.clone(), self.data_dir.clone())
+    }
+
     pub fn save(&self) -> std::io::Result<()> {
-        let text = toml::to_string(self).map_err(std::io::Error::other)?;
-        std::fs::write(self.config_path(), text)
+        let mut root = self.clone();
+        if self.data_dir != self.root_dir {
+            // the root file keeps the first workspace's server
+            let first: Online = read(&self.config_path())?;
+            (root.relay_enabled, root.relay_url) = (first.relay_enabled, first.relay_url);
+            let own = Online { relay_enabled: self.relay_enabled, relay_url: self.relay_url.clone() };
+            std::fs::write(self.data_dir.join(FILE), toml::to_string(&own).map_err(std::io::Error::other)?)?;
+        }
+        std::fs::write(self.config_path(), toml::to_string(&root).map_err(std::io::Error::other)?)
     }
 
     pub fn config_path(&self) -> PathBuf {
-        self.data_dir.join("config.toml")
+        self.root_dir.join(FILE)
     }
 
     pub fn db_path(&self) -> PathBuf {
@@ -133,6 +162,28 @@ impl Config {
     pub fn health_url(&self) -> String {
         format!("http://127.0.0.1:{}{HEALTH_PATH}", self.port)
     }
+}
+
+/// The Blankey Online server of a workspace: what its own config.toml holds, and what is read of the root file for
+/// the first one.
+#[derive(Serialize, Deserialize)]
+#[serde(default)]
+struct Online {
+    relay_enabled: bool,
+    relay_url: String,
+}
+
+impl Default for Online {
+    fn default() -> Self {
+        Self { relay_enabled: false, relay_url: OFFICIAL_RELAY.into() }
+    }
+}
+
+/// A missing file reads as the defaults.
+fn read<T: serde::de::DeserializeOwned + Default>(path: &Path) -> std::io::Result<T> {
+    let Ok(text) = std::fs::read_to_string(path) else { return Ok(T::default()) };
+    toml::from_str(&text)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{}: {e}", path.display())))
 }
 
 /// %LOCALAPPDATA% on Windows, as the Python app's platformdirs chose; the usual data dir elsewhere.
@@ -209,6 +260,32 @@ mod tests {
         config.save().unwrap();
         let loaded = Config::load_from(dir.path().join("data")).unwrap();
         assert_eq!((loaded.telemetry, loaded.telemetry_url.as_deref()), (false, Some("http://127.0.0.1:1/telemetry")));
+    }
+
+    #[test]
+    fn another_workspace_has_its_own_online_server_and_the_apps_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("data");
+        let mut first = Config::load_from(root.clone()).unwrap();
+        first.port = 9999;
+        first.relay_enabled = true;
+        first.relay_url = "http://localhost:9000".into();
+        first.save().unwrap();
+
+        let other = root.join("workspaces").join("w");
+        let mut config = Config::load_dirs(root.clone(), other.clone()).unwrap();
+        assert_eq!((config.port, config.telemetry_id.as_str()), (9999, first.telemetry_id.as_str()));
+        assert_eq!((config.relay_enabled, config.relay_url.as_str()), (false, OFFICIAL_RELAY));
+        assert!(other.join("templates").is_dir() && config.db_path().starts_with(&other));
+
+        config.relay_url = "http://localhost:9001".into();
+        config.auto_lock_minutes = 3;
+        config.save().unwrap();
+        let again = config.reload().unwrap();
+        assert_eq!((again.relay_url.as_str(), again.auto_lock_minutes), ("http://localhost:9001", 3));
+        let first = Config::load_from(root).unwrap();
+        assert_eq!((first.relay_enabled, first.relay_url.as_str()), (true, "http://localhost:9000"));
+        assert_eq!(first.auto_lock_minutes, 3, "the app's settings are shared");
     }
 
     #[test]
