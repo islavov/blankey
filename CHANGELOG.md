@@ -3,11 +3,11 @@
 ## Unreleased
 
 - Workspaces: separate sets of profiles, cases, templates and documents, each with its own master password and its
-  own Blankey Online sign-in. The column on the left lists them; opening another one restarts Blankey into it, and
-  `+` adds a new one. Language, updates and the other app settings are shared. What Blankey held so far is the
-  first workspace, "Personal".
+  own Blankey Online sign-in. The lock screen names the open one; its menu opens another one, which restarts
+  Blankey into it, or adds a new one. Language, updates and the other app settings are shared. What Blankey held
+  so far is the first workspace, "Personal".
 - Local backup: Settings saves the open workspace as one `.blankey` file, encrypted with its master password.
-  `+` → "Restore from backup…" brings it back as a workspace, on this or another computer, and it opens with the
+  "Restore from backup…" on the lock screen brings it back as a workspace, on this or another computer, and it opens with the
   password it was backed up with. Nothing else is changed by a restore.
 - A workspace can be deleted for good in Settings, after its master password; the only one left cannot.
 - Beta data collection: while Blankey is in beta it also shares which features are used (the pages opened and the

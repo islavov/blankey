@@ -104,9 +104,10 @@ Online account.
 ## Workspaces and backup
 
 - A workspace is a separate set of profiles, cases, templates and documents with its own master password and its own
-  Blankey Online sign-in. The column at the far left lists them. Clicking another one restarts Blankey into it; the
-  assistant always works in the one that is open.
-- `+` under the workspaces adds one: "New workspace…" starts empty, "Restore from backup…" makes one from a backup
+  Blankey Online sign-in. The assistant always works in the one that is open.
+- To open another workspace, lock Blankey: the lock screen shows the open workspace's name, and its menu lists the
+  others. Picking one restarts Blankey into it, where it is unlocked with that workspace's password.
+- The same menu adds a workspace: "New workspace…" starts empty, "Restore from backup…" makes one from a backup
   file.
 - Settings, under Workspace: "Local backup…" asks for the master password and saves the whole open workspace as one
   `.blankey` file encrypted with it, to keep on another disk or move to another computer. The restored workspace

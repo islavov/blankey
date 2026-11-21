@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { before, test } from "node:test";
-import { $, $$, byText, click, startApp, submit, text, type } from "./setup.js";
+import { $, $$, byText, click, key, startApp, submit, text, type } from "./setup.js";
 
 let backend;
 before(async () => {
@@ -12,22 +12,24 @@ before(async () => {
   });
 });
 
-const rail = () => $$(".rail-item").map((el) => `${el.textContent.trim()}${el.classList.contains("active") ? "*" : ""}`);
+/** The workspaces in the lock screen's menu, the open one marked with *. */
+async function listed() {
+  await click($("#workspace-pick"));
+  const items = $$(".ws-option:not(.action)").map((el) => `${text(".ws-name", el)}${el.classList.contains("checked") ? "*" : ""}`);
+  await key("Escape");
+  assert.equal($(".ws-list"), null);
+  return items;
+}
+
+async function pick(label) {
+  await click($("#workspace-pick"));
+  await click(byText(".ws-option .ws-name", label));
+}
 
 async function unlock() {
   await type($(".gate input[name=password]"), "pw");
   await submit($(".gate form"));
 }
-
-async function addMenu(label) {
-  await click($("#workspace-add"));
-  await click(byText(".menu-item", label));
-}
-
-test("the rail lists the workspaces by their initials and marks the open one", () => {
-  assert.deepEqual(rail(), ["PE*", "OS"]);
-  assert.equal($(".rail-item.active").title, "Personal");
-});
 
 test("local backup asks for the master password and says where the file went", async () => {
   await click($("#settings-btn"));
@@ -54,10 +56,21 @@ test("a cancelled save picker says nothing", async () => {
   assert.equal(text("#toast"), "");
 });
 
+test("the lock screen names the open workspace and lists them all", async () => {
+  assert.equal($("#workspace-pick"), null);
+  await click($("#lock-btn"));
+  assert.equal(text("#workspace-pick .ws-name"), "Personal");
+  assert.equal(text("#workspace-pick .ws-avatar"), "PE");
+  await click($("#workspace-pick"));
+  assert.deepEqual($$(".ws-option").map((el) => text(".ws-name", el)), ["Personal", "Oak Street Office", "New workspace…", "Restore from backup…"]);
+  assert.deepEqual($$(".ws-option .ws-avatar").map((el) => el.textContent), ["PE", "OS", "+", "↺"]);
+  await click($(".gate h1"));
+  assert.equal($(".ws-list"), null, "a click outside closes the list");
+  assert.deepEqual(await listed(), ["Personal*", "Oak Street Office"]);
+});
+
 test("a new workspace needs a name and opens on the create-vault screen", async () => {
-  await click($("#workspace-add"));
-  assert.deepEqual($$(".menu-item").map((el) => el.textContent), ["New workspace…", "Restore from backup…"]);
-  await click(byText(".menu-item", "New workspace…"));
+  await pick("New workspace…");
   await submit($(".modal form"));
   assert.equal(text(".modal .error"), "Enter a name for the workspace.");
   assert.equal(backend.called("workspace_create").length, 0);
@@ -66,7 +79,8 @@ test("a new workspace needs a name and opens on the create-vault screen", async 
   await submit($(".modal form"));
   assert.deepEqual(backend.called("workspace_create"), [{ name: "Clients" }]);
   assert.equal(text(".gate h1"), "Create your vault");
-  assert.deepEqual(rail(), ["PE", "OS", "CL*"]);
+  assert.equal(text("#workspace-pick .ws-name"), "Clients");
+  assert.deepEqual(await listed(), ["Personal", "Oak Street Office", "Clients*"]);
 });
 
 test("a workspace that was never set up is deleted without a password", async () => {
@@ -75,40 +89,40 @@ test("a workspace that was never set up is deleted without a password", async ()
   assert.equal($(".modal input"), null);
   await submit($(".modal form"));
   assert.deepEqual(backend.called("workspace_delete"), [{ password: null }]);
-  assert.deepEqual(rail(), ["PE*", "OS"]);
+  assert.deepEqual(await listed(), ["Personal*", "Oak Street Office"]);
   assert.equal(text(".gate h1"), "Blankey is locked");
 });
 
 test("another workspace is opened from the lock screen", async () => {
-  await click($$(".rail-item")[1]);
+  await pick("Oak Street Office");
   assert.deepEqual(backend.called("workspace_switch"), [{ id: "w-2" }]);
-  assert.deepEqual(rail(), ["PE", "OS*"]);
+  assert.equal(text("#workspace-pick .ws-name"), "Oak Street Office");
   assert.equal(text(".gate h1"), "Blankey is locked");
 
-  await click($(".rail-item.active"));
+  await pick("Oak Street Office");
   assert.equal(backend.called("workspace_switch").length, 1);
 });
 
 test("restore from backup: a cancelled picker opens nothing", async () => {
   backend.db.backupFile = null;
-  await addMenu("Restore from backup…");
+  await pick("Restore from backup…");
   assert.equal($(".modal"), null);
   delete backend.db.backupFile;
 });
 
 test("restore from backup adds a workspace named after the file and opens it", async () => {
-  await addMenu("Restore from backup…");
+  await pick("Restore from backup…");
   assert.equal(text(".modal h3"), "Restore from backup");
   assert.equal($(".modal input[name=name]").value, "Clients");
   await type($(".modal input[name=password]"), "nope");
   await submit($(".modal form"));
   assert.equal(text(".modal .error"), "Wrong password.");
-  assert.deepEqual(rail(), ["PE", "OS*"]);
+  assert.equal(backend.db.workspaces.length, 2);
 
   await type($(".modal input[name=password]"), "pw");
   await submit($(".modal form"));
   assert.deepEqual(backend.called("workspace_restore").at(-1), { path: "/Users/test/Backups/Clients 2026-11-20.blankey", name: "Clients", password: "pw" });
-  assert.deepEqual(rail(), ["PE", "OS", "CL*"]);
+  assert.deepEqual(await listed(), ["Personal", "Oak Street Office", "Clients*"]);
   assert.equal(text(".gate h1"), "Blankey is locked");
 });
 
@@ -127,12 +141,12 @@ test("deleting a workspace needs its master password and lands in another one", 
   await type($(".modal input[name=password]"), "nope");
   await submit($(".modal form"));
   assert.equal(text(".modal .error"), "Wrong password.");
-  assert.deepEqual(rail(), ["PE", "OS", "CL*"]);
+  assert.equal(backend.db.workspaces.length, 3);
 
   await type($(".modal input[name=password]"), "pw");
   await submit($(".modal form"));
   assert.deepEqual(backend.called("workspace_delete").at(-1), { password: "pw" });
-  assert.deepEqual(rail(), ["PE*", "OS"]);
+  assert.deepEqual(await listed(), ["Personal*", "Oak Street Office"]);
   assert.equal(text(".gate h1"), "Blankey is locked");
 });
 

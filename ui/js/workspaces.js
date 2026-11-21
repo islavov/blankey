@@ -1,21 +1,15 @@
 // Workspaces: separate sets of data, each with its own master password. One is open at a time; opening another
-// relaunches Blankey into it. The rail on the left lists them and adds one, new or restored from a local backup.
+// relaunches Blankey into it. The lock screen has a select box with the open one, which lists them and adds one, new or restored from a
+// local backup.
 
+import { useEffect, useRef, useState } from "../vendor/preact-htm.js";
 import { call, invoke } from "./api.js";
 import { t } from "./i18n.js";
 import { html, useStore } from "./lib.js";
 import { dialog, toast } from "./ui/feedback.js";
-import { popup } from "./ui/menu.js";
 
 /** The workspace that is open now. */
 export const openWorkspace = (status) => status.workspaces.find((w) => w.id === status.workspace);
-
-/** Up to two letters for a workspace's square: the first letters of its first two words. */
-export function initials(name) {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  const letters = words.length > 1 ? words[0][0] + words[1][0] : (words[0] || "?").slice(0, 2);
-  return letters.toUpperCase();
-}
 
 /** "Clients 2026-11-20.blankey" names the workspace "Clients". */
 export function nameFromBackup(path) {
@@ -79,21 +73,61 @@ export function deleteWorkspace(status) {
   });
 }
 
-export function WorkspaceRail() {
+/** Up to two letters for a workspace's square: the first letters of its first two words. */
+export function initials(name) {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  const letters = words.length > 1 ? words[0][0] + words[1][0] : (words[0] || "?").slice(0, 2);
+  return letters.toUpperCase();
+}
+
+const CHEVRON = '<path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>';
+const CHECK = '<path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
+const Glyph = ({ cls, path }) => html`<svg class=${cls} viewBox="0 0 16 16" dangerouslySetInnerHTML=${{ __html: path }}></svg>`;
+
+/** On the lock screen: a select box with the open workspace; its list opens another one or adds one. Opening
+ * relaunches Blankey, which comes up locked in that workspace, so this is where workspaces are changed. */
+export function WorkspacePick() {
   const { status } = useStore();
-  const add = (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    popup(rect.right + 6, rect.top, [
-      { label: t("New workspace…"), action: createWorkspace },
-      { label: t("Restore from backup…"), action: restoreWorkspace },
-    ], 200);
+  const [open, setOpen] = useState(false);
+  const box = useRef();
+  useEffect(() => {
+    if (!open) return undefined;
+    const outside = (e) => !box.current.contains(e.target) && setOpen(false);
+    // before the window's own Escape, which is for menus, dialogs and sheets
+    const escape = (e) => e.key === "Escape" && (e.preventDefault(), setOpen(false));
+    document.addEventListener("mousedown", outside);
+    document.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("mousedown", outside);
+      document.removeEventListener("keydown", escape, true);
+    };
+  }, [open]);
+
+  const choose = (action) => {
+    setOpen(false);
+    action();
   };
+  const switchTo = (id) => id !== status.workspace && call("workspace_switch", { id }).catch(() => {});
+  const { name } = openWorkspace(status);
   return html`
-    <div class="rail" data-help="sidebar.workspaces">
-      <div class="rail-top" data-tauri-drag-region></div>
-      ${status.workspaces.map((w) => html`
-        <button class=${`rail-item ${w.id === status.workspace ? "active" : ""}`} title=${w.name} aria-label=${w.name}
-          onClick=${() => w.id !== status.workspace && call("workspace_switch", { id: w.id }).catch(() => {})}>${initials(w.name)}</button>`)}
-      <button class="rail-add" id="workspace-add" title=${t("Add a workspace")} aria-label=${t("Add a workspace")} onClick=${add}>+</button>
+    <div class="ws-select" ref=${box}>
+      <button type="button" id="workspace-pick" class=${`ws-box ${open ? "open" : ""}`} aria-haspopup="listbox" aria-expanded=${open}
+        onClick=${() => setOpen(!open)}>
+        <span class="ws-avatar">${initials(name)}</span>
+        <span class="ws-text"><span class="ws-label">${t("Workspace")}</span><span class="ws-name">${name}</span></span>
+        <${Glyph} cls="ws-chevron" path=${CHEVRON} />
+      </button>
+      ${open && html`
+        <div class="ws-list" role="listbox">
+          ${status.workspaces.map((w) => html`
+            <div class=${`ws-option ${w.id === status.workspace ? "checked" : ""}`} role="option" aria-selected=${w.id === status.workspace}
+              onClick=${() => choose(() => switchTo(w.id))}>
+              <span class="ws-avatar">${initials(w.name)}</span><span class="ws-name">${w.name}</span>
+              ${w.id === status.workspace && html`<${Glyph} cls="ws-check" path=${CHECK} />`}
+            </div>`)}
+          <div class="ws-sep"></div>
+          <div class="ws-option action" onClick=${() => choose(createWorkspace)}><span class="ws-avatar">+</span><span class="ws-name">${t("New workspace…")}</span></div>
+          <div class="ws-option action" onClick=${() => choose(restoreWorkspace)}><span class="ws-avatar">↺</span><span class="ws-name">${t("Restore from backup…")}</span></div>
+        </div>`}
     </div>`;
 }

@@ -24,7 +24,6 @@ const HELP = {
   "sidebar.lock": () => [t("Lock"), t("Everything Blankey keeps is encrypted with your password, on this computer. Locking makes it unreadable until you unlock it again.")],
   "sidebar.theme": () => [t("Light or dark"), t("Switches between the light and the dark look. Remembered on this computer.")],
   "sidebar.settings": () => [t("Settings"), t("The workspace and its backup, language, updates, this help, the MCP server and Blankey Online.")],
-  "sidebar.workspaces": () => [t("Workspaces"), t("Separate sets of profiles, cases, templates and documents, each with its own master password. Click one to open it; + adds a new one or restores one from a local backup.")],
   search: () => [t("Search"), t("Narrows the list on this page as you type. Cleared when you go to another page.")],
 
   "page.cases": () => [t("Cases"), t("Pick a case on the left. Drop files on it to import them; held over another case, they open it.")],
@@ -138,7 +137,7 @@ const HELP = {
   "link.submissions": () => [t("Submissions"), t("How many times the form can be sent.")],
   "link.create": () => [t("Create link"), t("Makes the link and copies it, ready to send.")],
 
-  "settings.workspace": () => [t("Workspace"), t("The workspace that is open. A local backup saves all of it in one file, encrypted with its master password; + on the left restores it as a workspace, on this or another computer.")],
+  "settings.workspace": () => [t("Workspace"), t("The workspace that is open: a set of profiles, cases, templates and documents with its own master password. Lock Blankey to open another one or add one. A local backup saves all of it in one file, encrypted with its master password; the lock screen restores it as a workspace, on this or another computer.")],
   "settings.language": () => [t("Language"), t("Blankey's language on this computer. Default uses your Blankey Online account's language.")],
   "settings.version": () => [t("Version"), t("The version you have. Check now looks for a newer one.")],
   "settings.updates": () => [t("Updates"), t("Looks for new versions every few hours. Nothing is installed until you choose to.")],

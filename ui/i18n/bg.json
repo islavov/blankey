@@ -874,10 +874,7 @@
   "Invented people and an invented contract to try Blankey on. Delete the case when you are done.": "Измислени лица и измислен договор, с които да изпробвате Blankey. Изтрийте казуса, когато приключите.",
   "ChatGPT connects only to addresses on the internet. Sign in to Blankey Online, then add its connector URL from Settings in ChatGPT.": "ChatGPT се свързва само с адреси в интернет. Влезте в Blankey онлайн и добавете в ChatGPT адреса на конектора от настройките.",
   "Workspace": "Работно пространство",
-  "Workspaces": "Работни пространства",
   "The workspace and its backup, language, updates, this help, the MCP server and Blankey Online.": "Работното пространство и архивът му, език, обновления, помощ, MCP сървър и Blankey онлайн.",
-  "Separate sets of profiles, cases, templates and documents, each with its own master password. Click one to open it; + adds a new one or restores one from a local backup.": "Отделни набори от профили, казуси, шаблони и документи, всеки със своя главна парола. Щракнете върху някое, за да го отворите; с + добавяте ново или възстановявате от локален архив.",
-  "The workspace that is open. A local backup saves all of it in one file, encrypted with its master password; + on the left restores it as a workspace, on this or another computer.": "Отвореното работно пространство. Локалният архив го записва цялото в един файл, криптиран с главната му парола; с + вляво го възстановявате като работно пространство на този или на друг компютър.",
   "Local backup": "Локален архив",
   "Local backup…": "Локален архив…",
   "Back up": "Архивирай",
@@ -893,8 +890,8 @@
   "Restore from backup…": "Възстанови от архив…",
   "Master password of the backup": "Главната парола на архива",
   "Restore": "Възстанови",
-  "Add a workspace": "Добави работно пространство",
   "This file is not a Blankey backup.": "Този файл не е архив на Blankey.",
   "The backup file is damaged.": "Архивният файл е повреден.",
-  "This backup was made by a newer version of Blankey. Update Blankey first.": "Архивът е направен с по-нова версия на Blankey. Първо обновете Blankey."
+  "This backup was made by a newer version of Blankey. Update Blankey first.": "Архивът е направен с по-нова версия на Blankey. Първо обновете Blankey.",
+  "The workspace that is open: a set of profiles, cases, templates and documents with its own master password. Lock Blankey to open another one or add one. A local backup saves all of it in one file, encrypted with its master password; the lock screen restores it as a workspace, on this or another computer.": "Отвореното работно пространство: набор от профили, казуси, шаблони и документи със своя главна парола. Заключете Blankey, за да отворите друго или да добавите ново. Локалният архив го записва цялото в един файл, криптиран с главната му парола; от екрана за отключване го възстановявате като работно пространство на този или на друг компютър."
 }
