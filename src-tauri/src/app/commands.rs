@@ -1675,6 +1675,35 @@ async fn telemetry_set(telemetry: TelemetryState<'_>, enabled: bool) -> CmdResul
     telemetry.set_enabled(enabled).await
 }
 
+type MixpanelState<'a> = State<'a, std::sync::Arc<crate::mixpanel::Mixpanel>>;
+
+/// Whether the beta usage events are on.
+#[tauri::command]
+fn beta_data_status(mixpanel: MixpanelState) -> bool {
+    mixpanel.enabled()
+}
+
+/// "Disable BETA data collection" in Settings, inverted.
+#[tauri::command]
+fn beta_data_set(mixpanel: MixpanelState, enabled: bool) -> CmdResult<()> {
+    mixpanel.set_enabled(enabled)
+}
+
+/// The page the user opened, for the beta usage events, and the session replay the UI records it in.
+#[tauri::command]
+fn beta_page_view(mixpanel: MixpanelState, page: String, replay: Option<String>) {
+    mixpanel.set_replay(replay.filter(|id| id.len() <= 64));
+    if page.len() <= 32 && page.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+        mixpanel.track("Page Viewed", serde_json::json!({ "page": page }));
+    }
+}
+
+/// What the UI records session replays with; null while nothing is collected.
+#[tauri::command]
+fn beta_replay_config(mixpanel: MixpanelState) -> Option<serde_json::Value> {
+    mixpanel.replay_config()
+}
+
 type UpdatesState<'a> = State<'a, std::sync::Arc<super::updates::Updates>>;
 
 #[tauri::command]
@@ -1922,6 +1951,10 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         relay_open_account,
         telemetry_status,
         telemetry_set,
+        beta_data_status,
+        beta_data_set,
+        beta_page_view,
+        beta_replay_config,
         update_status,
         update_check,
         update_install,

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "../vendor/preact-htm.js";
 import { invoke, refreshRelay } from "./api.js";
+import { replayId } from "./replay.js";
 import { t } from "./i18n.js";
 import { HelpBox, helpEnabled } from "./help.js";
 import { html, Icon, update, useStore } from "./lib.js";
@@ -34,6 +35,9 @@ const SECTIONS = [
 export function App() {
   const { status, page } = useStore();
   const Current = PAGES[page].component;
+  useEffect(() => {
+    invoke("beta_page_view", { page, replay: replayId() }).catch(() => {});
+  }, [page]);
   return html`
     <div class="app">
       <aside class="sidebar">

@@ -55,6 +55,14 @@ test("anonymous statistics are on until the user turns them off", async () => {
   assert.equal($("#telemetry").checked, false);
 });
 
+test("beta data collection is on until the user disables it", async () => {
+  assert.equal($("#beta-data-off").checked, false);
+  await check($("#beta-data-off"), true);
+  assert.deepEqual(backend.called("beta_data_set"), [{ enabled: false }]);
+  await settle();
+  assert.equal($("#beta-data-off").checked, true);
+});
+
 test("check now downloads a new version and offers to restart into it", async () => {
   assert.equal(text("#app-version"), "0.2.5");
   assert.equal(text("#update-state"), "");

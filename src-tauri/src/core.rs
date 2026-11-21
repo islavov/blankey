@@ -200,6 +200,11 @@ impl Blankey {
         false
     }
 
+    /// Called with (actor, action) of every audit entry, while the vault is held: the hook must not reach for it.
+    pub fn set_audit_hook(&self, hook: impl Fn(&str, &str) + Send + Sync + 'static) {
+        self.vault().set_audit_hook(Box::new(hook));
+    }
+
     pub fn audit(&self, actor: &str, action: &str, target: &str) {
         let _ = self.vault().audit(actor, action, target);
     }

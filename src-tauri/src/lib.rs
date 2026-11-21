@@ -13,6 +13,7 @@ pub mod known;
 pub mod library;
 pub mod links;
 pub mod mcp;
+pub mod mixpanel;
 pub mod pii;
 pub mod recognize;
 pub mod relay;

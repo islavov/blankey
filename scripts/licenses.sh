@@ -1,6 +1,6 @@
 #!/bin/sh
 # Writes src-tauri/THIRD_PARTY_LICENSES.html: every Rust dependency (cargo-about), plus PDFium, the fonts and the
-# UI's vendored Preact and htm.
+# UI's vendored Preact, htm and mixpanel-browser.
 # Needs cargo-about (cargo install cargo-about) and the PDFium download (scripts/fetch-pdfium.sh).
 set -eu
 cd "$(dirname "$0")/../src-tauri"
@@ -24,6 +24,9 @@ escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$1"; }
     echo '</pre>'
     echo '<h3>htm (Apache-2.0), https://github.com/developit/htm</h3><pre>'
     escape ../ui/vendor/LICENSE-htm
+    echo '</pre>'
+    echo '<h3>mixpanel-browser (Apache-2.0), https://github.com/mixpanel/mixpanel-js</h3><pre>'
+    escape ../ui/vendor/LICENSE-mixpanel
     echo '</pre>'
 } > bundled.tmp
 # insert the bundled section where the template marks it

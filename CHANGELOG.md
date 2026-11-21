@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Beta data collection: while Blankey is in beta it also shares which features are used (the pages opened and the
+  kind of each action, never names, contents or ids), a recording of how the app is clicked through with all text,
+  inputs, pictures and documents left out, and the approximate location. It goes under the random id of the
+  anonymous statistics, with the account's email while signed in to Blankey Online. "Disable BETA data collection"
+  in Settings turns it off.
+
 ## 0.4.2
 
 - Filling: a profile key that has other keys under it, such as `name` beside `name.first`, fills its own value and

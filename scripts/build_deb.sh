@@ -24,6 +24,9 @@ scripts/fetch-ocr.sh
 if [ -z "${BLANKEY_TELEMETRY_KEY:-}" ]; then
     echo "warning: BLANKEY_TELEMETRY_KEY is not set; this build sends anonymous statistics with the development key, which the official relay ignores" >&2
 fi
+if [ -z "${BLANKEY_MIXPANEL_TOKEN:-}" ]; then
+    echo "warning: BLANKEY_MIXPANEL_TOKEN is not set; this build collects no beta usage data" >&2
+fi
 scripts/licenses.sh
 scripts/stage-ui.sh
 cd src-tauri
