@@ -7,6 +7,7 @@ import { t } from "./i18n.js";
 import { reload, state, update, useStore } from "./lib.js";
 import { dragAt, dragEnd, dropFiles } from "./pages/cases.js";
 import { processRequests } from "./requests.js";
+import { syncReplay } from "./replay.js";
 import { cancelDialog, closeDialog, isDialogOpen } from "./ui/feedback.js";
 import { hidePopup, isMenuOpen } from "./ui/menu.js";
 import { applyTheme } from "./theme.js";
@@ -19,6 +20,7 @@ window.addEventListener("error", (e) => report(`${e.message} (${e.filename}:${e.
 window.addEventListener("unhandledrejection", (e) => report(e.reason?.stack || e.reason));
 
 applyTheme();
+syncReplay().catch(report);
 
 function Root() {
   const { status, recoveryKey } = useStore();

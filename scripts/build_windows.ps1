@@ -26,6 +26,9 @@ if ($LASTEXITCODE -ne 0) { throw "fetch-ocr.sh failed" }
 if (-not $env:BLANKEY_TELEMETRY_KEY) {
     Write-Warning "BLANKEY_TELEMETRY_KEY is not set; this build sends anonymous statistics with the development key, which the official relay ignores"
 }
+if (-not $env:BLANKEY_MIXPANEL_TOKEN) {
+    Write-Warning "BLANKEY_MIXPANEL_TOKEN is not set; this build collects no beta usage data"
+}
 bash scripts/licenses.sh
 if ($LASTEXITCODE -ne 0) { throw "licenses.sh failed" }
 bash scripts/stage-ui.sh

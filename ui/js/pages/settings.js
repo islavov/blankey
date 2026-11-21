@@ -1,4 +1,5 @@
 import { call, refreshRelay, refreshStatus } from "../api.js";
+import { syncReplay } from "../replay.js";
 import { helpEnabled, setHelpEnabled } from "../help.js";
 import { t, tn } from "../i18n.js";
 import { html, matches, reload, useLoad, useStore, when } from "../lib.js";
@@ -45,9 +46,10 @@ export function Settings() {
   const { status } = useStore();
   const info = useLoad(() => call("relay_status"), []);
   const telemetry = useLoad(() => call("telemetry_status"), []);
+  const beta = useLoad(() => call("beta_data_status"), []);
   const update = useLoad(() => call("update_status"), []);
   const recognition = useLoad(() => call("doc_configs_status"), []);
-  if (!info || telemetry === null || !update || !recognition) return null;
+  if (!info || telemetry === null || beta === null || !update || !recognition) return null;
   const busy = update.state === "checking" || update.state === "downloading";
 
   const state = info.signed_in || info.state === "signing_in" ? info.state : "signed_out";
@@ -124,6 +126,14 @@ export function Settings() {
             ${t("Share anonymous usage statistics")}
           </label>
           <span class="muted small">${t("How many documents, templates, fill sets and profiles Blankey makes each month, its version and platform, under a random id. Never names or contents.")}</span>
+        </div>
+        <div class="relay-row" data-help="settings.beta">
+          <span class="muted">${t("Beta")}</span>
+          <label class="check small">
+            <input type="checkbox" id="beta-data-off" checked=${!beta} onChange=${(e) => call("beta_data_set", { enabled: !e.target.checked }).then(syncReplay).then(reload, reload)} />
+            ${t("Disable BETA data collection")}
+          </label>
+          <span class="muted small">${t("During the beta Blankey also shares which features are used, a recording of how the app is used with all text hidden, the approximate location and, when signed in to Blankey Online, your account's email. Never names or contents of your documents and profiles.")}</span>
         </div>
         <div class="relay-row" data-help="settings.help">
           <span class="muted">${t("Help")}</span>

@@ -114,6 +114,7 @@ export function seed() {
     submissions: {},
     previewDelay: 0,
     telemetry: true,
+    betaData: true,
     update: { current: "0.2.5", auto: true, state: "idle" },
     // the document config set from the relay; state "none" without one
     docConfigs: { state: "valid", version: "f1e8fcc63b0f697c", checked_at: "2026-11-14T18:30:00Z", documents: 3, skipped: 0 },
@@ -713,6 +714,12 @@ export function createBackend(db = seed()) {
     telemetry_set: ({ enabled }) => {
       db.telemetry = enabled;
     },
+    beta_data_status: () => db.betaData,
+    beta_data_set: ({ enabled }) => {
+      db.betaData = enabled;
+    },
+    beta_page_view: () => null,
+    beta_replay_config: () => null,
     update_status: () => db.update,
     update_check: () => {
       db.update = { ...db.update, state: "ready", version: "0.3.0" };

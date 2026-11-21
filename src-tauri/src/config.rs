@@ -27,6 +27,10 @@ pub struct Config {
     pub telemetry_id: String,
     /// Where the statistics go instead of the official relay; for development and tests.
     pub telemetry_url: Option<String>,
+    /// Feature usage to Mixpanel during the beta (src/mixpanel.rs); off by "Disable BETA data collection" in Settings.
+    pub beta_data: bool,
+    /// The host the beta usage events go to instead of Mixpanel's; for development and tests.
+    pub mixpanel_url: Option<String>,
     /// Look for new versions and download them (src/app/updates.rs); off by the user on the Connections page.
     pub auto_update: bool,
     /// Values that look personal reach the assistant as placeholders (src/pii); a user setting only.
@@ -46,6 +50,8 @@ impl Default for Config {
             telemetry: true,
             telemetry_id: String::new(),
             telemetry_url: None,
+            beta_data: true,
+            mixpanel_url: None,
             auto_update: true,
             pii_redaction: true,
             language: None,
@@ -191,6 +197,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = Config::load_from(dir.path().join("data")).unwrap();
         assert!(config.telemetry && config.telemetry_url.is_none() && config.auto_update);
+        assert!(config.beta_data && config.mixpanel_url.is_none());
         assert_eq!(config.telemetry_id.len(), 34, "{}", config.telemetry_id);
         assert!(config.telemetry_id.starts_with("i-"));
         let again = Config::load_from(dir.path().join("data")).unwrap();

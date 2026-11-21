@@ -44,7 +44,11 @@ pub struct Vault {
     seal_private: Option<Key>,
     /// resolved results for the MCP client, readable while locked for the life of this process
     results: HashMap<i64, Value>,
+    /// called with (actor, action) after an audit entry is written; never with its target
+    audit_hook: Option<AuditHook>,
 }
+
+pub type AuditHook = Box<dyn Fn(&str, &str) + Send + Sync>;
 
 impl Vault {
     pub fn open(path: &Path, secrets: Box<dyn SecretStore>) -> Result<Self> {
@@ -55,7 +59,13 @@ impl Vault {
             dek: None,
             seal_private: None,
             results: HashMap::new(),
+            audit_hook: None,
         })
+    }
+
+    /// The hook runs inside `audit`, so with the vault held by the caller.
+    pub fn set_audit_hook(&mut self, hook: AuditHook) {
+        self.audit_hook = Some(hook);
     }
 }
 

@@ -42,7 +42,10 @@ build in a container locally. On RHEL 10 clones the `.rpm` needs EPEL for `libay
 PDFium is fetched for the platform and bundled next to the app. `.docx` output is converted to PDF when
 LibreOffice is installed. `BLANKEY_TELEMETRY_KEY` at build time is the key the app sends with its anonymous usage
 statistics (`src-tauri/src/telemetry.rs`, the `BLANKEY_TELEMETRY_KEY` repository secret in the release workflow);
-without it, builds carry the development key that only a local relay accepts.
+without it, builds carry the development key that only a local relay accepts. `BLANKEY_MIXPANEL_TOKEN`
+(same place, repository secret of the same name) is the Mixpanel project the app sends its beta usage events to
+(`src-tauri/src/mixpanel.rs`) and records session replays for (`ui/js/replay.js`, with the vendored
+`ui/vendor/mixpanel.module.js`, patched to keep personal data out of recordings); builds without it send none.
 
 To release: bump the version in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, update `CHANGELOG.md`,
 then push the tag `v<version>` on that commit. `.github/workflows/release.yml` makes a draft release with the version's

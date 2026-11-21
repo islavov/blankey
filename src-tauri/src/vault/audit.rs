@@ -16,7 +16,11 @@ const BACKUPS: usize = 3;
 
 impl Vault {
     pub fn audit(&self, actor: &str, action: &str, target: &str) -> Result<()> {
-        self.repo.insert_audit(actor, action, target)
+        self.repo.insert_audit(actor, action, target)?;
+        if let Some(hook) = &self.audit_hook {
+            hook(actor, action);
+        }
+        Ok(())
     }
 
     /// How often each reported action happened per month (`YYYY-MM`, UTC) since the first of `months`'s oldest one,

@@ -141,6 +141,7 @@ const HELP = {
   "settings.version": () => [t("Version"), t("The version you have. Check now looks for a newer one.")],
   "settings.updates": () => [t("Updates"), t("Looks for new versions every few hours. Nothing is installed until you choose to.")],
   "settings.statistics": () => [t("Statistics"), t("Anonymous counts that help improve Blankey. Never names or contents.")],
+  "settings.beta": () => [t("Beta"), t("Extra usage information collected while Blankey is in beta: which features are used, how the app is clicked through with all text hidden, and by which Blankey Online account when signed in. Never the contents of documents or profiles.")],
   "settings.help": () => [t("Help"), t("Shows the help box in the sidebar.")],
   "settings.mcp": () => [t("MCP server"), t("Where AI assistants on this computer, such as Claude Desktop or Claude Code, connect to Blankey. Copy the URL into their settings.")],
   "settings.relay": () => [t("Online server"), t("The Blankey Online server web agents connect through. Another server is only for one you run yourself.")],

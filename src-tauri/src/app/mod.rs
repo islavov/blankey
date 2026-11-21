@@ -184,6 +184,13 @@ fn start_doc_configs_expiry(handle: &AppHandle, app: &Arc<Blankey>) {
     });
 }
 
+/// A beta usage event that says when the app is in use, so Mixpanel can tell sessions apart.
+fn beta_track(handle: &AppHandle, event: &str) {
+    if let Some(mixpanel) = handle.try_state::<Arc<crate::mixpanel::Mixpanel>>() {
+        mixpanel.track(event, serde_json::json!({}));
+    }
+}
+
 fn start_auto_lock(handle: &AppHandle) {
     let handle = handle.clone();
     std::thread::spawn(move || loop {
@@ -289,6 +296,13 @@ pub fn run() {
             let telemetry = Arc::new(crate::telemetry::Telemetry::new(app.clone(), online));
             telemetry.start(&tauri::async_runtime::handle().inner().clone());
             handle.manage(telemetry);
+            let online = { let relay = relay.clone(); move || relay.signed_in() };
+            let mixpanel = Arc::new(crate::mixpanel::Mixpanel::new(app.clone(), crate::mixpanel::TOKEN, online));
+            mixpanel.start(&tauri::async_runtime::handle().inner().clone());
+            let audited = mixpanel.clone();
+            app.set_audit_hook(move |actor, action| audited.track(action, serde_json::json!({ "actor": actor })));
+            mixpanel.track("App Opened", serde_json::json!({}));
+            handle.manage(mixpanel);
             let updates = Arc::new(updates::Updates::new(handle.clone(), app.config.auto_update));
             updates.start();
             handle.manage(updates);
@@ -333,6 +347,9 @@ pub fn run() {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 hide_main(window.app_handle());
+            }
+            if let WindowEvent::Focused(focused) = event {
+                beta_track(window.app_handle(), if *focused { "App Focused" } else { "App Unfocused" });
             }
         })
         .invoke_handler(commands::handlers())
