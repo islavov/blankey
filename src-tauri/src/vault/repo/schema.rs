@@ -18,6 +18,7 @@ pub const MIGRATIONS: &[fn(&Connection) -> rusqlite::Result<()>] = &[
     field_keys,
     cases,
     case_chat,
+    link_cases,
 ];
 
 /// The Python app's DDL (peewee): NOT NULL without SQL defaults, so every insert names all its columns.
@@ -83,6 +84,11 @@ CREATE TABLE IF NOT EXISTS "link_submissions" ("sid" TEXT NOT NULL PRIMARY KEY, 
 CREATE INDEX IF NOT EXISTS "link_submissions_link_id" ON "link_submissions" ("link_id");
 "#,
     )
+}
+
+/// A collection link asked for from a case: what it receives lands in that case.
+fn link_cases(conn: &Connection) -> rusqlite::Result<()> {
+    add_column(conn, "links", "case_id", "INTEGER")
 }
 
 /// Finding profiles by the keys they hold.

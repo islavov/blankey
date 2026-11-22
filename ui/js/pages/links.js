@@ -314,6 +314,8 @@ function LinkSheet({ draft, requestId, close }) {
       kinds: kinds.split(",").map((k) => k.trim()).filter(Boolean),
       expires_days: Number(days),
       max_submissions: Number(maxSubmissions) || 1,
+      // a link asked for from a case: what comes in lands in that case
+      ...(draft.case_id != null && { case_id: draft.case_id }),
     };
     let link;
     try {

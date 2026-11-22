@@ -114,6 +114,8 @@ pub struct Link {
     pub revoked_at: Option<String>,
     /// submissions this computer has pulled from the relay
     pub received: i64,
+    /// the case the profile and files it receives land in; none for a link made outside a case
+    pub case_id: Option<i64>,
 }
 
 /// A submission to a collection link. status: pending, saved or discarded.

@@ -32,7 +32,7 @@ use crate::keychain::SecretStore;
 use repo::Repo;
 
 pub use error::{Result, VaultError};
-pub use first_use::FIRST_USE_STAGES;
+pub use first_use::{SampleMark, FIRST_USE_STAGES};
 pub use repo::{CaseCounts, NewDocument};
 pub use types::*;
 

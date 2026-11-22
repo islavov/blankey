@@ -619,6 +619,9 @@ pub struct CreateCollectionLinkArgs {
     max_submissions: Option<i64>,
     /// Shown to the user when confirming the link.
     reason: Option<String>,
+    /// The case the link is for: the profile and files it receives land in that case.
+    #[serde(default, deserialize_with = "lenient::opt_int")]
+    case_id: Option<i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -1017,6 +1020,10 @@ impl Tools {
             })?;
             std::fs::write(template.directory.join("flat.pdf"), &flat).map_err(string)?;
             app.audit("mcp", "save_template", &a.template_id);
+            // a template made in a case shows in it at once, and a sample case's guide moves on
+            if scope.case.is_some() {
+                app.cases_changed();
+            }
             let names: Vec<String> =
                 boxes.iter().filter_map(|b| b.get("name").and_then(Value::as_str)).map(str::to_string).collect();
             let mut warnings: Vec<String> = names
@@ -1071,6 +1078,10 @@ impl Tools {
                 case: scope.template_scope(),
             })?;
             app.audit("mcp", "save_template", &a.template_id);
+            // a template made in a case shows in it at once, and a sample case's guide moves on
+            if scope.case.is_some() {
+                app.cases_changed();
+            }
             text(&engine::describe_template(&template))
         })
         .await
@@ -1119,6 +1130,10 @@ impl Tools {
             let saved = app.save_docx_template(&source, origin, spec).map_err(|e| doc.scrub(&e));
             let (template, report) = saved?;
             app.audit("mcp", "save_template", &a.template_id);
+            // a template made in a case shows in it at once, and a sample case's guide moves on
+            if scope.case.is_some() {
+                app.cases_changed();
+            }
             let mut out = engine::describe_template(&template);
             out["replaced"] = json!(report.iter().map(|line| doc.scrub(line)).collect::<Vec<_>>());
             text(&out)
@@ -1509,7 +1524,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Ask the user to create a collection link: a short URL to a web form where someone else types the\nfields (and attaches files) for a profile. fields: [{key, label, type, required, hint}] with type one of\ntext, number, date, bool, egn, iban, email, phone. Give profile_id to fill an existing profile or new_profile_name.\nThe user confirms it in the app; wait_request then returns {link_id, url}. The answers never reach you: the user\nsaves them into the profile, and you fill documents from that profile (request_fill). Never ask for the values in chat."
+        description = "Ask the user to create a collection link: a short URL to a web form where someone else types the\nfields (and attaches files) for a profile. fields: [{key, label, type, required, hint}] with type one of\ntext, number, date, bool, egn, iban, email, phone. Give profile_id to fill an existing profile or new_profile_name;\ncase_id puts the profile and the files that come in into that case.\nThe user confirms it in the app; wait_request then returns {link_id, url}. The answers never reach you: the user\nsaves them into the profile, and you fill documents from that profile (request_fill). Never ask for the values in chat."
     )]
     async fn create_collection_link(
         &self,
@@ -1522,7 +1537,7 @@ impl Tools {
             if a.profile_id.is_none() && new_profile.is_none() {
                 return Err("Pass profile_id or new_profile_name".into());
             }
-            app.check_visible(&app.scope(None)?, a.profile_id)?;
+            app.check_visible(&app.scope(a.case_id)?, a.profile_id)?;
             let count =
                 |value: Option<i64>, default: u32| value.map_or(default, |v| v.clamp(0, u32::MAX as i64) as u32);
             let draft = LinkDraft {
@@ -1536,6 +1551,7 @@ impl Tools {
                 kinds: a.kinds,
                 expires_days: count(a.expires_days, 7),
                 max_submissions: count(a.max_submissions, 1),
+                case_id: a.case_id,
             };
             let spec = draft.spec()?;
             let mut payload = serde_json::to_value(&draft).map_err(string)?;
@@ -2535,8 +2551,10 @@ pub mod tests {
         // templates made in a case stay there
         let save = json!({"template_id": "deed", "name": "Deed", "kind": "typst", "source_text": "x", "fields": {},
                           "roles": {"buyer": "person"}, "case_id": case});
+        let before = changed.load(Ordering::SeqCst);
         out(t.save_template(args(save.clone()), local()).await);
         assert_eq!(app.templates.get("deed").unwrap().case, Some(app.vault().get_case(case).unwrap().uuid));
+        assert_eq!(changed.load(Ordering::SeqCst), before + 1, "the case shows its new template at once");
         let mut global_save = save.clone();
         global_save.as_object_mut().unwrap().remove("case_id");
         let refused = t.save_template(args(global_save), local()).await.unwrap_err();

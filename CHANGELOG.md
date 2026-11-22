@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- First use: the Cases page with no case on it offers the sample case or a start from your own document: drop it,
+  and a case named after the file holds it. A sample case has a guide on top that shows the steps to a first
+  document and the prompt to give the assistant in each, to send to the built-in assistant or copy for your own.
+  The guide follows what the case holds, so it moves whichever assistant does the work, and can be hidden.
+- AI assistant: its tab shows on every case. Without the built-in assistant it says how to get early access.
+- Cases: an empty tab says what goes there and offers the way: add a client by hand, scan an ID card or ask for the
+  details through a secure link (the last two with Blankey Online), ask the assistant for a template, fill a
+  document. A link asked for from a case puts the profile and the files it receives into that case.
 - AI assistant: the Markdown in its answers shows as formatting: bold, italic, code, headings, lists and code
   blocks.
 - AI assistant: an empty chat opens with first questions a new user can act on (what Blankey does for a lawyer or

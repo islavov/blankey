@@ -36,10 +36,14 @@ test("Back returns to the first page, Continue goes on to Cases", async () => {
   assert.ok($(".app"));
 });
 
-test("Skip leaves the ordinary empty Cases page", async () => {
-  await click(byText(".empty button", "Skip"));
+test("a first case from the user's own document is named after the file and ends the first use", async () => {
+  backend.db.pickPaths = ["/Users/test/Downloads/car_sale-contract.docx"];
+  await click(byText(".start button", "Choose a file"));
+  assert.deepEqual(backend.called("create_case").at(-1), { title: "car sale contract" });
+  assert.equal(backend.called("import_case_files").at(-1).items[0].path, "/Users/test/Downloads/car_sale-contract.docx");
   assert.deepEqual(backend.called("first_use_set").at(-1), { stage: null });
-  assert.match(text(".empty"), /^No cases yet/);
-  assert.equal($$("button.coach").length, 0);
+  assert.equal($(".case-title").value, "car sale contract");
+  assert.equal($(".guide"), null, "a case of the user's own has no guide");
+  assert.ok(text(".case-tabs .chip.active").startsWith("Files"), "without the assistant a case opens on its files");
   assert.equal(backend.called("create_sample_case").length, 0);
 });

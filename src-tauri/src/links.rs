@@ -90,6 +90,9 @@ pub struct LinkDraft {
     pub expires_days: u32,
     #[serde(default = "default_submissions")]
     pub max_submissions: u32,
+    /// the case the link was asked for from: the profile and files it receives land there
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_id: Option<i64>,
 }
 
 fn default_days() -> u32 {
@@ -446,7 +449,8 @@ impl Blankey {
     }
 
     /// Saves the (edited) values into the target profile and keeps the ticked files, re-encrypted under the vault.
-    /// Returns the problems without saving anything when there are any. Can be done again later.
+    /// A link asked for from a case puts both in that case, while the case exists. Returns the problems without
+    /// saving anything when there are any. Can be done again later.
     pub fn resolve_submission(
         &self,
         sid: &str,
@@ -461,10 +465,21 @@ impl Blankey {
             (info, link)
         };
         let specs: Vec<Value> = link.spec["fields"].as_array().cloned().unwrap_or_default();
+        let case_id = link.case_id.filter(|id| self.vault().get_case(*id).is_ok());
+        let target = match (target, case_id) {
+            (Target::New { name, kind, case: None }, Some(id)) => Target::New { name, kind, case: Some((id, "")) },
+            (target, _) => target,
+        };
         let (profile_id, fields) = match self.save_profile_values(&specs, values, target)? {
             ProfileSave::Problems(problems) => return Ok(problems),
             ProfileSave::Saved { profile_id, fields } => (profile_id, fields),
         };
+        if let Some(case_id) = case_id {
+            // an existing profile joins the case; one that is in it already keeps its role
+            if !self.case_profiles(case_id)?.iter().any(|(profile, ..)| profile.id == profile_id) {
+                self.vault().link_profile(case_id, profile_id, "").map_err(|e| e.to_string())?;
+            }
+        }
         let (_, _, plain) = self.unseal_submission(sid)?;
         let (header, contents) = parse_plaintext(&plain)?;
         let mut kept = Vec::new();
@@ -476,7 +491,7 @@ impl Blankey {
                 let new = NewFile {
                     profile_id: Some(profile_id),
                     link_id: &link.link_id,
-                    case_id: None,
+                    case_id,
                     name: &file.name,
                     file_type,
                     description: "",
@@ -489,6 +504,9 @@ impl Blankey {
         self.vault().set_submission_status(sid, "saved", Some(profile_id)).map_err(|e| e.to_string())?;
         let result = json!({"outcome": "saved", "profile_id": profile_id, "fields": fields, "files": kept});
         self.close_request(&info, "done", result)?;
+        if case_id.is_some() {
+            self.cases_changed();
+        }
         self.audit(
             "user",
             "link_submission",
@@ -637,6 +655,11 @@ pub(crate) mod tests {
 
     /// A link as `Relay::create_link` stores it, without the relay.
     pub fn stored_link(app: &Blankey, link_id: &str) -> [u8; 32] {
+        stored_case_link(app, link_id, None)
+    }
+
+    /// The same for a link asked for from a case.
+    pub fn stored_case_link(app: &Blankey, link_id: &str, case_id: Option<i64>) -> [u8; 32] {
         let (private, public) = crypto::new_seal_keypair();
         let spec = draft().spec().unwrap();
         let link = Link {
@@ -652,6 +675,7 @@ pub(crate) mod tests {
             max_submissions: 1,
             revoked_at: None,
             received: 0,
+            case_id,
         };
         app.vault().add_link(&link, private.as_ref()).unwrap();
         public
@@ -705,6 +729,53 @@ pub(crate) mod tests {
         let mut long = draft();
         long.expires_days = 91;
         assert!(long.spec().is_err());
+    }
+
+    #[test]
+    fn a_link_asked_for_from_a_case_puts_what_it_receives_in_the_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path());
+        let changed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = changed.clone();
+        app.set_cases_hook(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        let case = app.create_case("Lease, Main Road").unwrap();
+        let known = app.vault().create_profile("Paul Sample", "person").unwrap();
+        let public = stored_case_link(&app, "Cs3LnkA", Some(case));
+        assert_eq!(app.vault().get_link("Cs3LnkA").unwrap().case_id, Some(case));
+        let plain =
+            plaintext(json!({"name": "Jane Roe", "email": "jane@example.com"}), &[("id.png", "image/png", b"png")]);
+        let values: IndexMap<String, String> =
+            [("name", "Jane Roe"), ("email", "jane@example.com")].map(|(k, v)| (k.to_string(), v.to_string())).into();
+
+        // a new profile is the case's own, and the kept file is a file of the case
+        submit(&app, "Cs3LnkA", &public, &plain, "sub-new");
+        let jane = Target::New { name: "Jane", kind: "person", case: None };
+        assert!(app.resolve_submission("sub-new", jane, &values, &[0]).unwrap().is_empty());
+        let profiles = app.case_profiles(case).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!((profiles[0].0.name.as_str(), profiles[0].0.global), ("Jane", false));
+        let files = app.vault().list_collected_files().unwrap();
+        assert_eq!((files[0].case_id, files[0].profile_id), (Some(case), Some(profiles[0].0.id)));
+        assert!(changed.load(std::sync::atomic::Ordering::SeqCst) > 0, "the case shows them at once");
+
+        // an existing profile joins the case and stays global
+        assert!(app.resolve_submission("sub-new", Target::Existing(known), &values, &[]).unwrap().is_empty());
+        let names: Vec<String> = app.case_profiles(case).unwrap().into_iter().map(|(p, ..)| p.name).collect();
+        assert!(names.contains(&"Paul Sample".to_string()), "{names:?}");
+        assert!(app.vault().get_profile(known).unwrap().global);
+
+        // the case is gone: the link works as one made outside a case
+        app.delete_case(case).unwrap();
+        assert_eq!(
+            app.vault().get_link("Cs3LnkA").unwrap().case_id,
+            None,
+            "a later case with the same id gets nothing"
+        );
+        let other = Target::New { name: "Rob", kind: "person", case: None };
+        assert!(app.resolve_submission("sub-new", other, &values, &[]).unwrap().is_empty());
+        assert!(app.vault().list_profiles().unwrap().iter().any(|p| p.name == "Rob" && p.global));
     }
 
     #[test]

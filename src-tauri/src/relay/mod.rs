@@ -676,6 +676,9 @@ impl Relay {
         if !self.app.vault().unlocked() {
             return Err("Vault is locked".into());
         }
+        if let Some(case_id) = draft.case_id {
+            self.app.vault().get_case(case_id).map_err(|e| e.to_string())?;
+        }
         let device = self.device_id()?;
         let (private, public) = crypto::new_seal_keypair();
         let expires_at = draft.expires_at();
@@ -712,6 +715,7 @@ impl Relay {
             max_submissions: draft.max_submissions as i64,
             revoked_at: None,
             received: 0,
+            case_id: draft.case_id,
         };
         let stored = self.app.vault().add_link(&link, private.as_ref());
         if let Err(e) = stored {

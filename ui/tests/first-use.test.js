@@ -44,41 +44,51 @@ test("signing in waits for the browser, then shows the account", async () => {
   assert.equal(text(".welcome-account"), "you@example.com");
 });
 
-test("Continue lands on Cases, which points at the sample case", async () => {
+test("Continue lands on Cases, which offers the sample case and a start from the user's own document", async () => {
   await click(byText(".welcome-actions button", "Continue"));
   assert.deepEqual(backend.called("first_use_set").at(-1), { stage: "case" });
   assert.ok($(".app"));
-  assert.match(text(".empty"), /^Start with a sample case/);
-  assert.equal($$("button.coach").length, 2);
+  assert.equal(text(".start-label"), "Welcome to Blankey");
+  assert.equal(text(".start h1"), "Fill legal documents in minutes.");
+  assert.deepEqual($$(".start-card h2").map((el) => el.textContent), ["Try the sample case", "Start with my own document"]);
+  assert.equal(text(".start-card p"), "An invented loan contract and two invented people. About 2 minutes.");
+  assert.deepEqual($$("button.coach").map((b) => b.textContent), ["Open the sample case"]);
+  assert.equal($(".modal"), null, "nothing pops up");
 });
 
-test("New case makes the sample case and says what to ask an assistant", async () => {
-  await action("New case");
-  assert.equal($(".modal"), null);
-  assert.equal(backend.called("create_sample_case").length, 1);
+test("the sample case opens with a guide that says what to ask an assistant", async () => {
+  await click(byText(".start button", "Open the sample case"));
+  assert.deepEqual(backend.called("create_sample_case").at(-1), { sample: "loan" });
   assert.equal(text(".case-item.active .title"), "Sample: loan contract");
   assert.equal(text(".case-tabs .chip.active"), "AI assistant");
-  assert.match(text(".sample-prompt"), /open the case “Sample: loan contract”/);
-  await click(byText(".sample-guide button", "Copy"));
-  assert.equal(backend.called("copy_text").at(-1).text, text(".sample-prompt"));
+  assert.deepEqual($$(".guide-steps li").map((li) => li.textContent.trim()), ["1Ask for a template", "2Ask to fill it in", "3Check and generate"]);
+  assert.equal(text(".guide-steps li.current"), "1Ask for a template");
+  assert.equal(text(".guide-text h3"), "Ask the assistant for a template");
+  // signed in, yet the account has no built-in assistant: the prompt is for an assistant of the user's own
+  assert.deepEqual($$(".guide-actions button").map((b) => b.textContent), ["Copy"]);
+  await click(byText(".guide-actions button", "Copy"));
+  assert.equal(backend.called("copy_text").at(-1).text, "In Blankey, open the case “Sample: loan contract”. Make a template from the sample contract in this case");
+  assert.equal(text(".offer h3"), "Try the built-in assistant");
   assert.equal($$("button.coach").length, 0);
 });
 
-test("with the case chat, the sample case offers its own first questions", async () => {
+test("with the case chat, the guide asks the assistant itself and the chat offers the same questions", async () => {
   backend.db.relay.chat = true;
   backend.emit("relay-status");
   await click(document.body);
-  assert.equal($(".sample-guide"), null);
-  const chips = $$(".chat-starters .chip");
-  assert.deepEqual(chips.map((c) => c.textContent), [
+  assert.equal($(".offer"), null);
+  assert.deepEqual($$(".chat-starters .chip").map((c) => c.textContent), [
     "Make a template from the sample contract in this case",
     "Fill in the contract for the lender and the borrower",
   ]);
-  await click(chips[0]);
-  assert.equal(backend.called("send_chat_message").at(-1).text, "Make a template from the sample contract in this case");
+  assert.deepEqual($$(".guide-actions button").map((b) => b.textContent), ["Ask the assistant", "Copy"]);
+  await click(byText(".guide-actions button", "Ask the assistant"));
+  assert.deepEqual(backend.called("send_chat_message").at(-1), { caseId: 1, text: "Make a template from the sample contract in this case" });
+  await click(byText(".guide-actions button", "Copy"));
+  assert.equal(backend.called("copy_text").at(-1).text, "Make a template from the sample contract in this case");
 });
 
-test("the next New case asks for a title", async () => {
+test("New case asks for a title", async () => {
   await action("New case");
   assert.ok($(".modal input[name=title]"));
 });

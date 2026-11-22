@@ -302,13 +302,30 @@ fn first_use_set(state: State<AppState>, stage: Option<String>) -> CmdResult<()>
     Ok(())
 }
 
-/// The sample case in the UI language; it ends the first use.
+/// The sample cases there are to try, described in the UI language.
 #[tauri::command]
-fn create_sample_case(handle: AppHandle, state: State<AppState>) -> CmdResult<i64> {
-    let id = state.app.create_sample_case(&state.app.language())?;
+fn list_samples(state: State<AppState>) -> CmdResult<Vec<crate::sample::SampleInfo>> {
+    crate::sample::list_samples(&state.app.language())
+}
+
+/// A case made from `sample` (the first one when none is named) in the UI language; it ends the first use.
+#[tauri::command]
+fn create_sample_case(handle: AppHandle, state: State<AppState>, sample: Option<String>) -> CmdResult<i64> {
+    let id = state.app.create_sample_case(sample.as_deref(), &state.app.language())?;
     state.app.audit("user", "create_sample_case", &id.to_string());
     let _ = handle.emit("cases-changed", ());
     Ok(id)
+}
+
+/// Takes the guide off a sample case; the case stays.
+#[tauri::command]
+fn sample_guide_hide(state: State<AppState>, case_id: i64) -> CmdResult<()> {
+    let vault = state.app.vault();
+    let uuid = vault.get_case(case_id).map_err(err)?.uuid;
+    vault.hide_sample_guide(&uuid).map_err(err)?;
+    drop(vault);
+    state.app.audit("user", "sample_guide_hide", &case_id.to_string());
+    Ok(())
 }
 
 /// Adds Blankey to Claude Desktop's config, as the tray does; returns the config file's name.
@@ -327,7 +344,7 @@ struct CaseRow {
     updated_at: String,
     profiles: Vec<String>,
     files: i64,
-    /// the sample case of a first use
+    /// made from a sample
     sample: bool,
 }
 
@@ -339,7 +356,7 @@ fn list_cases(state: State<AppState>) -> CmdResult<Vec<CaseRow>> {
         vault.list_profiles().map_err(err)?.into_iter().map(|p| (p.id, p.name)).collect();
     let links = vault.case_links().map_err(err)?;
     let files = vault.case_file_counts().map_err(err)?;
-    let sample = vault.sample_case().map_err(err)?;
+    let samples = vault.sample_cases().map_err(err)?;
     Ok(vault
         .list_cases()
         .map_err(err)?
@@ -351,7 +368,7 @@ fn list_cases(state: State<AppState>) -> CmdResult<Vec<CaseRow>> {
                 .filter_map(|l| names.get(&l.profile_id).cloned())
                 .collect(),
             files: files.get(&c.id).copied().unwrap_or(0),
-            sample: sample.as_deref() == Some(c.uuid.as_str()),
+            sample: samples.contains_key(&c.uuid),
             id: c.id,
             title: c.title,
             updated_at: c.updated_at,
@@ -379,7 +396,8 @@ struct CaseProfile {
     document: String,
 }
 
-/// The case with its notes (needs the vault unlocked), its profiles and how much of each kind it holds.
+/// The case with its notes (needs the vault unlocked), its profiles, how much of each kind it holds and, for one made
+/// from a sample, its guide.
 #[tauri::command]
 fn get_case(state: State<AppState>, id: i64) -> CmdResult<Value> {
     let app = &state.app;
@@ -401,10 +419,11 @@ fn get_case(state: State<AppState>, id: i64) -> CmdResult<Value> {
         .collect();
     let (notes, counts, sample) = {
         let vault = app.vault();
-        (vault.case_notes(id).map_err(err)?, vault.case_counts(id).map_err(err)?, vault.sample_case().map_err(err)?)
+        let sample = vault.sample_cases().map_err(err)?.contains_key(&info.uuid);
+        (vault.case_notes(id).map_err(err)?, vault.case_counts(id).map_err(err)?, sample)
     };
     Ok(json!({
-        "id": info.id, "title": info.title, "notes": notes, "sample": sample.as_deref() == Some(info.uuid.as_str()), "created_at": info.created_at, "updated_at": info.updated_at,
+        "id": info.id, "title": info.title, "notes": notes, "sample": sample, "guide": app.sample_guide(id)?, "created_at": info.created_at, "updated_at": info.updated_at,
         "counts": {
             "files": counts.files, "profiles": profiles.len(), "templates": app.case_templates(&scope).len(),
             "fill_sets": counts.fill_sets, "documents": counts.documents, "activity": counts.requests,
@@ -1991,7 +2010,9 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         set_busy,
         copy_text,
         first_use_set,
+        list_samples,
         create_sample_case,
+        sample_guide_hide,
         connect_claude_desktop,
         list_cases,
         create_case,

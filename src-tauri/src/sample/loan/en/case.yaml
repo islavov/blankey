@@ -1,0 +1,38 @@
+title: "Sample: loan contract"
+description: An invented loan contract and two invented people. About 2 minutes.
+file:
+  name: Loan contract.docx
+  description: Sample loan contract
+profiles:
+  - name: Maria Example
+    kind: person
+    role: lender
+    fields:
+      - { key: name, label: Full name, value: Maria Example }
+      - { key: id_card.number, label: ID card number, value: "640000001" }
+      - { key: address, label: Permanent address, value: "Springfield, 12 Oak Street" }
+  - name: Peter Sample
+    kind: person
+    role: borrower
+    fields:
+      - { key: name, label: Full name, value: Peter Sample }
+      - { key: id_card.number, label: ID card number, value: "640000002" }
+      - { key: address, label: Permanent address, value: "Riverton, 5 Elm Road" }
+# The steps to a first document. A step is done once the case holds what it makes: any of the counts under `done`
+# (files, profiles, templates, fill_sets, documents, requests) reaching its number.
+guide:
+  - title: Ask for a template
+    heading: Ask the assistant for a template
+    text: It marks the blanks in Loan contract.docx, so the contract can be filled in again for other people.
+    prompt: Make a template from the sample contract in this case
+    done: { templates: 1 }
+  - title: Ask to fill it in
+    heading: Ask to fill it in
+    text: The template is ready. The assistant picks where each value comes from, without seeing the values.
+    prompt: Fill in the contract for the lender and the borrower
+    done: { requests: 1, fill_sets: 1 }
+  - title: Check and generate
+    heading: Check the values and generate
+    text: Blankey shows the filled contract for you to check. Fix anything that looks wrong, then press Save and Generate.
+    action: open_fill
+    done: { documents: 1 }

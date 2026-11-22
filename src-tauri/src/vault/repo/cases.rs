@@ -89,6 +89,7 @@ impl Repo {
         tx.execute("DELETE FROM documents WHERE case_id = ?1", [id])?;
         tx.execute("DELETE FROM fill_sets WHERE case_id = ?1", [id])?;
         tx.execute("UPDATE requests SET case_id = NULL WHERE case_id = ?1", [id])?;
+        tx.execute("UPDATE links SET case_id = NULL WHERE case_id = ?1", [id])?;
         tx.execute("DELETE FROM case_profiles WHERE case_id = ?1", [id])?;
         tx.execute("DELETE FROM case_messages WHERE case_id = ?1", [id])?;
         tx.execute("DELETE FROM case_summaries WHERE case_id = ?1", [id])?;

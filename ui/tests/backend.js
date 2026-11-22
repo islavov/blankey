@@ -41,6 +41,50 @@ export const chatThread = () => ({
   ],
 });
 
+// the sample cases the backend ships, with the steps of each one's guide
+const SAMPLES = [
+  {
+    id: "loan",
+    title: "Sample: loan contract",
+    description: "An invented loan contract and two invented people. About 2 minutes.",
+    guide: [
+      {
+        title: "Ask for a template",
+        heading: "Ask the assistant for a template",
+        text: "It marks the blanks in Loan contract.docx, so the contract can be filled in again for other people.",
+        prompt: "Make a template from the sample contract in this case",
+        action: null,
+        done: { templates: 1 },
+      },
+      {
+        title: "Ask to fill it in",
+        heading: "Ask to fill it in",
+        text: "The template is ready. The assistant picks where each value comes from, without seeing the values.",
+        prompt: "Fill in the contract for the lender and the borrower",
+        action: null,
+        done: { requests: 1, fill_sets: 1 },
+      },
+      {
+        title: "Check and generate",
+        heading: "Check the values and generate",
+        text: "Blankey shows the filled contract for you to check. Fix anything that looks wrong, then press Save and Generate.",
+        prompt: null,
+        action: "open_fill",
+        done: { documents: 1 },
+      },
+    ],
+  },
+];
+
+/** The guide of a sample case as get_case gives it: the current step is one past the last step that is done. */
+function guideOf(found, counts) {
+  const sample = SAMPLES.find((s) => s.id === found.sample_id);
+  if (!sample || found.guide_hidden) return null;
+  const reached = { ...counts, requests: counts.activity };
+  const done = sample.guide.map((step) => Object.entries(step.done).some(([name, n]) => reached[name] >= n));
+  return { sample: sample.id, step: done.lastIndexOf(true) + 1, steps: sample.guide.map(({ done: _, ...step }) => step) };
+}
+
 export function seed() {
   return {
     initialized: true,
@@ -409,7 +453,7 @@ export function createBackend(db = seed()) {
     create_link: ({ draft, requestId }) => {
       if (!draft.title.trim()) throw "Give the link a title";
       const link = { link_id: "Ab3dE9z", url: "https://relay.blankey.io/s/Ab3dE9z#qqj_9wO1CyKX9Pbh", title: draft.title };
-      db.links.unshift({ ...link, state: "open", submissions: 0, max_submissions: draft.max_submissions, fields: draft.fields.map((f) => f.label), expires_at: "2026-10-24T09:00:00Z" });
+      db.links.unshift({ ...link, case_id: draft.case_id ?? null, state: "open", submissions: 0, max_submissions: draft.max_submissions, fields: draft.fields.map((f) => f.label), expires_at: "2026-10-24T09:00:00Z" });
       if (requestId) removeRequest(requestId);
       return link;
     },
@@ -547,10 +591,13 @@ export function createBackend(db = seed()) {
     first_use_set: ({ stage }) => {
       db.firstUse = stage;
     },
+    list_samples: () => SAMPLES.map(({ id, title, description }) => ({ id, title, description })),
     // an invented contract and the two people in it
-    create_sample_case: () => {
+    create_sample_case: ({ sample = SAMPLES[0].id } = {}) => {
+      const source = SAMPLES.find((s) => s.id === sample);
+      if (!source) throw `Unknown sample ${sample}`;
       const id = nextId(db.cases);
-      db.cases.push({ id, title: "Sample: loan contract", notes: "", sample: true, created_at: now(), updated_at: now() });
+      db.cases.push({ id, title: source.title, notes: "", sample: true, sample_id: source.id, created_at: now(), updated_at: now() });
       for (const [name, role] of [["Maria Example", "lender"], ["Peter Sample", "borrower"]]) {
         const profile = nextId(db.profiles);
         db.profiles.push({ id: profile, name, kind: "person", global: false });
@@ -560,6 +607,9 @@ export function createBackend(db = seed()) {
       db.collected.unshift({ id: nextId(db.collected), case_id: id, profile_id: null, link_id: "", name: "Loan contract.docx", type: "docx", size: 20 * 1024, description: "Sample loan contract", created_at: now(), link_title: "", profile_name: null });
       db.firstUse = null;
       return id;
+    },
+    sample_guide_hide: ({ caseId }) => {
+      db.cases.find((c) => c.id === caseId).guide_hidden = true;
     },
     connect_claude_desktop: () => "claude_desktop_config.json",
     get_case: ({ id }) => {
@@ -571,19 +621,16 @@ export function createBackend(db = seed()) {
         return { id: p.id, name: p.name, kind: p.kind, global: p.global !== false, role: l.role, cases: casesOf(p.id).length, document };
       });
       const count = (rows) => rows.filter((r) => r.case_id === id).length;
-      return {
-        ...found,
-        sample: found.sample === true,
-        profiles,
-        counts: {
-          files: count(db.collected),
-          profiles: profiles.length,
-          templates: count(db.templates),
-          fill_sets: count(db.sets),
-          documents: count(db.docs),
-          activity: count(db.activity) + db.requests.filter((r) => r.payload?.case_id === id).length,
-        },
+      const counts = {
+        files: count(db.collected),
+        profiles: profiles.length,
+        templates: count(db.templates),
+        fill_sets: count(db.sets),
+        documents: count(db.docs),
+        activity: count(db.activity) + db.requests.filter((r) => r.payload?.case_id === id).length,
       };
+      const { sample_id: _, guide_hidden: __, ...row } = found;
+      return { ...row, sample: found.sample === true, guide: guideOf(found, counts), profiles, counts };
     },
     update_case: ({ id, title, notes }) => {
       const found = db.cases.find((c) => c.id === id);

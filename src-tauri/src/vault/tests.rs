@@ -504,6 +504,24 @@ fn reads_python_vault() {
 }
 
 #[test]
+fn sample_cases_keep_their_sample_and_a_hidden_guide() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = vault(dir.path());
+    assert!(vault.sample_cases().unwrap().is_empty());
+    // a vault from when there was one sample kept only its case's uuid
+    vault.set_text_meta("sample_case", Some("old-uuid")).unwrap();
+    assert_eq!(vault.sample_cases().unwrap()["old-uuid"], SampleMark { sample: "loan".into(), hidden: false });
+
+    vault.set_sample("new-uuid", "lease").unwrap();
+    vault.hide_sample_guide("old-uuid").unwrap();
+    vault.hide_sample_guide("no-such-case").unwrap();
+    let marks = vault.sample_cases().unwrap();
+    assert_eq!(marks.len(), 2);
+    assert_eq!(marks["old-uuid"], SampleMark { sample: "loan".into(), hidden: true });
+    assert_eq!(marks["new-uuid"], SampleMark { sample: "lease".into(), hidden: false });
+}
+
+#[test]
 fn first_use_stage_is_kept_until_done() {
     let dir = tempfile::tempdir().unwrap();
     let vault = vault(dir.path());
