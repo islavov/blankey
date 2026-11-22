@@ -446,7 +446,7 @@ input.case-title { font-size: 16px; font-weight: 600; border-color: transparent;
 input.case-title:hover { border-color: var(--line); }
 input.case-title:focus { background: var(--input); }
 .case-notes { resize: vertical; min-height: 40px; }
-.case-tabs { padding: 8px 20px; align-items: center; }
+.case-tabs { padding: 8px 20px; align-items: center; flex-wrap: wrap; }
 .chip.assistant { display: inline-flex; align-items: center; gap: 5px; }
 .chip.assistant svg { width: 12px; height: 12px; color: var(--accent); }
 .case-tab { flex: 1; min-height: 0; overflow: auto; }

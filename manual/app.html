@@ -1,0 +1,49 @@
+<!doctype html>
+<!-- The real UI over the fake backend, for the user manual's screenshots: manual/build.mjs opens it and drives it. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <base href="/ui/">
+  <title>Blankey</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">{ "imports": { "node:fs": "/ui/tests/preview/fs-shim.js" } }</script>
+</head>
+<body>
+  <div id="root"></div>
+  <div id="sheet-root"></div>
+  <div id="modal-root"></div>
+  <div id="menu-root"></div>
+  <div id="toast" class="toast hidden"></div>
+  <script type="module">
+    import * as fixtures from "/ui/tests/backend.js";
+    import { t } from "/ui/js/i18n.js";
+    import { readFileSync } from "/ui/tests/preview/fs-shim.js";
+    import { starts, specimen } from "/manual/seed.js";
+    import { commands as overrides } from "/manual/overrides.js";
+
+    const params = new URLSearchParams(location.search);
+    const language = params.get("lang");
+    const start = starts[params.get("start") || "cases"];
+    const backend = fixtures.createBackend(Object.assign(fixtures.seed(), start(), language ? { deviceLanguage: language } : {}));
+
+    // The fake backend's page images are an empty stub; the manual shows invented specimen pages in their place.
+    const STUB = fixtures.pagesPreview.pages[0].image;
+    const withSpecimens = (value, width) => {
+      if (value === STUB) return specimen(width);
+      if (Array.isArray(value)) return value.map((item) => withSpecimens(item));
+      if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withSpecimens(v, value.width)]));
+      return value;
+    };
+    backend.db.update.current = JSON.parse(readFileSync("/src-tauri/tauri.conf.json")).version;
+    const invoke = backend.tauri.core.invoke;
+    backend.tauri.core.invoke = async (cmd, args) => withSpecimens(overrides[cmd] ? structuredClone(overrides[cmd](args, backend)) : await invoke(cmd, args));
+
+    window.__TAURI__ = backend.tauri;
+    window.backend = backend;
+    window.fixtures = fixtures;
+    window.t = t;
+    await import("/ui/js/main.js");
+  </script>
+</body>
+</html>

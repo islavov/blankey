@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 856 540" width="856" height="540" font-family="Helvetica, Arial, sans-serif">
+  <rect width="856" height="540" rx="28" fill="#eef3f1"/>
+  <rect x="0" y="0" width="856" height="84" rx="28" fill="#2e7d5b"/>
+  <rect x="0" y="50" width="856" height="34" fill="#2e7d5b"/>
+  <text x="40" y="54" font-size="30" font-weight="700" fill="#fff">IDENTITY CARD</text>
+  <text x="816" y="54" font-size="20" fill="#d6ebe2" text-anchor="end">SPECIMEN</text>
+  <rect x="40" y="124" width="200" height="250" rx="10" fill="#cfdcd6"/>
+  <circle cx="140" cy="214" r="48" fill="#a9bdb4"/>
+  <path d="M60 374c0-60 36-96 80-96s80 36 80 96z" fill="#a9bdb4"/>
+  <text x="300" y="122" font-size="15" fill="#6b7a74">Full name</text>
+  <text x="304" y="153" font-size="24" font-weight="600" fill="#1c2421">Anna Demo</text>
+  <text x="300" y="202" font-size="15" fill="#6b7a74">Personal number</text>
+  <text x="304" y="233" font-size="24" font-weight="600" fill="#1c2421">8001010009</text>
+  <text x="300" y="282" font-size="15" fill="#6b7a74">Date of birth</text>
+  <text x="304" y="313" font-size="24" font-weight="600" fill="#1c2421">01.01.1980</text>
+  <text x="580" y="282" font-size="15" fill="#6b7a74">Valid until</text>
+  <text x="584" y="313" font-size="24" font-weight="600" fill="#1c2421">01.01.2030</text>
+  <text x="300" y="362" font-size="15" fill="#6b7a74">Card number</text>
+  <text x="304" y="393" font-size="24" font-weight="600" fill="#1c2421">000000000</text>
+  <text x="40" y="470" font-size="22" fill="#6b7a74" font-family="Menlo, monospace" letter-spacing="2">IDXXX000000000&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;</text>
+  <text x="40" y="502" font-size="22" fill="#6b7a74" font-family="Menlo, monospace" letter-spacing="2">DEMO&lt;&lt;ANNA&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;</text>
+</svg>

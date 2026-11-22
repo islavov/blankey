@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 612 792" width="612" height="792" font-family="Helvetica, Arial, sans-serif">
+  <rect width="612" height="792" fill="#fff"/>
+  <text x="306" y="62" font-size="17" font-weight="700" fill="#1c2421" text-anchor="middle">APPLICATION FORM</text>
+  <text x="72" y="113" font-size="12" fill="#444">Full name</text>
+  <rect x="150" y="92" width="250" height="30" fill="none" stroke="#9aa3a0"/>
+  <text x="72" y="163" font-size="12" fill="#444">Address</text>
+  <rect x="150" y="142" width="390" height="30" fill="none" stroke="#9aa3a0"/>
+  <text x="72" y="213" font-size="12" fill="#444">Personal no.</text>
+  <rect x="150" y="192" width="150" height="30" fill="none" stroke="#9aa3a0"/>
+  <rect x="72" y="250" width="468" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="267" width="468" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="284" width="468" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="317" width="352" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="334" width="468" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="351" width="468" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="384" width="387" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="401" width="468" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="418" width="468" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="451" width="468" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="468" width="468" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="485" width="414" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="518" width="468" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="535" width="329" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="552" width="468" height="7" rx="3.5" fill="#d9dcdf"/>
+  <rect x="72" y="569" width="468" height="7" rx="3.5" fill="#d9dcdf"/>
+  <text x="72" y="700" font-size="12" fill="#444">Date</text>
+  <line x1="110" y1="702" x2="250" y2="702" stroke="#9aa3a0"/>
+  <text x="330" y="700" font-size="12" fill="#444">Signature</text>
+  <line x1="392" y1="702" x2="540" y2="702" stroke="#9aa3a0"/>
+</svg>
