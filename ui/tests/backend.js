@@ -49,6 +49,9 @@ export function seed() {
     firstUse: null,
     keyring: true,
     password: "pw",
+    // the open workspace and all of them; `fresh` marks one whose vault is not created yet
+    workspace: "default",
+    workspaces: [{ id: "default", name: "Personal", kind: "local" }],
     profiles: [
       { id: 1, name: "John", kind: "person" },
       { id: 2, name: "Acme", kind: "company" },
@@ -300,9 +303,24 @@ export function createBackend(db = seed()) {
     db.collected = db.collected.filter((f) => f.profile_id !== id || f.case_id != null);
   };
 
+  const currentWorkspace = () => db.workspaces.find((w) => w.id === db.workspace);
+  // stands in for the relaunch into another workspace: it comes up locked
+  const openWorkspace = (id) => {
+    db.workspace = id;
+    db.unlocked = false;
+    emit("vault-locked");
+  };
+  const addWorkspace = (name, fresh) => {
+    const id = `w-${db.workspaces.length + 1}`;
+    db.workspaces.push({ id, name, kind: "local", ...(fresh ? { fresh } : {}) });
+    openWorkspace(id);
+  };
+
   const handlers = {
     status: () => ({
-      initialized: db.initialized,
+      workspace: db.workspace,
+      workspaces: db.workspaces.map(({ id, name, kind }) => ({ id, name, kind })),
+      initialized: db.initialized && !currentWorkspace().fresh,
       unlocked: db.unlocked,
       pending: db.requests.length,
       keyring_enabled: db.keyring,
@@ -316,7 +334,29 @@ export function createBackend(db = seed()) {
       languages: { en: "English", bg: "Български" },
       first_use: db.firstUse,
     }),
+    workspace_switch: ({ id }) => {
+      if (!db.workspaces.some((w) => w.id === id)) throw "unknown workspace";
+      openWorkspace(id);
+    },
+    workspace_create: ({ name }) => addWorkspace(name, true),
+    workspace_restore: ({ name, password }) => {
+      if (password !== db.password) throw "Wrong password.";
+      addWorkspace(name, false);
+    },
+    workspace_delete: ({ password }) => {
+      if (db.workspaces.length < 2) throw "The only workspace cannot be deleted.";
+      if (!currentWorkspace().fresh && password !== db.password) throw "Wrong password.";
+      db.workspaces = db.workspaces.filter((w) => w.id !== db.workspace);
+      openWorkspace(db.workspaces[0].id);
+    },
+    // null: the picker was cancelled
+    backup_pick: () => (db.backupFile === null ? null : (db.backupFile ?? "/Users/test/Backups/Clients 2026-11-20.blankey")),
+    backup_create: ({ password }) => {
+      if (password !== db.password) throw "Wrong password.";
+      return db.backupTarget === null ? null : `/Users/test/Backups/${currentWorkspace().name} 2026-11-21.blankey`;
+    },
     setup: ({ password }) => {
+      delete currentWorkspace().fresh;
       db.initialized = true;
       db.unlocked = true;
       db.password = password;

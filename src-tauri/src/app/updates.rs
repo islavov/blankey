@@ -10,7 +10,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use super::{notify, state, tray};
-use crate::config::Config;
 use crate::i18n::{mark, tf};
 
 const RELEASES: &str = "https://github.com/islavov/blankey/releases";
@@ -120,7 +119,7 @@ impl Updates {
     pub fn set_auto(&self, enabled: bool) -> Result<(), String> {
         *self.auto.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = enabled;
         let app = &state(&self.handle).app;
-        let mut config = Config::load_from(app.config.data_dir.clone()).map_err(|e| e.to_string())?;
+        let mut config = app.config.reload().map_err(|e| e.to_string())?;
         config.auto_update = enabled;
         config.save().map_err(|e| e.to_string())?;
         app.audit("user", if enabled { "auto_update_on" } else { "auto_update_off" }, "");

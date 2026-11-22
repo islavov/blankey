@@ -154,6 +154,8 @@ replacements no longer apply.
 
 - `src-tauri/src/vault.rs`, `crypto.rs`, `keychain.rs`: SQLite vault, AES-256-GCM per field, Argon2id-wrapped keys,
   X25519-sealed requests, keychain / Touch ID unlock, rotating backups
+- `src-tauri/src/workspaces.rs`, `backup.rs`: workspaces, each a data dir with its own vault (the app relaunches
+  into another one), and the local backup of one: a tar encrypted in chunks with the master password
 - `src-tauri/src/templates/`: template store, Jinja bindings (minijinja), docx tokenizing and rendering, Typst,
   fill sets, previews
 - `src-tauri/src/library/`: template folders: roots, the scan, metadata and name categories (`categories.yaml`)

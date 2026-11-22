@@ -1,6 +1,7 @@
 //! The audit log, the usage numbers reported from it, and backups.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use super::error::Result;
 use super::Vault;
@@ -51,6 +52,11 @@ impl Vault {
             }
         }
         self.repo.backup_to(&numbered(1))
+    }
+
+    /// A consistent copy of the whole database at `target`, for a local backup.
+    pub fn snapshot_to(&self, target: &Path) -> Result<()> {
+        self.repo.backup_to(target)
     }
 
     /// (action, target) of every audit entry, oldest first.

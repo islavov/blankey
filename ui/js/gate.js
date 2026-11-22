@@ -6,6 +6,7 @@ import { html, reload, state, update, useStore } from "./lib.js";
 import { processRequests } from "./requests.js";
 import { toast } from "./ui/feedback.js";
 import { Select } from "./ui/select.js";
+import { deleteWorkspace, WorkspacePick } from "./workspaces.js";
 
 /** Shows the app after an unlock: Activity first when the assistant is waiting, then the waiting requests. */
 export async function enterApp() {
@@ -58,8 +59,9 @@ export function LanguagePick() {
     </div>`;
 }
 
-/** The centered card; `onSubmit(values)` may throw a message, shown under the form. `language` adds the picker. */
-function GateForm({ title, text, onSubmit, language, children }) {
+/** The centered card; `onSubmit(values)` may throw a message, shown under the form. `language` adds the picker;
+ * `workspaces` the select box with the open workspace, which opens another one. */
+function GateForm({ title, text, onSubmit, language, workspaces, children }) {
   const form = useRef();
   const [error, setError] = useState("");
   useEffect(() => form.current.querySelector("input")?.focus(), [title]);
@@ -88,7 +90,7 @@ function GateForm({ title, text, onSubmit, language, children }) {
         <img src="icon.png" alt="" class="gate-icon" />
         <h1>${title}</h1>
         <p class="muted">${text}</p>
-        <form autocomplete="off" ref=${form} onSubmit=${submit}>${children}</form>
+        <form autocomplete="off" ref=${form} onSubmit=${submit}>${workspaces && html`<${WorkspacePick} />`}${children}</form>
         <p class="error">${error}</p>
       </div>
     </div>`;
@@ -104,12 +106,14 @@ function Setup() {
     update({ recoveryKey: recovery });
   };
   return html`
-    <${GateForm} title=${t("Create your vault")} onSubmit=${create} language
+    <${GateForm} title=${t("Create your vault")} onSubmit=${create} language workspaces
       text=${t("Personal data is encrypted with this password. Without it or the recovery key the data cannot be read.")}>
       <input type="password" name="password" placeholder=${t("Master password (8+ characters)")} />
       <input type="password" name="confirm" placeholder=${t("Repeat password")} />
       <label class="check small"><input type="checkbox" name="keyring" /> ${keyringLabel(status)}</label>
       <button class="primary">${t("Create vault")}</button>
+      ${status.workspaces.length > 1 &&
+      html`<button type="button" class="link" id="workspace-delete" onClick=${() => deleteWorkspace(status)}>${t("Delete this workspace")}</button>`}
     </${GateForm}>`;
 }
 
@@ -128,7 +132,7 @@ function Unlock({ onForgot }) {
     await enterApp();
   };
   return html`
-    <${GateForm} title=${t("Blankey is locked")} text=${text} onSubmit=${unlock}>
+    <${GateForm} title=${t("Blankey is locked")} text=${text} onSubmit=${unlock} workspaces>
       <input type="password" name="password" placeholder=${t("Master password")} />
       <button class="primary">${t("Unlock")}</button>
       ${status.keyring_enabled &&

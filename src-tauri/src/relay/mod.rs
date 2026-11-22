@@ -463,8 +463,8 @@ impl Relay {
     fn save_settings(&self) {
         let inner = self.inner();
         // as it is on disk now, so other settings changed since launch stay
-        let dir = self.app.config.data_dir.clone();
-        let current = if dir.join("config.toml").exists() { Config::load_from(dir).ok() } else { None };
+        let saved = &self.app.config;
+        let current = if saved.config_path().exists() { saved.reload().ok() } else { None };
         let config = Config {
             relay_url: inner.url.clone(),
             relay_enabled: inner.enabled,

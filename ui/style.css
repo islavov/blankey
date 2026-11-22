@@ -115,6 +115,25 @@ input[type=checkbox] { accent-color: var(--accent); }
 .gate { position: relative; }
 .gate-lang { position: absolute; top: 14px; right: 16px; }
 .gate-card.wide { width: 520px; }
+.ws-select { position: relative; margin-bottom: 4px; }
+.ws-box { display: flex; align-items: center; gap: 12px; width: 100%; height: 58px; padding: 0 14px 0 11px; border-radius: 12px; text-align: left; }
+.ws-box:hover:not(:disabled) { background: var(--input); border-color: var(--muted); }
+.ws-box.open, .ws-box:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+.ws-avatar { width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: 9px; background: var(--accent); color: var(--accent-text); font-size: 13px; font-weight: 600; }
+.ws-text { display: grid; flex: 1; min-width: 0; line-height: 1.3; }
+.ws-label { font-size: 11px; color: var(--muted); }
+.ws-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-chevron { width: 16px; height: 16px; flex: none; color: var(--muted); transition: transform 0.15s; }
+.ws-box.open .ws-chevron { transform: rotate(180deg); }
+.ws-list { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 6px); max-height: 300px; overflow: auto; padding: 6px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 36px rgba(0, 0, 0, 0.2); }
+.ws-option { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
+.ws-option:hover { background: var(--hover); }
+.ws-option .ws-avatar { width: 28px; height: 28px; border-radius: 7px; font-size: 11px; background: var(--selected); color: var(--text); }
+.ws-option.checked .ws-avatar { background: var(--accent); color: var(--accent-text); }
+.ws-option .ws-name { flex: 1; font-size: 13px; font-weight: 500; }
+.ws-option.action .ws-avatar { background: none; border: 1px dashed var(--muted); color: var(--muted); font-size: 15px; font-weight: 400; }
+.ws-check { width: 16px; height: 16px; flex: none; color: var(--accent); }
+.ws-sep { height: 1px; background: var(--line); margin: 6px 4px; }
 .welcome-points { list-style: none; padding: 0; margin: 18px auto; display: grid; gap: 10px; text-align: left; width: fit-content; }
 .welcome-points li { display: flex; gap: 10px; align-items: center; }
 .welcome-points svg { width: 16px; height: 16px; flex: none; color: var(--accent); }

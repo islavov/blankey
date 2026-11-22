@@ -20,6 +20,7 @@ use crate::pii;
 use crate::templates::preview::{self, Preview};
 use crate::templates::{docx, TemplateKind};
 use crate::vault::{CollectedFile, FieldInput, Link, Request, SubmissionInfo};
+use crate::workspaces::{Workspace, Workspaces};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -57,14 +58,20 @@ pub struct Status {
     languages: serde_json::Map<String, Value>,
     /// "wizard" or "case" while a new vault's owner is shown around; None after, and for every older vault
     first_use: Option<String>,
+    /// the open workspace's id, and every workspace
+    workspace: String,
+    workspaces: Vec<Workspace>,
 }
 
 // async so it runs off the main thread: the window waits on it before drawing anything
 #[tauri::command]
 async fn status(state: State<'_, AppState>) -> CmdResult<Status> {
     let app = &state.app;
+    let workspaces = Workspaces::load(&app.config.root_dir);
     let vault = app.vault();
     Ok(Status {
+        workspace: open_workspace(app, &workspaces),
+        workspaces: workspaces.list,
         initialized: vault.initialized(),
         unlocked: vault.unlocked(),
         pending: vault.count_requests("pending").map_err(err)?,
@@ -153,6 +160,133 @@ fn set_busy(state: State<AppState>, busy: bool) {
 #[tauri::command]
 fn copy_text(handle: AppHandle, text: String) -> CmdResult<()> {
     handle.clipboard().write_text(text).map_err(err)
+}
+
+// -- workspaces & local backup -------------------------------------------------
+
+/// The workspace this process has open: workspaces.json names another one from a switch until the relaunch.
+fn open_workspace(app: &Blankey, workspaces: &Workspaces) -> String {
+    let open = workspaces.list.iter().find(|w| workspaces.dir(&w.id) == app.config.data_dir);
+    open.map_or_else(|| workspaces.active.clone(), |w| w.id.clone())
+}
+
+/// Names `id` as the open workspace and relaunches into it.
+fn open_and_relaunch(handle: &AppHandle, mut workspaces: Workspaces, id: &str) -> CmdResult<()> {
+    workspaces.set_active(id)?;
+    workspaces.save().map_err(err)?;
+    super::relaunch(handle)
+}
+
+fn workspace_name(name: &str) -> CmdResult<&str> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(crate::i18n::mark("Enter a name for the workspace.").into());
+    }
+    Ok(name)
+}
+
+#[tauri::command]
+async fn workspace_switch(handle: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    open_and_relaunch(&handle, Workspaces::load(&state.app.config.root_dir), &id)
+}
+
+/// A new, empty workspace; Blankey relaunches into it and asks for its master password.
+#[tauri::command]
+async fn workspace_create(handle: AppHandle, state: State<'_, AppState>, name: String) -> CmdResult<()> {
+    let mut workspaces = Workspaces::load(&state.app.config.root_dir);
+    let id = Workspaces::new_id();
+    std::fs::create_dir_all(workspaces.dir(&id)).map_err(err)?;
+    workspaces.add(&id, workspace_name(&name)?);
+    open_and_relaunch(&handle, workspaces, &id)
+}
+
+/// A new workspace out of a local backup, opened with the backup's master password.
+#[tauri::command]
+async fn workspace_restore(
+    handle: AppHandle,
+    state: State<'_, AppState>,
+    path: PathBuf,
+    name: String,
+    password: String,
+) -> CmdResult<()> {
+    let name = workspace_name(&name)?;
+    let root = state.app.config.root_dir.clone();
+    let id = Workspaces::new_id();
+    let dir = Workspaces::load(&root).dir(&id);
+    tauri::async_runtime::spawn_blocking(move || crate::backup::restore_into(&path, &password, &dir))
+        .await
+        .map_err(err)??;
+    let mut workspaces = Workspaces::load(&root);
+    workspaces.add(&id, name);
+    open_and_relaunch(&handle, workspaces, &id)
+}
+
+/// Deletes the open workspace for good, after its master password; one whose vault was never created has none.
+/// Its files go when Blankey starts again, in another workspace.
+#[tauri::command]
+async fn workspace_delete(
+    handle: AppHandle,
+    state: State<'_, AppState>,
+    relay: RelayState<'_>,
+    password: Option<String>,
+) -> CmdResult<()> {
+    let app = state.app.clone();
+    let mut workspaces = Workspaces::load(&app.config.root_dir);
+    let id = open_workspace(&app, &workspaces);
+    workspaces.remove(&id)?;
+    if app.vault().initialized() {
+        let (app, password) = (app.clone(), password.unwrap_or_default());
+        let known = tauri::async_runtime::spawn_blocking(move || app.vault().verify_password(&password)).await;
+        if !known.map_err(err)? {
+            return Err(crate::i18n::mark("Wrong password.").into());
+        }
+    }
+    // what the keychain holds for this workspace: the sign-in to Blankey Online and the vault's key
+    relay.logout();
+    let _ = app.vault().disable_keyring();
+    workspaces.save().map_err(err)?;
+    super::relaunch(&handle)
+}
+
+/// Saves the open workspace as one file, encrypted with its master password; None when no place was picked.
+#[tauri::command]
+async fn backup_create(handle: AppHandle, state: State<'_, AppState>, password: String) -> CmdResult<Option<String>> {
+    let app = state.app.clone();
+    if !app.vault().unlocked() {
+        return Err(crate::vault::VaultError::Locked.to_string());
+    }
+    // a large workspace takes a while: no auto-lock meanwhile
+    state.busy.store(true, Ordering::SeqCst);
+    let saved = save_backup(&handle, app, password).await;
+    state.busy.store(false, Ordering::SeqCst);
+    state.touch();
+    saved
+}
+
+async fn save_backup(handle: &AppHandle, app: std::sync::Arc<Blankey>, password: String) -> CmdResult<Option<String>> {
+    let keyed = app.clone();
+    let key = tauri::async_runtime::spawn_blocking(move || keyed.backup_key(&password)).await.map_err(err)??;
+    let workspaces = Workspaces::load(&app.config.root_dir);
+    let name = workspaces.get(&open_workspace(&app, &workspaces)).map_or("Blankey", |w| w.name.as_str());
+    let name: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':') { '-' } else { c }).collect();
+    let file_name = format!("{name} {}.{}", chrono::Local::now().format("%Y-%m-%d"), crate::backup::EXTENSION);
+    let picker = handle.dialog().file().set_title("Local backup").set_file_name(&file_name);
+    let target = picker.add_filter("Blankey backup", &[crate::backup::EXTENSION]).blocking_save_file();
+    let Some(mut target) = target.and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    if target.extension().is_none_or(|e| e != crate::backup::EXTENSION) {
+        target.as_mut_os_string().push(format!(".{}", crate::backup::EXTENSION));
+    }
+    let saved = target.display().to_string();
+    tauri::async_runtime::spawn_blocking(move || app.create_backup(&key, &target)).await.map_err(err)??;
+    Ok(Some(saved))
+}
+
+/// The backup file to restore a workspace from; None when none was picked.
+#[tauri::command]
+async fn backup_pick(handle: AppHandle) -> CmdResult<Option<String>> {
+    let picker = handle.dialog().file().set_title("Restore from backup");
+    let picked = picker.add_filter("Blankey backup", &[crate::backup::EXTENSION]).blocking_pick_file();
+    Ok(picked.and_then(|p| p.into_path().ok()).map(|p| p.display().to_string()))
 }
 
 // -- first use ---------------------------------------------------------------
@@ -1756,7 +1890,7 @@ fn language_set(
     }
     let app = &state.app;
     // as it is on disk now, so other settings changed since launch stay
-    let mut config = crate::config::Config::load_from(app.config.data_dir.clone()).map_err(err)?;
+    let mut config = app.config.reload().map_err(err)?;
     config.language = language.clone();
     config.save().map_err(err)?;
     app.set_device_language(language);
@@ -1944,6 +2078,12 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static
         log_error,
         relay_login,
         relay_logout,
+        workspace_switch,
+        workspace_create,
+        workspace_restore,
+        workspace_delete,
+        backup_create,
+        backup_pick,
         doc_configs_status,
         refresh_doc_configs,
         relay_revoke,
