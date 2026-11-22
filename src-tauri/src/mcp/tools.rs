@@ -42,13 +42,14 @@ or save_pdf_overlay_template (flat); inspect_docx, then save_docx_template (a bl
 or save_template with Typst source_text. Bindings are Jinja in {{ }}: "{{ applicant.address.city }}", "{{ loan.amount | money }}".
 Check it with render_example and check_bindings.
 find_templates also lists the user's own files (status candidate, source lib:<id>): templatize one only when a fill
-needs it, passing lib:<id> as path and source_path (remote sessions: request_file with source lib:<id> first).
+needs it, passing lib:<id> as path and source_path (request_file with source lib:<id> first).
 Blankey rebuilds the template when the file changes.
 
 Cases keep one matter together: its profiles with their roles, the files the user imported, and the templates, fill
 sets and documents made for it. A blankey://case/<id> link the user pastes names a case: pass <id> as case_id to
 every tool. In a case find_profiles lists its profiles and get_case its files (casefile:<id>, found by the user's
-descriptions); what you save there stays in the case. Without case_id, tools see global data only.
+descriptions; before reading one that is not shared yet, request_file with it as source: the user sees what is hidden
+from you and allows it); what you save there stays in the case. Without case_id, tools see global data only.
 An ID card or vehicle registration the user imported is already a profile of the case (find_profiles shows its
 "document" and "source" file): bind to its fields, and do not ask the user to type what it holds.
 
@@ -93,11 +94,15 @@ pub fn expand(path: &str) -> PathBuf {
 }
 
 /// A local path, a `file:<uuid>` id from request_file, a `lib:<id>` file from find_templates or a `casefile:<id>`
-/// from get_case. Remote sessions only get ids, and a `lib:` or `casefile:` file only once the user shared it through
-/// request_file.
+/// from get_case. A `lib:` or `casefile:` file opens only once the user shared it through request_file, where they
+/// see what is hidden from the assistant; remote sessions only get ids.
 fn source_path(app: &Blankey, remote: Option<&Remote>, path: &str) -> Result<ScratchFile, String> {
     let shared_only = path.starts_with("lib:") || path.starts_with("casefile:");
-    if shared_only && remote.is_some_and(|r| !app.file_shared(&r.grant, path)) {
+    if path.starts_with("casefile:") {
+        // a file nobody can read says so, instead of sending the user a request that cannot be met
+        app.readable_case_file(path)?;
+    }
+    if shared_only && !app.file_shared(remote.map(|r| r.grant.as_str()), path) {
         return Err(format!(
             "Ask the user first: call request_file with source {path:?}, then wait_request; the file opens once they \
              allow it"
@@ -1385,7 +1390,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Ask the user to pick a pdf or docx file in the app (remote sessions cannot read local paths), or, with\nsource lib:<id> from find_templates, to let you read that file from their folders (remote sessions need this before\nany lib: file opens). Returns a request id; wait_request then gives {file_id, kind, size}. Pass file_id as path or\nsource_path."
+        description = "Ask the user to pick a pdf or docx file in the app (remote sessions cannot read local paths), or, with\nsource lib:<id> from find_templates, or casefile:<id> from get_case, to let you read that file: needed once before\nany lib: or casefile: file opens; the user sees there what is hidden from you. Returns a request id; wait_request then gives {file_id, kind, size}. Pass file_id as path or\nsource_path."
     )]
     async fn request_file(&self, Parameters(a): Parameters<RequestFileArgs>, ext: Extensions) -> ToolResult {
         let grant = remote(&ext).map(|r| r.grant);
@@ -1653,7 +1658,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "One case: its title and notes, its profiles with their roles, its files as casefile:<id> with the\ndescription the user gave each (what it is and whose; read a readable one with inspect_pdf or inspect_docx), the\ntemplates made in it, its fill sets, documents and waiting requests. No values and no file names."
+        description = "One case: its title and notes, its profiles with their roles, its files as casefile:<id> with the\ndescription the user gave each (what it is and whose; a readable one opens with inspect_pdf or inspect_docx once shared: until then call\nrequest_file with it as source), the\ntemplates made in it, its fill sets, documents and waiting requests. No values and no file names."
     )]
     async fn get_case(&self, Parameters(a): Parameters<CaseArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
@@ -2184,7 +2189,10 @@ pub mod tests {
         let error = t.request_fill(args(fill), local()).await.unwrap_err();
         assert!(error.contains("not a template yet"), "{error}");
 
-        // local agents read library files directly; remote ones only after the user shares the file
+        // no agent reads a library file before the user shared it, on this computer either
+        let refused = t.inspect_docx(args(json!({"path": source})), local()).await.unwrap_err();
+        assert!(refused.contains("request_file"), "{refused}");
+        allow(&t, &app, &source).await;
         let (inspected, _) = out(t.inspect_docx(args(json!({"path": source})), local()).await);
         assert!(inspected.contains("Loan in the amount") && !inspected.contains("John Smith"), "{inspected}");
         assert!(inspected.contains("⟦pii:3 Xxxx Xxxxx⟧"), "{inspected}");
@@ -2507,6 +2515,13 @@ pub mod tests {
         serde_json::from_str(&out(result).0).unwrap()
     }
 
+    /// The user allows the assistants on this computer to read a library or case file.
+    async fn allow(t: &Tools, app: &Blankey, source: &str) {
+        let ask = json!({"reason": "To read it", "source": source});
+        let id = json_out(t.request_file(args(ask), local()).await)["request_id"].as_i64().unwrap();
+        app.share_source(id).unwrap();
+    }
+
     /// Imports the files into the case; their casefile: handles by file name.
     fn import(app: &Blankey, case: i64, files: &[(PathBuf, &str)]) -> std::collections::HashMap<String, String> {
         let items: Vec<(PathBuf, String)> = files.iter().map(|(p, d)| (p.clone(), d.to_string())).collect();
@@ -2654,6 +2669,14 @@ pub mod tests {
             detail["files"].as_array().unwrap().iter().map(|f| f["readable"].as_bool().unwrap()).collect();
         assert_eq!(readable.iter().filter(|r| **r).count(), 3);
 
+        // the user sees what is hidden in a file before any assistant reads it, on this computer too
+        let refused = t.inspect_docx(args(json!({"path": ids["filled.docx"]})), local()).await.unwrap_err();
+        assert!(refused.contains("request_file"), "{refused}");
+        assert_eq!(detail["files"][0]["shared"], false);
+        for name in ["filled.docx", "flat.pdf", "Hiddenwell scan.pdf"] {
+            allow(&t, &app, &ids[name]).await;
+        }
+        assert!(t.inspect_docx(args(json!({"path": ids["filled.docx"]})), remote()).await.is_err(), "local only");
         let (docx, _) = out(t.inspect_docx(args(json!({"path": ids["filled.docx"]})), local()).await);
         assert!(docx.contains("paragraphs"), "{docx}");
         let (flat, images) = out(t.inspect_pdf(args(json!({"path": ids["flat.pdf"]})), local()).await);

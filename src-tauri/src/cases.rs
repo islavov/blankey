@@ -295,7 +295,7 @@ impl Blankey {
     }
 
     /// What MCP `get_case` returns and the chat's case block shows: metadata only, never profile values. With a
-    /// grant, files say whether that agent may read them and pending requests are only that agent's.
+    /// grant, pending requests are only that agent's; files say whether the agent asking may read them.
     pub fn case_overview(&self, case_id: i64, grant: Option<&str>) -> Result<serde_json::Value, String> {
         let scope = self.scope(Some(case_id))?;
         let info = scope.case.clone().ok_or("Unknown case")?;
@@ -337,9 +337,7 @@ impl Blankey {
                 let file_type = if is_old_word(f) { Kind::OldWord.media_type() } else { f.file_type.as_str() };
                 let mut item = json!({"file_id": source, "description": f.description, "type": file_type,
                                       "size": f.size, "readable": readable_kind(&f.file_type).is_some()});
-                if let Some(grant) = grant {
-                    item["shared"] = json!(self.file_shared(grant, &source));
-                }
+                item["shared"] = json!(self.file_shared(grant, &source));
                 // a known document that was read: what it is, and the profile that holds its fields
                 if !f.doctype.is_empty() {
                     item["document"] = json!(f.doctype);
@@ -777,8 +775,8 @@ mod tests {
         let file = app.vault().get_collected_file(parse_case_file(file_id).unwrap()).unwrap();
         assert_eq!((file.case_id, file.description.as_str()), (Some(case), "The signed deed"));
         assert!(!app.uploads_dir().exists(), "no plaintext copy in uploads");
-        assert!(app.file_shared("g1", file_id), "the agent that asked may read it");
-        assert!(!app.file_shared("g2", file_id));
+        assert!(app.file_shared(Some("g1"), file_id), "the agent that asked may read it");
+        assert!(!app.file_shared(Some("g2"), file_id));
     }
 
     #[test]
