@@ -449,7 +449,20 @@ input.case-title:focus { background: var(--input); }
 .chat-thread > * { flex: none; }
 .chat-thread > .empty { margin: auto 0; }
 .chat-starters { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; }
-.chat-starters .chip { padding: 5px 14px; color: var(--text); }
+.chat-starters .chip { padding: 5px 14px; color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
+.chat-starters .chip svg { width: 13px; height: 13px; color: var(--accent); }
+.chat-welcome { font-size: 17px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.chat-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-files.sent { align-self: flex-end; justify-content: flex-end; max-width: 78%; }
+.chat-file {
+  display: flex; align-items: center; gap: 6px; max-width: 320px; padding: 4px 10px; border: 1px solid var(--line);
+  border-radius: 8px; font-size: 12px; white-space: nowrap; cursor: pointer;
+}
+.chat-file:hover { border-color: var(--accent); }
+.chat-file svg { width: 14px; height: 14px; flex: none; color: var(--accent); }
+.chat-file-name { overflow: hidden; text-overflow: ellipsis; }
+.chat-file .muted { flex: none; }
+.chat-file .remove { padding: 0 4px; color: var(--muted); }
 .chat-msg.user {
   align-self: flex-end; max-width: 78%; padding: 7px 12px; border-radius: 12px 12px 4px 12px; background: var(--accent-soft);
   white-space: pre-wrap; overflow-wrap: anywhere;
@@ -462,9 +475,10 @@ input.case-title:focus { background: var(--input); }
 .chat-status, .chat-thinking { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .chat-thinking { max-width: 760px; }
 .chat-error { color: var(--danger); white-space: pre-line; }
-.chat-composer { flex: none; display: flex; gap: 8px; align-items: flex-end; padding: 10px 20px 14px; border-top: 1px solid var(--line); }
+.chat-composer { flex: none; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; padding: 10px 20px 14px; border-top: 1px solid var(--line); }
 .chat-composer textarea { flex: 1; resize: none; min-height: 52px; max-height: 160px; }
-.chat-composer button { height: 30px; }
+.chat-composer > button { height: 30px; }
+.chat-composer .chat-files { flex-basis: 100%; }
 .profile-sheet .fields-head h3 { display: none; }
 
 .fill-split { display: grid; grid-template-columns: minmax(380px, 1fr) minmax(360px, 1fr); height: 100%; }

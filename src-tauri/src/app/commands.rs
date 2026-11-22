@@ -465,11 +465,12 @@ async fn recognize_files(paths: Vec<PathBuf>) -> CmdResult<Vec<Value>> {
     tauri::async_runtime::spawn_blocking(recognized).await.map_err(err)
 }
 
-/// What an import did: how many files it kept, the names of the old Word files (.doc) it kept as the .docx made
-/// from them, and of those it could not convert, which the assistant cannot read.
+/// What an import did: how many files it kept and the files as kept, the names of the old Word files (.doc) it kept
+/// as the .docx made from them, and of those it could not convert, which the assistant cannot read.
 #[derive(Serialize)]
 struct Imported {
     count: usize,
+    files: Vec<CollectedFile>,
     converted: Vec<String>,
     old_word: Vec<String>,
 }
@@ -490,8 +491,9 @@ async fn import_case_files(state: State<'_, AppState>, case_id: i64, items: Vec<
             files.iter().any(|(path, _)| path.file_name().is_some_and(|n| n == file.name.as_str()))
         };
         let converted = kept.iter().filter(|file| !picked(file)).map(|file| file.name.clone()).collect();
-        let old_word = kept.into_iter().filter(crate::cases::is_old_word).map(|file| file.name).collect();
-        Ok(Imported { count: ids.len(), converted, old_word })
+        let old_word =
+            kept.iter().filter(|file| crate::cases::is_old_word(file)).map(|file| file.name.clone()).collect();
+        Ok(Imported { count: ids.len(), files: kept, converted, old_word })
     })
     .await
     .map_err(err)?
@@ -1916,10 +1918,10 @@ fn case_chat(chat: ChatState, case_id: i64) -> CmdResult<crate::chat::Thread> {
     chat.thread(case_id)
 }
 
-/// Starts a turn of the case's chat; its progress arrives as `chat-event`s.
+/// Starts a turn of the case's chat; its progress arrives as `chat-event`s. `files`: case files sent with the message.
 #[tauri::command]
-fn send_chat_message(chat: ChatState, case_id: i64, text: String) -> CmdResult<String> {
-    chat.send(case_id, &text)
+fn send_chat_message(chat: ChatState, case_id: i64, text: String, files: Option<Vec<i64>>) -> CmdResult<String> {
+    chat.send(case_id, &text, &files.unwrap_or_default())
 }
 
 /// Stops the case's running turn.

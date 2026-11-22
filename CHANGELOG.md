@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- AI assistant: an empty chat opens with first questions a new user can act on (what Blankey does for a lawyer or
+  notary, how the assistant works without seeing personal data, what to do first), and, once the case has a
+  template and a person, "Fill … with …'s details". "Drop a document and create a template" asks for the document.
+- AI assistant: files dropped on the chat go straight into the case and with the next message, shown as blocks
+  with the file's name, type and size. The assistant is told which files they are, never their content.
 - Workspaces: separate sets of profiles, cases, templates and documents, each with its own master password and its
   own Blankey Online sign-in. The lock screen names the open one; its menu opens another one, which restarts
   Blankey into it, or adds a new one. Language, updates and the other app settings are shared. What Blankey held

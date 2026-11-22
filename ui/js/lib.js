@@ -9,6 +9,20 @@ export const megabytes = (bytes) =>
     ? t("{size} KB", { size: number(Math.max(1, Math.round(bytes / 1024))) })
     : t("{size} MB", { size: number(bytes / (1024 * 1024), bytes < 10 * 1024 * 1024 ? 1 : 0) });
 
+/** A Word 97-2003 file, which the assistant cannot read: typed so on import, or an earlier import named .doc. */
+export const isOldWord = ({ type, name }) => type === "application/msword" || (type === "application/octet-stream" && /\.doc$/i.test(name));
+
+/** What the file is: the known document Blankey read it as, else its file type. */
+export function fileKind(file) {
+  const { type } = file;
+  if (file.document) return file.document;
+  if (type === "application/pdf") return "PDF";
+  if (type.includes("wordprocessingml")) return "Word";
+  if (isOldWord(file)) return "Word (.doc)";
+  if (type.startsWith("image/")) return t("Image");
+  return t("File");
+}
+
 /** The case a row belongs to, as a link that opens it. */
 export const CaseLink = ({ id, title }) =>
   id == null

@@ -92,11 +92,28 @@ impl Timing {
     }
 }
 
-/// A stored message as the relay takes it: without the app's own `timing`.
+/// A stored message as the relay takes it: without the app's own `timing`, and with the `files` sent with it as a
+/// text part that names them, since the model gets what a file is, never the file.
 fn for_relay(message: &Value) -> Value {
     let mut message = message.clone();
-    if let Some(fields) = message.as_object_mut() {
-        fields.remove("timing");
+    let Some(fields) = message.as_object_mut() else { return message };
+    fields.remove("timing");
+    let files = fields.remove("files");
+    let files = files.as_ref().and_then(Value::as_array).filter(|files| !files.is_empty());
+    if let (Some(files), Some(content)) = (files, fields.get_mut("content").and_then(Value::as_array_mut)) {
+        let mut text = String::from("The user added these files to the case with this message:");
+        for file in files {
+            let (id, name, kind) =
+                (&file["id"], file["name"].as_str().unwrap_or(""), file["type"].as_str().unwrap_or(""));
+            text.push_str(&format!("\n- file {id}: {name} ({kind})"));
+            match file["description"].as_str() {
+                Some(description) if !description.is_empty() && description != name => {
+                    text.push_str(&format!(", described as \"{description}\""));
+                }
+                _ => {}
+            }
+        }
+        content.push(json!({"type": "text", "text": text}));
     }
     message
 }
@@ -157,9 +174,10 @@ impl Chat {
     }
 
     /// Starts a turn with the user's message and returns its id; the turn goes on in the background.
-    pub fn send(self: &Arc<Self>, case_id: i64, text: &str) -> Result<String, String> {
+    /// `files`: files of the case sent with the message; the model is told which they are.
+    pub fn send(self: &Arc<Self>, case_id: i64, text: &str, files: &[i64]) -> Result<String, String> {
         let text = text.trim();
-        if text.is_empty() {
+        if text.is_empty() && files.is_empty() {
             return Err("Write a message first".into());
         }
         if !self.relay.chat_available() {
@@ -174,6 +192,7 @@ impl Chat {
                 vault.case_messages(case_id).map_err(|e| e.to_string())?.into_iter().filter(|m| m.seq > upto).collect();
             (info.uuid, history, summary.map(|(text, _)| text))
         };
+        let files = self.sent_files(case_id, files)?;
         let context = case_block(&self.app, case_id, &uuid)?;
         let turn_id = uuid::Uuid::new_v4().to_string();
         {
@@ -184,20 +203,42 @@ impl Chat {
             turns.insert(case_id, Running { turn_id: turn_id.clone() });
         }
         self.relay.begin_case_turn(&uuid);
-        let user = json!({"role": "user", "content": [{"type": "text", "text": text}]});
+        let content = if text.is_empty() { json!([]) } else { json!([{"type": "text", "text": text}]) };
+        let mut user = json!({"role": "user", "content": content});
+        if !files.is_empty() {
+            user["files"] = json!(files);
+        }
         let body = json!({
             "turn_id": turn_id, "case": uuid, "context": context, "summary": summary,
             "messages": history.iter().map(|m| for_relay(&m.message)).collect::<Vec<_>>(),
-            "user": [{"type": "text", "text": text}],
+            "user": for_relay(&user)["content"],
         });
         let seqs: Vec<i64> = history.iter().map(|m| m.seq).collect();
         self.app.audit("user", "chat_turn", &case_id.to_string());
         let timing = Timing::start();
-        self.update(case_id, &turn_id, "started", json!({"text": text, "sent_at": timing.sent_at}));
+        self.update(case_id, &turn_id, "started", json!({"text": text, "files": files, "sent_at": timing.sent_at}));
         let chat = self.clone();
         let turn = Turn { case_id, turn_id: turn_id.clone(), uuid, body, seqs, user };
         self.runtime.spawn(async move { chat.run(turn, timing).await });
         Ok(turn_id)
+    }
+
+    /// The files sent with a message as the thread keeps them: what each is, never its content. Refuses a file
+    /// that is not the case's.
+    fn sent_files(&self, case_id: i64, ids: &[i64]) -> Result<Vec<Value>, String> {
+        let vault = self.app.vault();
+        let mut files = Vec::new();
+        for id in ids {
+            let file = vault.get_collected_file(*id).map_err(|e| e.to_string())?;
+            if file.case_id != Some(case_id) {
+                return Err(format!("File {id} is not in this case"));
+            }
+            files.push(json!({
+                "id": file.id, "name": file.name, "description": file.description, "type": file.file_type,
+                "size": file.size,
+            }));
+        }
+        Ok(files)
     }
 
     /// Streams the turn to the window and stores what it added once the relay says `done`, with its timing.
@@ -276,5 +317,33 @@ impl Chat {
 
     fn update(&self, case_id: i64, turn_id: &str, event: &str, data: Value) {
         (self.emit)(Update { case_id, turn_id: turn_id.to_string(), event: event.to_string(), data });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn files_sent_with_a_message_reach_the_relay_as_text() {
+        let stored = json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "Make a template from this"}],
+            "timing": {"ms": 5},
+            "files": [
+                {"id": 7, "name": "lease.docx", "description": "Lease draft", "type": "docx", "size": 100},
+                {"id": 8, "name": "scan.pdf", "description": "scan.pdf", "type": "pdf", "size": 200},
+            ],
+        });
+        let sent = for_relay(&stored);
+        assert!(sent.get("timing").is_none() && sent.get("files").is_none());
+        assert_eq!(sent["content"][0]["text"], "Make a template from this");
+        assert_eq!(
+            sent["content"][1]["text"],
+            "The user added these files to the case with this message:\n\
+             - file 7: lease.docx (docx), described as \"Lease draft\"\n- file 8: scan.pdf (pdf)"
+        );
+        let plain = json!({"role": "user", "content": [{"type": "text", "text": "Hello"}], "timing": {}});
+        assert_eq!(for_relay(&plain), json!({"role": "user", "content": [{"type": "text", "text": "Hello"}]}));
     }
 }

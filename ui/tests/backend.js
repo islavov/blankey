@@ -646,7 +646,7 @@ export function createBackend(db = seed()) {
       touch(caseId);
       if (db.reading) readImported(db.collected.slice(0, items.length));
       const names = items.map(({ path }) => path.split(/[\\/]/).pop());
-      return { count: items.length, converted, old_word: db.convertsDoc === false ? names.filter((name) => /\.doc$/i.test(name)) : [] };
+      return { count: items.length, files: db.collected.slice(0, items.length).reverse(), converted, old_word: db.convertsDoc === false ? names.filter((name) => /\.doc$/i.test(name)) : [] };
     },
     update_case_file: ({ id, description, name }) => {
       const file = db.collected.find((f) => f.id === id);
