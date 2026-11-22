@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - Privacy: an assistant on the same computer finds no readable copy of a case file or a document in Blankey's
   folder. A file is decrypted only while one tool call or one preview reads it, and a trial render of a template
