@@ -11,6 +11,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::DialogExt;
 
 use super::{fill, platform, tray, AppState};
+use crate::cases::ScratchFile;
 use crate::core::{Blankey, Problem, ProfileSave, Target, FILE, FILL, PROFILE_INPUT};
 use crate::fieldtypes;
 use crate::i18n::{t, tf, tn};
@@ -552,7 +553,7 @@ fn case_file_preview_of(app: &Blankey, id: i64) -> Result<Preview, String> {
         None if SHOWN_IMAGES.contains(&file.file_type.as_str()) => Preview::image(&file.file_type, &content()?),
         // an old Word file kept as it is: shown through the .docx made from it, when this computer can make one
         None if crate::cases::is_old_word(&file) => match app.converted(&content()?) {
-            Ok(docx) => preview::docx_view(&app.scratch_file(&format!("casefile-{id}-view.docx"), &docx)?),
+            Ok(docx) => preview::docx_view(&app.scratch_file("docx", &docx)?),
             Err(_) => Preview::Error { message: t(&app.language(), "Blankey cannot show this kind of file") },
         },
         None => Preview::Error { message: t(&app.language(), "Blankey cannot show this kind of file") },
@@ -573,7 +574,7 @@ fn document_view(app: &Blankey, id: i64) -> Result<DocumentView, String> {
     let preview = if filename.to_lowercase().ends_with(".pdf") {
         preview::pdf_view(&content)
     } else {
-        preview::docx_view(&app.scratch_file(&format!("document-{id}.docx"), &content)?)
+        preview::docx_view(&app.scratch_file("docx", &content)?)
     };
     Ok(DocumentView { title: title.unwrap_or_else(|| filename.clone()), filename, preview })
 }
@@ -891,13 +892,13 @@ async fn library_preview(state: State<'_, AppState>, id: i64) -> CmdResult<Previ
 
 /// The file a PII review is about: a library file (lib:<id>), a case file (casefile:<id>) or a file picked for a
 /// request, by path.
-fn review_path(app: &Blankey, source: &str) -> Result<(PathBuf, String), String> {
+fn review_path(app: &Blankey, source: &str) -> Result<(ScratchFile, String), String> {
     let path = if source.starts_with("lib:") {
-        app.library.path(source)?
+        ScratchFile::kept(app.library.path(source)?)
     } else if source.starts_with("casefile:") {
         app.case_file(source)?.0
     } else {
-        PathBuf::from(source)
+        ScratchFile::kept(PathBuf::from(source))
     };
     let kind = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_lowercase();
     Ok((path, kind))

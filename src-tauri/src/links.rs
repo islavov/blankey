@@ -589,10 +589,7 @@ impl Blankey {
 
     /// An old Word file as .docx bytes, converted in the scratch folder; an error when this computer cannot.
     pub(crate) fn converted(&self, doc: &[u8]) -> Result<Vec<u8>, String> {
-        let source = self.scratch_file(&format!("convert-{}.doc", uuid::Uuid::new_v4()), doc)?;
-        let docx = crate::convert::doc_to_docx(&source);
-        let _ = std::fs::remove_file(&source);
-        docx
+        crate::convert::doc_to_docx(&self.scratch_file("doc", doc)?)
     }
 
     /// Files the user keeps with a profile.

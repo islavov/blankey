@@ -104,7 +104,6 @@ impl Config {
             config.save()?;
         }
         std::fs::create_dir_all(config.templates_dir())?;
-        std::fs::create_dir_all(config.previews_dir())?;
         Ok(config)
     }
 
@@ -149,10 +148,6 @@ impl Config {
     /// The document config set from the relay, as last served.
     pub fn doc_configs_path(&self) -> PathBuf {
         self.data_dir.join("doc-configs.json")
-    }
-
-    pub fn previews_dir(&self) -> PathBuf {
-        self.data_dir.join("previews")
     }
 
     pub fn mcp_url(&self) -> String {
@@ -232,7 +227,7 @@ mod tests {
         config.save().unwrap();
         let loaded = Config::load_from(dir.path().join("data")).unwrap();
         assert_eq!((loaded.port, loaded.auto_lock_minutes), (9999, 15));
-        assert!(loaded.templates_dir().is_dir() && loaded.previews_dir().is_dir());
+        assert!(loaded.templates_dir().is_dir());
         assert_eq!((loaded.relay_enabled, loaded.relay_url.as_str()), (false, OFFICIAL_RELAY));
 
         let mut config = loaded;
