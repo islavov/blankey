@@ -25,6 +25,16 @@ export default {
     await app.tab("AI assistant");
     await app.shot("start");
 
+    // a document dropped on the chat, as the window gets it from the desktop
+    await app.backend((backend) => {
+      const box = document.querySelector(".chat-composer textarea").getBoundingClientRect();
+      backend.emit("tauri://drag-drop", { paths: ["/Users/demo/Documents/lease-draft.docx"], position: { x: box.x + 20, y: box.y + 10 } });
+    });
+    await app.wait(".chat-composer .chat-file");
+    await app.fill(".chat-composer textarea", await app.t("Create a template from this document"));
+    await app.shot("files");
+    await app.fill(".chat-composer textarea", "");
+
     await app.click(OAK);
     await app.tab("AI assistant");
     await app.click(".chat-reasoning summary");

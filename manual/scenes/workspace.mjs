@@ -19,7 +19,8 @@ export default {
     await app.shot("connect-assistant", { target: ".gate-card" });
     await app.click({ text: "Continue" });
     await app.shot("first-case");
-    await app.click({ text: "Skip" });
+    await app.click({ text: "Open the sample case" });
+    await app.shot("sample-case");
 
     await app.settings();
     await app.click("#backup-create");

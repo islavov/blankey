@@ -10,6 +10,8 @@ const egn = (data, profileId, value) => (data.fields[profileId].find((f) => f.ke
 /** The demo cases with the seller's EGN known; the buyer's too unless it is `missing`, as the case's chat has it. */
 function cases({ missing } = {}) {
   const data = demo();
+  // the test seed's global template, named for the manual's cases
+  Object.assign(data.templates.find((tpl) => tpl.id === "nzok"), { name: "Lease contract", description: "" });
   egn(data, 3, "0000000000");
   if (!missing) egn(data, 4, "1111111111");
   return data;

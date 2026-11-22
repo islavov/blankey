@@ -12,6 +12,10 @@
 ![3. Sign in to Blankey Online...](shot:workspace-welcome)
 ![...or connect an assistant on this computer](shot:workspace-connect-assistant)
 
-Blankey then opens on Cases and offers a sample case to try things on. **Skip** starts empty.
+Blankey then opens on Cases. **Open the sample case** to try things on invented data, or drop your own document to start a case from it.
 
-![The first launch: the sample case](shot:workspace-first-case)
+![The first launch](shot:workspace-first-case)
+
+The sample case has a guide on top: the steps to a first document, and at each step the prompt to give the assistant. **Hide guide** removes it.
+
+![The sample case and its guide](shot:workspace-sample-case)

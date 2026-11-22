@@ -12,9 +12,13 @@ Press **Sign in to Blankey Online** in the sidebar and finish in the browser, wh
 
 ## Ask it
 
-Pick a suggested question or type your own. While it works, a line says what it is doing and **Stop** ends the turn.
+Pick a suggested question or type your own. Drop a document on the chat to send it with your message: it is kept in the case's files, and the assistant is told which file it is, never its content. A click on a file in the chat opens it.
 
 ![A case with no conversation yet](shot:assistant-start)
+![A dropped document waits above the message](shot:assistant-files)
+
+While the assistant works, a line says what it is doing and **Stop** ends the turn.
+
 ![A turn in progress](shot:assistant-turn)
 
 **Progress** above an answer opens the steps it took. Long conversations are summarised at the top.
