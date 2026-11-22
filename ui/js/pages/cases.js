@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "../../vendor/preact-htm.js";
 import { call, refreshStatus } from "../api.js";
 import { attachFiles, CaseChat, Spinner, useRunning, useWorked } from "../chat.js";
 import { openFill } from "../fill/form.js";
+import { CaseGuide } from "../guide.js";
 import { HelpNote } from "../help.js";
 import { t, tn } from "../i18n.js";
 import { fileKind, html, Icon, isOldWord, KIND_NAMES, matches, megabytes, reload, state, update, useGenerated, useLoad, useStore, when } from "../lib.js";
@@ -14,11 +15,15 @@ import { isSheetOpen, openSheet, SheetHead } from "../ui/sheet.js";
 import { CheckTable, keepText } from "../ui/table.js";
 import { openActivity } from "./activity.js";
 import { generateFillSets } from "./fillsets.js";
+import { openLinkSheet } from "./links.js";
 import { openProfileSheet } from "./profiles.js";
 import { relaySignIn } from "./settings.js";
+import { Start } from "./start.js";
 
 // the case the page shows, where dropped files go
 let shown = null;
+// no case exists yet: dropped files start the first one
+let none = false;
 // adds dropped files to the open Import sheet
 let importing = null;
 // opens the case that files are held over
@@ -35,7 +40,7 @@ function dragTarget(position) {
 /** Files dragged over the window: the open case lights up under them, and another case opens when they stay on it. */
 export function dragAt(position) {
   const target = dragTarget(position);
-  const into = !!target?.closest(".case-detail");
+  const into = !!target?.closest(".case-detail, .start");
   const over = Number(target?.closest(".case-item")?.dataset.case) || null;
   const opening = over !== shown?.id ? over : null;
   if (opening !== state.drag?.opening) {
@@ -53,7 +58,7 @@ export function dragEnd() {
 
 /**
  * Files dropped on the window: into the Import sheet when it is open, else, dropped on the open case, a new import
- * into it; on its chat they go into the case as they are and with the next message.
+ * into it; on its chat they go into the case as they are and with the next message. With no case yet they start one.
  */
 export function dropFiles(paths, position) {
   const target = dragTarget(position);
@@ -61,6 +66,7 @@ export function dropFiles(paths, position) {
   if (!paths.length) return;
   if (importing) return importing(paths);
   if (isSheetOpen() || isDialogOpen()) return;
+  if (state.page === "cases" && none) return caseFromFiles(paths);
   if (state.page !== "cases" || !shown) return toast(t("Open a case to import files into it"));
   if (!target?.closest(".case-detail")) return;
   if (document.querySelector(".case-tab.chat-tab")) attachToChat(shown, paths);
@@ -71,21 +77,24 @@ export function Cases() {
   const { caseId, drag, status } = useStore();
   const running = useRunning();
   const cases = useLoad(() => call("list_cases"), []);
-  // first use: New case makes the sample case
-  const first = status.first_use === "case";
+  // deleted just now: out of the list at once, so nothing asks for them while the list loads again
+  const [gone, setGone] = useState([]);
+  useEffect(() => setGone([]), [cases]);
   if (!cases) return null;
 
-  const visible = cases.filter((c) => matches(c.title, ...c.profiles));
+  const visible = cases.filter((c) => !gone.includes(c.id) && matches(c.title, ...c.profiles));
   const current = visible.find((c) => c.id === caseId) || visible[0] || null;
   shown = current;
+  none = !cases.length;
+
+  const openSample = async (sample) => {
+    const id = await call("create_sample_case", { sample });
+    await refreshStatus();
+    update({ caseId: id, caseTab: null, search: "" });
+    reload();
+  };
 
   const create = async () => {
-    if (first) {
-      const id = await call("create_sample_case");
-      await refreshStatus();
-      update({ caseId: id, caseTab: null, search: "" });
-      return reload();
-    }
     const values = await dialog({
       title: t("New case"),
       fields: [{ name: "title", label: t("Title (sale of an apartment, lease…)") }],
@@ -93,13 +102,9 @@ export function Cases() {
     });
     if (!values?.title?.trim()) return;
     const id = await call("create_case", { title: values.title.trim() });
+    await endFirstUse();
     update({ caseId: id, caseTab: null, search: "" });
     reload();
-  };
-
-  const skip = async () => {
-    await call("first_use_set", { stage: null });
-    await refreshStatus();
   };
 
   const remove = async () => {
@@ -120,13 +125,14 @@ export function Cases() {
     ];
     if (!(await confirmDialog(t("Delete the case \"{name}\"?", { name: info.title }), text.filter(Boolean).join("\n")))) return;
     await call("delete_case", { id: info.id });
+    setGone([...gone, info.id]);
     update({ caseId: null });
     reload();
   };
 
   return html`
     <${Page} title=${t("Cases")} subtitle=${tn(cases.length, "{n} case", "{n} cases")} actions=${[
-      [t("New case"), create, first ? "primary coach" : "primary", "cases.new"],
+      [t("New case"), create, "primary", "cases.new"],
       [t("Import…"), () => (current ? importInto(current) : toast(t("Make a case first"))), "", "cases.import"],
       [t("Delete case"), remove, "danger", "cases.delete"],
     ]}>
@@ -154,17 +160,8 @@ export function Cases() {
                 </div>`}
               </div>
             </div>`
-        : first
-          ? html`<${Empty}>
-              ${t("Start with a sample case: an invented loan contract and two invented people, to see how Blankey turns a document into one you can fill in again.")}
-              <div style="margin-top:14px"><button class="primary coach" onClick=${create}>${t("New case")}</button></div>
-              <div style="margin-top:10px"><button class="link" onClick=${skip}>${t("Skip")}</button></div>
-            </${Empty}>`
-          : html`<${Empty}>
-              ${t("No cases yet. A case keeps one matter together: the people in it, the documents they brought and what you fill in for them.")}
-              <div style="margin-top:14px"><button class="primary" onClick=${create}>${t("New case")}</button></div>
-            </${Empty}>`}
-      ${drag && !current && html`<div class="drop-overlay"><div class="drop-text">${t("Make a case first")}</div></div>`}
+        : html`<${Start} first=${status.first_use === "case"} over=${!!drag} onSample=${openSample} onOwn=${() => caseFromFiles()} />`}
+      ${drag && !current && cases.length > 0 && html`<div class="drop-overlay"><div class="drop-text">${t("Make a case first")}</div></div>`}
     </${Page}>`;
 }
 
@@ -188,22 +185,21 @@ function CaseDetail({ caseId }) {
   const info = useLoad(() => call("get_case", { id: caseId }), [caseId, worked]);
   if (!info) return null;
 
-  // the assistant only while the relay offers it; then it is where a case opens
+  // the assistant while the relay offers it, else the way to get it; a case opens on it when it is there to use, and
+  // a sample case always, since its guide says what to ask
   const chat = relay?.chat === true;
-  // the sample case keeps the tab without it, to say what to ask an assistant of the user's own
-  const assistant = chat || info.sample;
-  const tab = caseTab && (caseTab !== "chat" || assistant) ? caseTab : assistant ? "chat" : "files";
+  const tab = caseTab || (chat || info.guide ? "chat" : "files");
   const tabs = [
-    assistant && ["chat", t("AI assistant"), running.has(caseId) ? html`<${Spinner} />` : null, "case.chat"],
+    ["chat", t("AI assistant"), running.has(caseId) ? html`<${Spinner} />` : null, "case.chat"],
     ["files", t("Files"), info.counts.files, "case.files"],
     ["profiles", t("Profiles"), info.counts.profiles],
     ["templates", t("Templates"), info.counts.templates],
     ["fillsets", t("Fill sets"), info.counts.fill_sets],
     ["documents", t("Documents"), info.counts.documents, "case.documents"],
     ["activity", t("Activity"), info.counts.activity],
-  ].filter(Boolean);
+  ];
   const content = {
-    chat: () => (chat ? html`<${CaseChat} info=${info} attach=${() => attachToChat(info)} open=${(file) => openFromChat(info, file)} />` : html`<${SampleGuide} info=${info} />`),
+    chat: () => (chat ? html`<${CaseChat} info=${info} attach=${() => attachToChat(info)} open=${(file) => openFromChat(info, file)} />` : html`<${AssistantOffer} />`),
     files: () => html`<${CaseFiles} info=${info} />`,
     profiles: () => html`<${CaseProfiles} info=${info} />`,
     templates: () => html`<${CaseTemplates} info=${info} />`,
@@ -212,6 +208,7 @@ function CaseDetail({ caseId }) {
     activity: () => html`<${CaseActivity} info=${info} />`,
   };
   return html`
+    ${info.guide && html`<${CaseGuide} info=${info} onOwn=${() => caseFromFiles()} />`}
     <${CaseHead} info=${info} />
     <div class="filters case-tabs" data-help="case.tabs">
       ${tabs.map(([id, label, n, help]) => html`
@@ -222,26 +219,25 @@ function CaseDetail({ caseId }) {
     <div class=${`case-tab ${tab === "chat" && chat ? "chat-tab" : ""}`}>${(content[tab] || content.files)()}</div>`;
 }
 
-/** The sample case without the case chat: what to ask an assistant connected over MCP, and the way to the chat. */
-function SampleGuide({ info }) {
-  const prompt = t("In Blankey, open the case “{title}”. Make a template from the contract in it, then ask Blankey to fill it in for the lender and the borrower in the case.", { title: info.title });
-  const copy = async () => {
-    await call("copy_text", { text: prompt });
-    toast(t("Copied"));
-  };
+/** The assistant tab without the built-in assistant: how to get it, and where an assistant of the user's own connects. */
+function AssistantOffer() {
+  const { relay } = useStore();
   return html`
-    <div class="sample-guide" data-help="case.sample">
-      <h3>${t("Ask your AI assistant")}</h3>
-      <p class="muted">${t("An assistant connected to Blankey can work on this case. Give it this:")}</p>
-      <div class="sample-prompt selectable">${prompt}</div>
-      <div><button onClick=${copy}>${t("Copy")}</button></div>
+    <div class="offer" data-help="case.offer">
+      <h3><${Icon} name="magic" />${t("Try the built-in assistant")}</h3>
+      <p class="muted">${t("It works right here in the case and is in early access. To get it:")}</p>
+      <ol>
+        ${!relay?.signed_in &&
+        html`<li>
+          ${t("Create a profile in Blankey Online.")}
+          <div><button class="primary" onClick=${relaySignIn}>${t("Create a profile")}</button></div>
+        </li>`}
+        <li>${t("Write to us and ask for access:")} <span class="selectable">hello@blankey.io</span></li>
+      </ol>
       <p class="muted small">
-        ${t("Not connected yet? Settings shows the MCP address.")}${" "}
+        ${t("Using your own assistant? Settings shows the MCP address.")}${" "}
         <button class="link" onClick=${() => update({ page: "settings" })}>${t("Settings")}</button>
       </p>
-      <hr />
-      <p class="muted">${t("Sign in to Blankey Online to use the assistant right here.")}</p>
-      <div><button class="primary" onClick=${relaySignIn}>${t("Sign in")}</button></div>
     </div>`;
 }
 
@@ -276,21 +272,41 @@ function CaseHead({ info }) {
     </div>`;
 }
 
-/** The empty Files tab: where the case's documents are dropped, lit while files are dragged over the case; a click opens Import. */
+/** The empty Files tab: where the case's documents are dropped, lit while files are dragged over the case. */
 function DropZone({ onImport }) {
   const { drag } = useStore();
   return html`
-    <button class=${`drop-zone ${drag?.into ? "over" : ""}`} onClick=${onImport}>
+    <div class=${`drop-zone ${drag?.into ? "over" : ""}`}>
       <${Icon} name="upload" />
-      <span>${t("No files yet. Drop what the client brought here, such as IDs, deeds and contracts, or use Import…")}</span>
-    </button>`;
+      <h3>${t("Drop a Word or PDF here")}</h3>
+      <button data-help="cases.import" onClick=${onImport}>${t("Browse files")}</button>
+    </div>`;
+}
+
+/**
+ * What an empty tab holds and how it gets there: `actions` are [label, onClick, class?, help?], the first one the
+ * main way; `foot` goes under them.
+ */
+function EmptyTab({ icon, title, text, actions = [], foot }) {
+  return html`
+    <div class="empty-tab">
+      <span class="empty-icon"><${Icon} name=${icon} /></span>
+      <h3>${title}</h3>
+      ${text && html`<p>${text}</p>`}
+      ${actions.length > 0 &&
+      html`<div class="empty-actions">
+        ${actions.map(([label, onClick, cls = "", help]) => html`<button class=${cls} data-help=${help} onClick=${onClick}>${label}</button>`)}
+      </div>`}
+      ${foot}
+    </div>`;
 }
 
 // -- tabs --------------------------------------------------------------------------------
 
 /**
  * A case tab: its own actions on top, or, once rows are checked, what to do with them. Each row has a ⋮ menu for
- * itself. actions and bulk: [label, onClick, class?, help?], bulk's onClick gets the checked rows.
+ * itself. actions and bulk: [label, onClick, class?, help?], bulk's onClick gets the checked rows. With no rows only
+ * `empty` shows, which offers the actions itself.
  */
 function TabTable({ rows, columns, actions = [], bulk = [], menu, onOpen, empty, rowClass }) {
   const [checked, setChecked] = useState([]);
@@ -299,7 +315,7 @@ function TabTable({ rows, columns, actions = [], bulk = [], menu, onOpen, empty,
   const checks = bulk.length > 0;
   const button = ([label, onClick, cls = "", help]) => html`<button class=${cls} data-help=${help} onClick=${onClick}>${label}</button>`;
   return html`
-    ${(checks || actions.length > 0) &&
+    ${rows.length > 0 && (checks || actions.length > 0) &&
     html`<div class="tab-actions">
       ${live.length
         ? html`
@@ -485,6 +501,28 @@ async function importFiles(caseId, items) {
   return imported;
 }
 
+/** The first use ends once the user has a case of any kind. */
+async function endFirstUse() {
+  if (!state.status.first_use) return;
+  await call("first_use_set", { stage: null });
+  await refreshStatus();
+}
+
+/**
+ * A new case from the user's own files: named after the first one and holding them all. Asks which files when no
+ * paths are given.
+ */
+async function caseFromFiles(paths) {
+  paths ??= await call("pick_files").catch(() => []);
+  if (!paths.length) return;
+  const items = paths.map(importItem);
+  const id = await call("create_case", { title: items[0].description || items[0].name });
+  await importFiles(id, items);
+  await endFirstUse();
+  update({ caseId: id, caseTab: null, search: "" });
+  reload();
+}
+
 /**
  * Files for the next chat message: kept in the case, described by their names, and shown in the composer. Asks which
  * files when no paths are given. True when files were added.
@@ -561,6 +599,10 @@ function scopeLabel(p) {
 }
 
 function CaseProfiles({ info }) {
+  const { relay } = useStore();
+  // scanned documents become profiles only with a document config set from Blankey Online
+  const recognition = useLoad(() => call("doc_configs_status"), []);
+  const online = relay?.signed_in === true;
   const create = async () => {
     const values = await dialog({
       title: t("New profile"),
@@ -594,6 +636,23 @@ function CaseProfiles({ info }) {
     await openProfileSheet(p);
     reload();
   };
+  // the profile the client fills in through the link lands in this case
+  const requestLink = async () => {
+    await openLinkSheet({ case_id: info.id, new_profile: t("New client") });
+    reload();
+  };
+  const emptyActions = [
+    [t("Add manually"), create, "primary", "caseprofiles.new"],
+    online && recognition?.state === "valid" && [t("Scan ID card"), () => importInto(info), "", "caseprofiles.scan"],
+    online && [t("Request via secure link"), requestLink, "", "caseprofiles.link"],
+  ].filter(Boolean);
+  const emptyFoot = html`
+    ${!online &&
+    html`<p class="small">
+      ${t("Scanning ID cards and requesting details via a secure link need Blankey Online.")}${" "}
+      <button class="link" onClick=${relaySignIn}>${t("Sign in")}</button>
+    </p>`}
+    <p class="small"><button class="link" data-help="caseprofiles.add" onClick=${addExisting}>${t("or pick an existing client from Profiles")}</button></p>`;
   const role = async (p) => {
     const values = await dialog({ title: t("Role of {name}", { name: p.name }), fields: [{ name: "role", label: ROLE_LABEL(), value: p.role }], ok: t("Save") });
     if (!values) return;
@@ -635,7 +694,8 @@ function CaseProfiles({ info }) {
       { title: t("Role"), cell: (p) => p.role || html`<span class="muted">${p.document || "-"}</span>`, cls: "nowrap" },
       { title: t("Scope"), cell: (p) => html`<span class="muted">${scopeLabel(p)}</span>`, cls: "nowrap" },
     ]}
-    empty=${t("No profiles in this case yet. Make one for each person or company in it, or add one you already have.")} />`;
+    empty=${html`<${EmptyTab} icon="profiles" title=${t("No clients in this case yet")}
+      text=${t("Saved once, reused in every case. Stored encrypted on this computer.")} actions=${emptyActions} foot=${emptyFoot} />`} />`;
 }
 
 // -- templates ---------------------------------------------------------------------------
@@ -688,7 +748,9 @@ function CaseTemplates({ info }) {
       { title: t("Blanks"), cell: (tpl) => tpl.blanks, cls: "nowrap" },
       { title: t("Scope"), cell: (tpl) => html`<span class="muted">${tpl.local ? t("Only in this case") : t("Global")}</span>`, cls: "nowrap" },
     ]}
-    empty=${t("No templates yet. Ask your AI assistant to make one from a document in this case.")} />`;
+    empty=${html`<${EmptyTab} icon="templates" title=${t("No templates yet")}
+      text=${t("A template is your own document with the blanks marked as fields. The AI assistant makes one from a document in this case.")}
+      actions=${[[t("Ask the AI"), () => update({ caseTab: "chat" }), "primary", "casetemplates.ask"]]} />`} />`;
 }
 
 // -- fill sets, documents, activity ------------------------------------------------------------
@@ -737,6 +799,13 @@ function CaseDocuments({ info }) {
   if (!docs) return null;
 
   const open = (doc) => openDocuments([doc.id]);
+  // straight into the fill form when there is one template to fill, else to the templates to pick from
+  const fillOne = async () => {
+    const templates = await call("list_templates", { caseId: info.id });
+    if (templates.length !== 1) return update({ caseTab: "templates" });
+    await openFill({ templates: [templates[0].id], case_id: info.id });
+    reload();
+  };
   const exportDocument = async (doc) => {
     const path = await call("export_document", { id: doc.id });
     if (path) toast(t("Saved to {path}", { path }), 4000);
@@ -766,7 +835,9 @@ function CaseDocuments({ info }) {
       { title: t("Created"), cell: (d) => html`<span class="muted">${when(d.created_at)}</span>`, cls: "nowrap" },
     ]}
     rowClass=${fresh}
-    empty=${t("No documents yet. What Blankey fills in for this case from a template shows here.")} />`;
+    empty=${html`<${EmptyTab} icon="documents" title=${t("Filled documents appear here")}
+      text=${t("Each one is a template filled in with a client's details.")}
+      actions=${[[t("Fill a document"), fillOne, "primary", "casedocuments.fill"]]} />`} />`;
 }
 
 function CaseActivity({ info }) {

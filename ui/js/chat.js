@@ -247,11 +247,8 @@ function starters(info, templates) {
   ].filter(Boolean);
 }
 
-/** The same for the sample case: the two steps to its first document. */
-const sampleStarters = () => [
-  { text: t("Make a template from the sample contract in this case") },
-  { text: t("Fill in the contract for the lender and the borrower") },
-];
+/** The same for a sample case: what its guide still has to ask, in order. */
+const guideStarters = (guide) => guide.steps.slice(guide.step).filter((step) => step.prompt).map((step) => ({ text: step.prompt }));
 
 const STATUS = {
   compacting: () => t("Summarizing earlier messages"),
@@ -340,7 +337,7 @@ function FileBlocks({ files, sent, onOpen, onRemove }) {
  * keeps them in the case and adds them to the next message; `open` shows a file of a message.
  */
 export function CaseChat({ info, attach, open }) {
-  const { id: caseId, sample } = info;
+  const { id: caseId, guide } = info;
   const chat = useChat(caseId);
   const templates = useLoad(() => call("list_templates", { caseId }).catch(() => []), [caseId]);
   const [thread, setThread] = useState(null);
@@ -427,12 +424,12 @@ export function CaseChat({ info, attach, open }) {
         ${turn && html`<${TurnEnd} turn=${turn} />`}
         ${empty &&
         html`<div class="empty">
-          ${sample
-            ? t("This is a sample case. Ask the assistant to turn the contract into a template, then to fill it in for the two people here.")
+          ${guide
+            ? t("This is a sample case. The guide above says what to ask next; the questions below do the same.")
             : html`<div class="chat-welcome">${t("How can I help with this case?")}</div>
                 ${t("The AI sees field names, never your clients' values.")}`}
           <div class="chat-starters" data-help="chat.starters">
-            ${(sample ? sampleStarters() : starters(info, templates)).map((starter) => html`
+            ${(guide ? guideStarters(guide) : starters(info, templates)).map((starter) => html`
               <button class="chip" onClick=${() => start(starter)}>${starter.attach && html`<${Icon} name="upload" />`}${starter.text}</button>`)}
           </div>
         </div>`}`}

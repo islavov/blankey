@@ -49,8 +49,8 @@ test("at startup, chat_running puts a spinner on the cases with a turn in progre
   assert.deepEqual(spinning(), []);
 });
 
-test("the assistant tab shows, first and open, once the relay offers the assistant", async () => {
-  assert.ok(!chips().includes("AI assistant"));
+test("the assistant tab is first on every case; a case opens on it once the relay offers the assistant", async () => {
+  assert.equal(chips()[0], "AI assistant");
   assert.ok(text(".case-tabs .chip.active").startsWith("Files"));
   backend.db.relay.chat = true;
   backend.emit("relay-status");
@@ -375,11 +375,14 @@ test("files dropped on the chat go into the case and with the next message, as b
   await key("Escape");
 });
 
-test("the assistant tab goes when the relay stops offering the assistant", async () => {
+test("when the relay stops offering the assistant, its tab says how to get it", async () => {
   backend.db.relay.chat = false;
   backend.emit("relay-status");
   await settle();
-  assert.ok(!chips().includes("AI assistant"));
-  assert.ok(text(".case-tabs .chip.active").startsWith("Files"));
+  await tab("AI assistant");
   assert.equal($(".chat-composer"), null);
+  assert.equal(text(".offer h3"), "Try the built-in assistant");
+  assert.ok(!text(".offer").includes("Create a profile"), "already signed in to Blankey Online");
+  assert.ok(text(".offer").includes("hello@blankey.io"));
+  assert.ok(helpText("case.offer"));
 });

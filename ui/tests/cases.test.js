@@ -405,6 +405,8 @@ test("delete a case: it says what goes with it", async () => {
   assert.ok(!said.includes("Paul Sample"), "Paul Sample is in another case too");
   await submit($(".modal form"));
   assert.deepEqual(backend.called("delete_case").at(-1), { id: 2 });
+  const since = backend.calls.slice(backend.calls.findLastIndex(([cmd]) => cmd === "delete_case"));
+  assert.ok(!since.some(([cmd, args]) => cmd === "get_case" && args.id === 2), "the deleted case is not asked for again");
   assert.deepEqual($$(".split.cases .list-item .title").map((el) => el.textContent), ["Sale of the flat, 12 Oak Street"]);
 });
 
@@ -414,8 +416,9 @@ test("a new case opens ready for files", async () => {
   await submit($(".modal form"));
   assert.deepEqual(backend.called("create_case").at(-1), { title: "Power of attorney, car" });
   assert.equal($(".case-title").value, "Power of attorney, car");
-  assert.equal(text(".case-tab .empty"), "No files yet. Drop what the client brought here, such as IDs, deeds and contracts, or use Import…");
+  assert.equal(text(".case-tab .drop-zone h3"), "Drop a Word or PDF here");
   assert.ok($(".case-tab .drop-zone svg"), "the empty tab is a drop zone");
+  assert.equal($(".case-tab .tab-actions"), null, "the empty tab offers its actions itself");
   backend.emit("tauri://drag-enter", { paths: [], position: onList });
   await settle();
   assert.equal($(".drop-zone.over"), null);
@@ -425,8 +428,8 @@ test("a new case opens ready for files", async () => {
   backend.emit("tauri://drag-leave");
   await settle();
   assert.equal($(".drop-zone.over"), null);
-  await click($(".drop-zone"));
-  assert.ok(backend.called("pick_files").length > 0, "a click opens Import");
+  await click(byText(".drop-zone button", "Browse files"));
+  assert.ok(backend.called("pick_files").length > 0, "Browse files opens Import");
 });
 
 test("importing an old Word file asks before it converts it; Cancel goes back to the import", async () => {

@@ -20,7 +20,7 @@ pub struct StoredCollected {
 }
 
 const LINK_COLUMNS: &str = "link_id, relay_url, url, title, spec, profile_id, new_profile, created_at, expires_at, \
-                            max_submissions, revoked_at, received";
+                            max_submissions, revoked_at, received, case_id";
 const SUBMISSION_COLUMNS: &str = "sid, link_id, request_id, size, received_at, status, handled_at, profile_id";
 const COLLECTED_COLUMNS: &str = "id, profile_id, link_id, size, created_at, case_id, nonce, ciphertext";
 
@@ -38,6 +38,7 @@ fn link_row(r: &Row) -> rusqlite::Result<Link> {
         max_submissions: r.get(9)?,
         revoked_at: r.get(10)?,
         received: r.get(11)?,
+        case_id: r.get(12)?,
     })
 }
 
@@ -72,7 +73,7 @@ impl Repo {
     pub fn insert_link(&self, link: &Link) -> Result<()> {
         self.conn.execute(
             "INSERT INTO links (link_id, relay_url, url, title, spec, profile_id, new_profile, created_at, expires_at,
-             max_submissions, revoked_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL)",
+             max_submissions, revoked_at, case_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11)",
             params![
                 link.link_id,
                 link.relay_url,
@@ -83,7 +84,8 @@ impl Repo {
                 link.new_profile,
                 link.created_at,
                 link.expires_at,
-                link.max_submissions
+                link.max_submissions,
+                link.case_id
             ],
         )?;
         Ok(())
