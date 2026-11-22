@@ -77,9 +77,12 @@ export function Cases() {
   const { caseId, drag, status } = useStore();
   const running = useRunning();
   const cases = useLoad(() => call("list_cases"), []);
+  // deleted just now: out of the list at once, so nothing asks for them while the list loads again
+  const [gone, setGone] = useState([]);
+  useEffect(() => setGone([]), [cases]);
   if (!cases) return null;
 
-  const visible = cases.filter((c) => matches(c.title, ...c.profiles));
+  const visible = cases.filter((c) => !gone.includes(c.id) && matches(c.title, ...c.profiles));
   const current = visible.find((c) => c.id === caseId) || visible[0] || null;
   shown = current;
   none = !cases.length;
@@ -122,6 +125,7 @@ export function Cases() {
     ];
     if (!(await confirmDialog(t("Delete the case \"{name}\"?", { name: info.title }), text.filter(Boolean).join("\n")))) return;
     await call("delete_case", { id: info.id });
+    setGone([...gone, info.id]);
     update({ caseId: null });
     reload();
   };

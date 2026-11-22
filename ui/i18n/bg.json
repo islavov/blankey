@@ -895,7 +895,7 @@
   "Ask the assistant": "Попитай асистента",
   "Open the fill form": "Отвори формата за попълване",
   "Hide guide": "Скрий ръководството",
-  "The assistant built into Blankey is in early access. An assistant of your own, connected over MCP, works on cases too.": "Вграденият в Blankey асистент е с ранен достъп. По казусите може да работи и ваш асистент, свързан през MCP.",
+  "The assistant built into Blankey is in early access. An assistant of your own, connected over MCP, works on cases too.": "Вграденият в Blankey асистент засега се включва по заявка. По казусите може да работи и ваш асистент, свързан през MCP.",
   "Your own document": "Ваш документ",
   "Makes a case named after the file and keeps the file in it, encrypted. Dropping the file anywhere on this page does the same.": "Създава казус с името на файла и пази файла в него криптиран. Същото става, ако пуснете файла където и да е на тази страница.",
   "Guide": "Ръководство",
@@ -916,7 +916,7 @@
   "Fill a document": "Попълни документ",
   "Opens the fill form for the case's template, or the templates to choose one.": "Отваря формата за попълване на шаблона по казуса или шаблоните, за да изберете.",
   "Try the built-in assistant": "Изпробвайте вградения асистент",
-  "It works right here in the case and is in early access. To get it:": "Работи направо в казуса и е с ранен достъп. За да го получите:",
+  "It works right here in the case and is in early access. To get it:": "Помага ви направо в казуса. Засега го включваме по заявка – ето как:",
   "Create a profile in Blankey Online.": "Създайте профил в Blankey онлайн.",
   "Create a profile": "Създай профил",
   "Write to us and ask for access:": "Пишете ни и поискайте достъп:",
@@ -938,7 +938,7 @@
   "The AI never sees your clients' data.": "AI никога не вижда данните на клиентите ви.",
   "Try the sample case": "Изпробвайте примерния казус",
   "Open the sample case": "Отвори примерния казус",
-  "Start with my own document": "Започни с мой документ",
+  "Start with my own document": "Започнете с ваш договор",
   "Drop it here. A case is created and named after the file.": "Пуснете го тук. Създава се казус с името на файла.",
   "Choose a file": "Избери файл"
 }

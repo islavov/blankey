@@ -193,6 +193,8 @@ input[type=checkbox] { accent-color: var(--accent); }
 .guide-text p { margin: 0; }
 .guide-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .guide-prompt { flex: 1 1 320px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+/* a click takes the whole prompt and nothing around it */
+.guide-prompt q { quotes: none; cursor: text; user-select: all; -webkit-user-select: all; }
 .guide-prompt span { margin-right: 10px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
 /* the assistant tab without the built-in assistant */
 .offer { max-width: 560px; margin: 0 auto; padding: 32px 24px; display: grid; gap: 10px; }

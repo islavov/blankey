@@ -73,7 +73,7 @@ function Step({ info, step }) {
       </div>
       ${step.prompt &&
       html`<div class="guide-actions">
-        <div class="guide-prompt selectable" data-help="guide.prompt"><span>${t("Prompt")}</span>${step.prompt}</div>
+        <div class="guide-prompt" data-help="guide.prompt"><span>${t("Prompt")}</span><q>${step.prompt}</q></div>
         ${chat && html`<button class="primary" data-help="guide.ask" onClick=${ask}>${t("Ask the assistant")}</button>`}
         <button class=${chat ? "" : "primary"} data-help="guide.copy" onClick=${copy}>${t("Copy")}</button>
       </div>`}

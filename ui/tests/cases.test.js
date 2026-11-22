@@ -405,6 +405,8 @@ test("delete a case: it says what goes with it", async () => {
   assert.ok(!said.includes("Paul Sample"), "Paul Sample is in another case too");
   await submit($(".modal form"));
   assert.deepEqual(backend.called("delete_case").at(-1), { id: 2 });
+  const since = backend.calls.slice(backend.calls.findLastIndex(([cmd]) => cmd === "delete_case"));
+  assert.ok(!since.some(([cmd, args]) => cmd === "get_case" && args.id === 2), "the deleted case is not asked for again");
   assert.deepEqual($$(".split.cases .list-item .title").map((el) => el.textContent), ["Sale of the flat, 12 Oak Street"]);
 });
 
