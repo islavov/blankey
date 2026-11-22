@@ -1,6 +1,7 @@
 //! Cases: one matter with the profiles in it, its files, templates, fill sets, documents and requests. What each view
 //! of the vault sees (the global one, or one case), the operations that span the vault and the template folders, and
-//! case files, which tools read through `casefile:<id>` handles decrypted into a private scratch folder.
+//! case files, which tools read through `casefile:<id>` handles, decrypted into a private scratch folder only while
+//! one call reads them.
 //!
 //! A case is not a security boundary: it sets what tools and pages show by default. Remote agents still read a file
 //! only after the user allowed it for them.
@@ -115,6 +116,43 @@ pub struct DeletedCase {
     pub templates: usize,
     pub profiles_deleted: usize,
     pub profiles_unlinked: usize,
+}
+
+/// A file a tool or a preview reads by path. A decrypted copy from the vault is removed when this is dropped, so
+/// nothing readable stays on disk after the call; a file of the user's own is left alone.
+#[derive(Debug)]
+pub struct ScratchFile {
+    path: PathBuf,
+    temporary: bool,
+}
+
+impl ScratchFile {
+    /// A file that is not Blankey's to remove: one in the user's folders, or one picked for a request.
+    pub fn kept(path: PathBuf) -> Self {
+        Self { path, temporary: false }
+    }
+}
+
+impl std::ops::Deref for ScratchFile {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<Path> for ScratchFile {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ScratchFile {
+    fn drop(&mut self) {
+        if self.temporary {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 /// Writes `content` readable by this user only, in a folder only this user can open.
@@ -257,7 +295,7 @@ impl Blankey {
     }
 
     /// What MCP `get_case` returns and the chat's case block shows: metadata only, never profile values. With a
-    /// grant, files say whether that agent may read them and pending requests are only that agent's.
+    /// grant, pending requests are only that agent's; files say whether the agent asking may read them.
     pub fn case_overview(&self, case_id: i64, grant: Option<&str>) -> Result<serde_json::Value, String> {
         let scope = self.scope(Some(case_id))?;
         let info = scope.case.clone().ok_or("Unknown case")?;
@@ -299,9 +337,7 @@ impl Blankey {
                 let file_type = if is_old_word(f) { Kind::OldWord.media_type() } else { f.file_type.as_str() };
                 let mut item = json!({"file_id": source, "description": f.description, "type": file_type,
                                       "size": f.size, "readable": readable_kind(&f.file_type).is_some()});
-                if let Some(grant) = grant {
-                    item["shared"] = json!(self.file_shared(grant, &source));
-                }
+                item["shared"] = json!(self.file_shared(grant, &source));
                 // a known document that was read: what it is, and the profile that holds its fields
                 if !f.doctype.is_empty() {
                     item["document"] = json!(f.doctype);
@@ -426,25 +462,37 @@ impl Blankey {
 
     // -- case files ----------------------------------------------------------------
 
-    /// Decrypted case files that tools read by path; cleared on start, on lock and when a case or file goes.
+    /// Decrypted copies that a tool or a preview reads by path. Each lives only as long as its `ScratchFile`; the
+    /// folder is also cleared on start and on lock, for what a crash left behind.
     fn scratch_dir(&self) -> PathBuf {
         self.config.data_dir.join("scratch")
     }
 
-    /// A decrypted file the preview reads by path, in the scratch folder; cleared with it.
-    pub fn scratch_file(&self, name: &str, content: &[u8]) -> Result<PathBuf, String> {
+    /// `content` as a file of its own in the scratch folder, removed when the returned handle is dropped.
+    pub fn scratch_file(&self, extension: &str, content: &[u8]) -> Result<ScratchFile, String> {
         let dir = self.scratch_dir();
-        let path = dir.join(name);
-        write_private(&dir, &path, content)?;
-        Ok(path)
+        let path = dir.join(format!("{}.{extension}", uuid::Uuid::new_v4()));
+        let file = ScratchFile { path, temporary: true };
+        write_private(&dir, &file, content)?;
+        Ok(file)
     }
 
     pub fn clear_scratch(&self) {
         let _ = std::fs::remove_dir_all(self.scratch_dir());
+        // where render_example kept its output for the agent to open, before it returned everything itself
+        let _ = std::fs::remove_dir_all(self.config.data_dir.join("previews"));
     }
 
-    /// A case file tools can read (pdf or docx), decrypted into the scratch folder; needs the vault unlocked.
-    pub fn case_file(&self, source: &str) -> Result<(PathBuf, CollectedFile), String> {
+    /// A case file tools can read (pdf or docx), decrypted into the scratch folder for as long as the returned
+    /// handle lives; needs the vault unlocked.
+    pub fn case_file(&self, source: &str) -> Result<(ScratchFile, CollectedFile), String> {
+        let (file, kind) = self.readable_case_file(source)?;
+        let (_, content) = self.vault().load_collected_file(file.id).map_err(string)?;
+        Ok((self.scratch_file(kind, &content)?, file))
+    }
+
+    /// A case file tools can read, with its kind (pdf or docx), from what the vault records: nothing is decrypted.
+    pub fn readable_case_file(&self, source: &str) -> Result<(CollectedFile, &'static str), String> {
         let unknown = || format!("Unknown case file {source:?}; get_case lists them");
         let id = parse_case_file(source).ok_or_else(unknown)?;
         let file = self.vault().get_collected_file(id).map_err(|_| unknown())?;
@@ -461,16 +509,10 @@ impl Blankey {
                 format!("{source} is not a PDF or Word (.docx) file, so it cannot be read")
             }
         })?;
-        let dir = self.scratch_dir();
-        let path = dir.join(format!("casefile-{id}.{kind}"));
-        if !path.is_file() {
-            let (_, content) = self.vault().load_collected_file(id).map_err(string)?;
-            write_private(&dir, &path, &content)?;
-        }
-        Ok((path, file))
+        Ok((file, kind))
     }
 
-    /// Locks the vault and removes the decrypted case files.
+    /// Locks the vault and removes any decrypted copy still in the scratch folder.
     pub fn lock(&self) {
         self.vault().lock();
         self.clear_scratch();
@@ -615,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn case_files_import_checks_all_first_and_decrypt_to_scratch() {
+    fn case_files_import_checks_all_first_and_decrypt_only_while_read() {
         let dir = tempfile::tempdir().unwrap();
         let app = app(dir.path());
         let case = app.create_case("Sale").unwrap();
@@ -644,8 +686,14 @@ mod tests {
         assert!(app.case_file(&case_file_source(id("id.jpg"))).unwrap_err().contains("cannot be read"));
         assert!(app.case_file("casefile:999").is_err());
 
+        let (first, second) = (path.to_path_buf(), app.case_file(&case_file_source(id("deed.pdf"))).unwrap().0);
+        assert_ne!(first, second.to_path_buf(), "each read has a copy of its own");
+        drop(path);
+        assert!(!first.exists() && second.exists(), "the copy goes when its reader is done");
+        let left = second.to_path_buf();
+        std::mem::forget(second);
         app.lock();
-        assert!(!path.exists(), "locking removes the decrypted copies");
+        assert!(!left.exists(), "locking removes what a crash left behind");
     }
 
     #[test]
@@ -727,8 +775,8 @@ mod tests {
         let file = app.vault().get_collected_file(parse_case_file(file_id).unwrap()).unwrap();
         assert_eq!((file.case_id, file.description.as_str()), (Some(case), "The signed deed"));
         assert!(!app.uploads_dir().exists(), "no plaintext copy in uploads");
-        assert!(app.file_shared("g1", file_id), "the agent that asked may read it");
-        assert!(!app.file_shared("g2", file_id));
+        assert!(app.file_shared(Some("g1"), file_id), "the agent that asked may read it");
+        assert!(!app.file_shared(Some("g2"), file_id));
     }
 
     #[test]

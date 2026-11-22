@@ -456,12 +456,13 @@ impl Blankey {
         Ok(result)
     }
 
-    /// Whether the user let this remote agent read `source` (a `lib:<id>` or `casefile:<id>`). Needs the vault
-    /// unlocked: request results are sealed.
-    pub fn file_shared(&self, grant: &str, source: &str) -> bool {
+    /// Whether the user let this agent read `source` (a `lib:<id>` or `casefile:<id>`): the remote agent of `grant`,
+    /// or the assistants on this computer, which are one to Blankey. Needs the vault unlocked: request results are
+    /// sealed.
+    pub fn file_shared(&self, grant: Option<&str>, source: &str) -> bool {
         self.vault().list_requests(Some("done")).unwrap_or_default().iter().any(|r| {
             r.kind == FILE
-                && r.grant_id.as_deref() == Some(grant)
+                && r.grant_id.as_deref() == grant
                 && r.result.as_ref().and_then(|v| v.get("file_id")).and_then(Value::as_str) == Some(source)
         })
     }

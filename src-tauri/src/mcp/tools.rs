@@ -14,7 +14,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::cases::{self, Scope};
+use crate::cases::{self, Scope, ScratchFile};
 use crate::core::{Blankey, DocxTemplate, FILE, FILE_KINDS, FILL, LIBRARY_SYNC_AGE, PROFILE_INPUT};
 use crate::fieldtypes;
 use crate::library::{self, LibraryFile};
@@ -29,6 +29,7 @@ use crate::vault::{FieldInfo, Profile, Profiles, Request};
 
 pub const INSTRUCTIONS: &str = r#"Blankey fills document templates from personal data in an encrypted local vault. You never see values,
 only profiles' field keys, labels, types and value lengths: work from profile ids, never ask for values in chat.
+Work through these tools only: never open, list or search Blankey's own folder or the files in it another way.
 A locked vault: tools wait up to 50 s for the user to unlock it; if still locked, ask them to and retry.
 
 Filling, in one request_fill if you can: find_templates, find_profiles with the keys the template needs, then
@@ -41,13 +42,14 @@ or save_pdf_overlay_template (flat); inspect_docx, then save_docx_template (a bl
 or save_template with Typst source_text. Bindings are Jinja in {{ }}: "{{ applicant.address.city }}", "{{ loan.amount | money }}".
 Check it with render_example and check_bindings.
 find_templates also lists the user's own files (status candidate, source lib:<id>): templatize one only when a fill
-needs it, passing lib:<id> as path and source_path (remote sessions: request_file with source lib:<id> first).
+needs it, passing lib:<id> as path and source_path (request_file with source lib:<id> first).
 Blankey rebuilds the template when the file changes.
 
 Cases keep one matter together: its profiles with their roles, the files the user imported, and the templates, fill
 sets and documents made for it. A blankey://case/<id> link the user pastes names a case: pass <id> as case_id to
 every tool. In a case find_profiles lists its profiles and get_case its files (casefile:<id>, found by the user's
-descriptions); what you save there stays in the case. Without case_id, tools see global data only.
+descriptions; before reading one that is not shared yet, request_file with it as source: the user sees what is hidden
+from you and allows it); what you save there stays in the case. Without case_id, tools see global data only.
 An ID card or vehicle registration the user imported is already a profile of the case (find_profiles shows its
 "document" and "source" file): bind to its fields, and do not ask the user to type what it holds.
 
@@ -92,28 +94,32 @@ pub fn expand(path: &str) -> PathBuf {
 }
 
 /// A local path, a `file:<uuid>` id from request_file, a `lib:<id>` file from find_templates or a `casefile:<id>`
-/// from get_case. Remote sessions only get ids, and a `lib:` or `casefile:` file only once the user shared it through
-/// request_file.
-fn source_path(app: &Blankey, remote: Option<&Remote>, path: &str) -> Result<PathBuf, String> {
+/// from get_case. A `lib:` or `casefile:` file opens only once the user shared it through request_file, where they
+/// see what is hidden from the assistant; remote sessions only get ids.
+fn source_path(app: &Blankey, remote: Option<&Remote>, path: &str) -> Result<ScratchFile, String> {
     let shared_only = path.starts_with("lib:") || path.starts_with("casefile:");
-    if shared_only && remote.is_some_and(|r| !app.file_shared(&r.grant, path)) {
+    if path.starts_with("casefile:") {
+        // a file nobody can read says so, instead of sending the user a request that cannot be met
+        app.readable_case_file(path)?;
+    }
+    if shared_only && !app.file_shared(remote.map(|r| r.grant.as_str()), path) {
         return Err(format!(
             "Ask the user first: call request_file with source {path:?}, then wait_request; the file opens once they \
              allow it"
         ));
     }
     if path.starts_with("lib:") {
-        app.library.path(path)
+        app.library.path(path).map(ScratchFile::kept)
     } else if path.starts_with("casefile:") {
         Ok(app.case_file(path)?.0)
     } else if path.starts_with("file:") {
-        app.upload_path(path, remote.map(|r| r.grant.as_str()))
+        app.upload_path(path, remote.map(|r| r.grant.as_str())).map(ScratchFile::kept)
     } else if remote.is_some() {
         Err(format!(
             "Remote sessions cannot read local paths ({path}): call request_file and pass the file id it returns"
         ))
     } else {
-        Ok(expand(path))
+        Ok(ScratchFile::kept(expand(path)))
     }
 }
 
@@ -1142,10 +1148,9 @@ impl Tools {
     }
 
     #[tool(
-        description = "Render a template with example data (a saved example name or an inline dict keyed by role).\nReturns warnings, the preview PDF path and PNGs of the selected pages (default: all)."
+        description = "Render a template with example data (a saved example name or an inline dict keyed by role).\nReturns warnings and PNGs of the selected pages (default: all); for a Word template that cannot be shown as\npages, the text of its paragraphs instead. The rendered file is not kept anywhere."
     )]
-    async fn render_example(&self, Parameters(a): Parameters<RenderExampleArgs>, ext: Extensions) -> ToolResult {
-        let remote = remote(&ext).is_some();
+    async fn render_example(&self, Parameters(a): Parameters<RenderExampleArgs>) -> ToolResult {
         self.run(move |app| {
             let template = app.visible_template(&app.scope(a.case_id)?, &a.template_id)?;
             let data = match a.example {
@@ -1157,15 +1162,15 @@ impl Tools {
                 app.templates.save_example(&a.template_id, name, &data)?;
             }
             let rendered = engine::render_example(&template, &example_context(&data))?;
-            let out_path = app.config.previews_dir().join(format!("{}-example.{}", a.template_id, rendered.extension));
-            std::fs::write(&out_path, &rendered.content).map_err(string)?;
-            // a remote agent cannot open the file, and the absolute path reveals the user's home folder
-            let path = if remote { json!(null) } else { json!(out_path) };
-            let mut out = vec![ContentBlock::text(dump(&json!({"path": path, "warnings": rendered.warnings})))];
-            if rendered.is_pdf() {
-                for image in preview::render_pages(&rendered.content, &a.pages.unwrap_or_default(), dpi(a.dpi))? {
-                    out.push(png(image));
-                }
+            // nothing is written where the agent could open it: all it learns of the render is in this result
+            if !rendered.is_pdf() {
+                let file = app.scratch_file(rendered.extension, &rendered.content)?;
+                let paragraphs: Vec<String> = docx::inspect(&file)?.into_iter().map(|p| p.text).collect();
+                return text(&json!({"warnings": rendered.warnings, "paragraphs": paragraphs}));
+            }
+            let mut out = vec![ContentBlock::text(dump(&json!({"warnings": rendered.warnings})))];
+            for image in preview::render_pages(&rendered.content, &a.pages.unwrap_or_default(), dpi(a.dpi))? {
+                out.push(png(image));
             }
             ok(out)
         })
@@ -1385,7 +1390,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "Ask the user to pick a pdf or docx file in the app (remote sessions cannot read local paths), or, with\nsource lib:<id> from find_templates, to let you read that file from their folders (remote sessions need this before\nany lib: file opens). Returns a request id; wait_request then gives {file_id, kind, size}. Pass file_id as path or\nsource_path."
+        description = "Ask the user to pick a pdf or docx file in the app (remote sessions cannot read local paths), or, with\nsource lib:<id> from find_templates, or casefile:<id> from get_case, to let you read that file: needed once before\nany lib: or casefile: file opens; the user sees there what is hidden from you. Returns a request id; wait_request then gives {file_id, kind, size}. Pass file_id as path or\nsource_path."
     )]
     async fn request_file(&self, Parameters(a): Parameters<RequestFileArgs>, ext: Extensions) -> ToolResult {
         let grant = remote(&ext).map(|r| r.grant);
@@ -1396,11 +1401,10 @@ impl Tools {
             let scope = app.scope(a.case_id)?;
             let payload = match a.source.as_deref().filter(|s| !s.is_empty()) {
                 Some(source) if source.starts_with("casefile:") => {
-                    let (_, file) = app.case_file(source)?;
+                    let (file, kind) = app.readable_case_file(source)?;
                     if scope.case_id().is_some() {
                         check_holds(&scope, source, file.case_id)?;
                     }
-                    let kind = cases::readable_kind(&file.file_type).unwrap_or_default();
                     // the sheet shows what the user called the file; the payload never holds its name
                     json!({"kind": kind, "reason": a.reason.trim(), "source": source, "path": file.description,
                            "case_id": file.case_id})
@@ -1654,7 +1658,7 @@ impl Tools {
     }
 
     #[tool(
-        description = "One case: its title and notes, its profiles with their roles, its files as casefile:<id> with the\ndescription the user gave each (what it is and whose; read a readable one with inspect_pdf or inspect_docx), the\ntemplates made in it, its fill sets, documents and waiting requests. No values and no file names."
+        description = "One case: its title and notes, its profiles with their roles, its files as casefile:<id> with the\ndescription the user gave each (what it is and whose; a readable one opens with inspect_pdf or inspect_docx once shared: until then call\nrequest_file with it as source), the\ntemplates made in it, its fill sets, documents and waiting requests. No values and no file names."
     )]
     async fn get_case(&self, Parameters(a): Parameters<CaseArgs>, ext: Extensions) -> ToolResult {
         let remote = remote(&ext);
@@ -1892,12 +1896,11 @@ pub mod tests {
             out(t.find_templates(args(json!({"query": "t"}))).await),
             out(t.get_template(args(json!({"template_id": "t"}))).await),
             out(t
-                .render_example(
-                    args(json!({"template_id": "t", "example": {"applicant": {"name": "Example"}}, "save_as": "ex"})),
-                    local(),
-                )
+                .render_example(args(
+                    json!({"template_id": "t", "example": {"applicant": {"name": "Example"}}, "save_as": "ex"}),
+                ))
                 .await),
-            out(t.render_example(args(json!({"template_id": "t", "example": "ex"})), local()).await),
+            out(t.render_example(args(json!({"template_id": "t", "example": "ex"}))).await),
             out(t.check_bindings(args(json!({"template_id": "t", "profiles": {"applicant": pid}}))).await),
             out(t
                 .request_fill(
@@ -1972,14 +1975,14 @@ pub mod tests {
             out(t.get_fill_set(args(json!({"fill_set_id": fill_set}))).await),
         ]);
 
-        let preview = std::fs::read(app.config.previews_dir().join("t-example.pdf")).unwrap();
         let audit: Vec<String> =
             app.vault().audit_log().into_iter().map(|(action, target)| format!("{action}{target}")).collect();
-        let all = [outputs.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join("\n"), audit.join("\n")].join("\n")
-            + &String::from_utf8_lossy(&preview);
+        let all = [outputs.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join("\n"), audit.join("\n")].join("\n");
         for secret in [SENTINEL_NAME, SENTINEL_EGN, "Sentinel", "Hiddenwell", "sentinel@"] {
             assert!(!all.contains(secret), "leaked {secret}");
         }
+        let data_dir = app.config.data_dir.display().to_string();
+        assert!(!all.contains(&data_dir), "no tool names a place in Blankey's folder");
         let tools = outputs.iter().map(|(t, _)| t.as_str()).collect::<String>();
         assert!(!tools.contains("link_submission"), "submissions are not listed");
     }
@@ -2186,7 +2189,10 @@ pub mod tests {
         let error = t.request_fill(args(fill), local()).await.unwrap_err();
         assert!(error.contains("not a template yet"), "{error}");
 
-        // local agents read library files directly; remote ones only after the user shares the file
+        // no agent reads a library file before the user shared it, on this computer either
+        let refused = t.inspect_docx(args(json!({"path": source})), local()).await.unwrap_err();
+        assert!(refused.contains("request_file"), "{refused}");
+        allow(&t, &app, &source).await;
         let (inspected, _) = out(t.inspect_docx(args(json!({"path": source})), local()).await);
         assert!(inspected.contains("Loan in the amount") && !inspected.contains("John Smith"), "{inspected}");
         assert!(inspected.contains("⟦pii:3 Xxxx Xxxxx⟧"), "{inspected}");
@@ -2509,6 +2515,13 @@ pub mod tests {
         serde_json::from_str(&out(result).0).unwrap()
     }
 
+    /// The user allows the assistants on this computer to read a library or case file.
+    async fn allow(t: &Tools, app: &Blankey, source: &str) {
+        let ask = json!({"reason": "To read it", "source": source});
+        let id = json_out(t.request_file(args(ask), local()).await)["request_id"].as_i64().unwrap();
+        app.share_source(id).unwrap();
+    }
+
     /// Imports the files into the case; their casefile: handles by file name.
     fn import(app: &Blankey, case: i64, files: &[(PathBuf, &str)]) -> std::collections::HashMap<String, String> {
         let items: Vec<(PathBuf, String)> = files.iter().map(|(p, d)| (p.clone(), d.to_string())).collect();
@@ -2656,6 +2669,14 @@ pub mod tests {
             detail["files"].as_array().unwrap().iter().map(|f| f["readable"].as_bool().unwrap()).collect();
         assert_eq!(readable.iter().filter(|r| **r).count(), 3);
 
+        // the user sees what is hidden in a file before any assistant reads it, on this computer too
+        let refused = t.inspect_docx(args(json!({"path": ids["filled.docx"]})), local()).await.unwrap_err();
+        assert!(refused.contains("request_file"), "{refused}");
+        assert_eq!(detail["files"][0]["shared"], false);
+        for name in ["filled.docx", "flat.pdf", "Hiddenwell scan.pdf"] {
+            allow(&t, &app, &ids[name]).await;
+        }
+        assert!(t.inspect_docx(args(json!({"path": ids["filled.docx"]})), remote()).await.is_err(), "local only");
         let (docx, _) = out(t.inspect_docx(args(json!({"path": ids["filled.docx"]})), local()).await);
         assert!(docx.contains("paragraphs"), "{docx}");
         let (flat, images) = out(t.inspect_pdf(args(json!({"path": ids["flat.pdf"]})), local()).await);
@@ -2670,6 +2691,17 @@ pub mod tests {
                           "replacements": [{"find": "John Smith", "var": "who"}], "roles": {}, "fields": {}});
         out(t.save_docx_template(args(save.clone()), local()).await);
         assert!(app.templates.get("contract").unwrap().case.is_some());
+
+        // the agent reads a render in the result, and no decrypted or rendered file is left for it to open
+        let example = json!({"template_id": "contract", "example": {}, "case_id": case});
+        let (rendered, images) = out(t.render_example(args(example)).await);
+        assert!(!rendered.contains("\"path\"") && (images > 0 || rendered.contains("paragraphs")), "{rendered}");
+        let plain: Vec<_> = ["scratch", "previews"]
+            .iter()
+            .filter_map(|folder| std::fs::read_dir(app.config.data_dir.join(folder)).ok())
+            .flat_map(|entries| entries.flatten().map(|e| e.path()))
+            .collect();
+        assert!(plain.is_empty(), "{plain:?}");
         let mut elsewhere = save;
         elsewhere["case_id"] = json!(app.create_case("Lease").unwrap());
         assert!(t.save_docx_template(args(elsewhere), local()).await.unwrap_err().contains("file of case"));

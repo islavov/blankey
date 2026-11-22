@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Privacy: an assistant on the same computer finds no readable copy of a case file or a document in Blankey's
+  folder. A file is decrypted only while one tool call or one preview reads it, and a trial render of a template
+  comes back in the assistant's tool result instead of as a file.
+- Privacy: an assistant on the same computer asks before it reads a case file or a file from your folders, as
+  assistants over Blankey Online already did. The request shows the file with the personal data that will be hidden,
+  where you can hide more or less before you allow it.
 - First use: the Cases page with no case on it offers the sample case or a start from your own document: drop it,
   and a case named after the file holds it. A sample case has a guide on top that shows the steps to a first
   document and the prompt to give the assistant in each, to send to the built-in assistant or copy for your own.
