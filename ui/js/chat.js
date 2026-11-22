@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "../vendor
 import { call, invoke } from "./api.js";
 import { language, number, t } from "./i18n.js";
 import { fileKind, html, Icon, megabytes, useLoad } from "./lib.js";
+import { Markdown } from "./markdown.js";
 
 // -- store -------------------------------------------------------------------------------
 // live turn: {turnId, userText, files, sentAt, steps: [part], status, done, stopped, error, failed, endedAt, ms}; steps are
@@ -454,7 +455,7 @@ function StoredTurn({ turn, open }) {
     <${FileBlocks} files=${turn.user?.files} sent onOpen=${open} />
     ${turn.user && html`<${TurnTime} timing=${storedTiming(turn.user.timing)} />`}
     <${Progress} lines=${turn.lines} />
-    ${turn.texts.map((text, i) => html`<div key=${i} class="chat-text">${text}</div>`)}`;
+    ${turn.texts.map((text, i) => html`<${Markdown} key=${i} text=${text} />`)}`;
 }
 
 /**
@@ -471,7 +472,7 @@ function LiveTurn({ turn, running, open }) {
     <${FileBlocks} files=${turn.files} sent onOpen=${open} />
     <${TurnTime} timing=${{ sentAt: turn.sentAt, ms: turn.ms, tools: sum(turn.steps.map((step) => step.ms)) }} />
     ${!running && html`<${Progress} lines=${lines} />`}
-    ${texts.map((step, i) => html`<div key=${i} class="chat-text">${step.text}</div>`)}
+    ${texts.map((step, i) => html`<${Markdown} key=${i} text=${step.text} />`)}
     ${running && html`<div class="chat-thinking"><${Spinner} /><span>${now}</span></div>`}`;
 }
 

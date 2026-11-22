@@ -257,8 +257,9 @@ test("a step the relay runs again drops what it wrote; a model that never answer
   await chatEvent("status", { state: "retrying" }, 1, turn);
   assert.equal(line(), "The model did not answer. Trying again…");
   assert.ok(!$$(".chat-text").some((el) => el.textContent === "The sel"));
-  await chatEvent("text_delta", { text: "The seller signs." }, 1, turn);
+  await chatEvent("text_delta", { text: "The **seller** signs." }, 1, turn);
   assert.equal($$(".chat-text").at(-1).textContent, "The seller signs.");
+  assert.equal($("strong", $$(".chat-text").at(-1)).textContent, "seller", "Markdown shows as formatting");
   await chatEvent("done", { stopped: "error", error: { code: "model_timeout", message: "The model did not answer in time; try again in a moment" } }, 1, turn);
   assert.equal(text(".chat-error"), "The model did not answer in time. Try again in a moment.");
 });
