@@ -301,13 +301,77 @@ test("an empty chat offers things to ask; a click sends one", async () => {
   await goTo("Cases");
   await click(caseItem("Car sale"));
   await tab("AI assistant");
+  assert.equal(text(".chat-welcome"), "How can I help with this case?");
   assert.deepEqual($$(".chat-starters button").map((b) => b.textContent), [
-    "Make a template from a document in this case",
-    "Fill in a document for the people in this case",
-    "What can you do?",
+    "Drop a document and create a template",
+    "Prepare a car sale contract for a new client",
+    "I'm a lawyer / notary. What can Blankey do for me?",
+    "How does the AI work without seeing my clients' personal data?",
+    "What should I do first?",
   ]);
-  await click(byText(".chat-starters button", "What can you do?"));
-  assert.deepEqual(backend.called("send_chat_message").at(-1), { caseId: 3, text: "What can you do?" });
+  await click(byText(".chat-starters button", "What should I do first?"));
+  assert.deepEqual(backend.called("send_chat_message").at(-1), { caseId: 3, text: "What should I do first?" });
+});
+
+test("with a template and a person in the case, the first thing to ask is to fill it for them", async () => {
+  backend.db.caseLinks.push({ case_id: 3, profile_id: 1, role: "buyer" });
+  backend.emit("cases-changed");
+  await settle();
+  assert.equal(text(".chat-starters button"), "Fill “NZOK request” with John's details");
+});
+
+test("the first starter asks for a document, keeps it in the case and leaves the question in the composer", async () => {
+  backend.db.pickPaths = ["/Users/test/Downloads/car-sale_contract.docx"];
+  await click(byText(".chat-starters button", "Drop a document and create a template"));
+  assert.deepEqual(backend.called("import_case_files").at(-1), {
+    caseId: 3,
+    items: [{ path: "/Users/test/Downloads/car-sale_contract.docx", description: "car sale contract" }],
+  });
+  assert.equal($(".sheet"), null);
+  assert.equal(composer().value, "Create a template from this document");
+  assert.deepEqual($$(".chat-composer .chat-file-name").map((el) => el.textContent), ["car sale contract"]);
+  assert.match(text(".chat-composer .chat-file .muted"), /^Word · /);
+  await click($(".chat-composer .chat-file .remove"));
+  assert.equal($(".chat-composer .chat-file"), null);
+  assert.ok(backend.db.collected.some((f) => f.name === "car-sale_contract.docx"), "left out of the message, still in the case");
+  await type(composer(), "");
+});
+
+test("files dropped on the chat go into the case and with the next message, as blocks", async () => {
+  document.elementFromPoint = () => $(".case-tab");
+  const imports = backend.called("import_case_files").length;
+  backend.emit("tauri://drag-drop", { paths: ["/Users/test/lease-draft.pdf", "/Users/test/id.jpg"], position: { x: 1, y: 1 } });
+  await settle();
+  assert.equal($(".sheet"), null, "no Import sheet");
+  assert.equal(backend.called("import_case_files").length, imports + 1);
+  assert.deepEqual($$(".chat-composer .chat-file-name").map((el) => el.textContent), ["lease draft", "id"]);
+  assert.equal(button("Send").disabled, false, "files alone can be sent");
+  const ids = ["lease-draft.pdf", "id.jpg"].map((name) => backend.db.collected.find((f) => f.name === name).id);
+  const files = ids.map((id) => backend.db.collected.find((f) => f.id === id));
+
+  const turn = await send("What is in these?");
+  assert.deepEqual(backend.called("send_chat_message").at(-1), { caseId: 3, text: "What is in these?", files: ids });
+  assert.equal($(".chat-composer .chat-file"), null);
+  await chatEvent("started", { text: "What is in these?", files, sent_at: "2026-11-03T10:00:00" }, 3, turn);
+  assert.deepEqual($$(".chat-thread .chat-files.sent .chat-file-name").map((el) => el.textContent), ["lease draft", "id"]);
+
+  await chatEvent("error", { code: "lost", message: "Lost" }, 3, turn);
+  assert.equal(composer().value, "What is in these?");
+  assert.equal($$(".chat-composer .chat-file").length, 2, "an unsent message gets its files back");
+  await click($$(".chat-composer .chat-file .remove")[0]);
+  await click($(".chat-composer .chat-file .remove"));
+  await type(composer(), "");
+
+  backend.db.chats[3] = { messages: [{ seq: 1, message: { role: "user", content: [], files: [files[0]], timing: null } }], summary: null };
+  await tab("Files");
+  await tab("AI assistant");
+  assert.deepEqual($$(".chat-thread .chat-files.sent .chat-file-name").map((el) => el.textContent), ["lease draft"], "stored with the message");
+  assert.equal($(".chat-msg.user"), null, "sent without text");
+
+  await click($(".chat-thread .chat-file"));
+  assert.ok(text(".case-tabs .chip.active").startsWith("AI assistant"), "a click opens the file over the chat");
+  assert.equal(backend.called("case_file_preview").at(-1).id, files[0].id);
+  await key("Escape");
 });
 
 test("the assistant tab goes when the relay stops offering the assistant", async () => {

@@ -827,9 +827,9 @@ async fn runs_a_case_chat_turn_and_answers_its_grant_only_meanwhile() {
 
     let (chunks, stream) = tokio::sync::mpsc::unbounded_channel();
     *stub.state.chat_stream.lock().unwrap() = Some(stream);
-    let turn_id = chat.send(case_id, "  Find Ivan  ").unwrap();
+    let turn_id = chat.send(case_id, "  Find Ivan  ", &[]).unwrap();
     assert_eq!(chat.running(), [case_id]);
-    assert!(chat.send(case_id, "Again").is_err(), "one turn per case at a time");
+    assert!(chat.send(case_id, "Again", &[]).is_err(), "one turn per case at a time");
     eventually("the turn on the relay", || stub.state.chat_turns.lock().unwrap().len() == 1).await;
     let posted = stub.state.chat_turns.lock().unwrap()[0].clone();
     assert_eq!((posted["turn_id"].as_str(), posted["case"].as_str()), (Some(turn_id.as_str()), Some(uuid.as_str())));
@@ -878,7 +878,7 @@ async fn runs_a_case_chat_turn_and_answers_its_grant_only_meanwhile() {
     // the next turn sends the thread; the relay folds the first two messages into a summary
     let (chunks, stream) = tokio::sync::mpsc::unbounded_channel();
     *stub.state.chat_stream.lock().unwrap() = Some(stream);
-    chat.send(case_id, "And the lease?").unwrap();
+    chat.send(case_id, "And the lease?", &[]).unwrap();
     eventually("the second turn", || stub.state.chat_turns.lock().unwrap().len() == 2).await;
     assert_eq!(
         stub.state.chat_turns.lock().unwrap()[1]["messages"],
@@ -900,7 +900,7 @@ async fn runs_a_case_chat_turn_and_answers_its_grant_only_meanwhile() {
 
     let (chunks, stream) = tokio::sync::mpsc::unbounded_channel();
     *stub.state.chat_stream.lock().unwrap() = Some(stream);
-    chat.send(case_id, "Thanks").unwrap();
+    chat.send(case_id, "Thanks", &[]).unwrap();
     eventually("the third turn", || stub.state.chat_turns.lock().unwrap().len() == 3).await;
     let third = stub.state.chat_turns.lock().unwrap()[2].clone();
     assert_eq!(third["summary"], "Ivan Petrov is the seller.");
@@ -923,7 +923,7 @@ async fn chat_turns_are_refused_without_the_chat_and_can_be_stopped() {
     stub.state.chat.store(false, Ordering::SeqCst);
     relay.refresh_profile().await;
     assert!(!relay.chat_available() && !relay.summary().chat);
-    assert!(chat.send(case_id, "Hello").is_err());
+    assert!(chat.send(case_id, "Hello", &[]).is_err());
     assert!(stub.state.chat_turns.lock().unwrap().is_empty());
     stub.state.chat.store(true, Ordering::SeqCst);
     relay.refresh_profile().await;
@@ -933,7 +933,7 @@ async fn chat_turns_are_refused_without_the_chat_and_can_be_stopped() {
         429,
         json!({"error": "chat_budget", "error_description": "Used up", "resets_at": "2026-12-01T00:00:00Z"}),
     ));
-    chat.send(case_id, "Hello").unwrap();
+    chat.send(case_id, "Hello", &[]).unwrap();
     eventually("the refusal", || chat.running().is_empty()).await;
     let last = updates.lock().unwrap().last().unwrap().clone();
     assert_eq!(
@@ -944,8 +944,18 @@ async fn chat_turns_are_refused_without_the_chat_and_can_be_stopped() {
 
     let (chunks, stream) = tokio::sync::mpsc::unbounded_channel();
     *stub.state.chat_stream.lock().unwrap() = Some(stream);
-    let turn_id = chat.send(case_id, "Draft the power of attorney").unwrap();
+    // a file sent with the message: the relay gets what it is, the thread keeps it beside the text
+    let draft = dir.path().join("draft.txt");
+    std::fs::write(&draft, "Power of attorney").unwrap();
+    let files = app.keep_files(crate::links::FileOwner::Case(case_id), &[(draft, "Old draft".to_string())]).unwrap();
+    let other = app.create_case("Lease").unwrap();
+    assert!(chat.send(other, "Read it", &files).is_err(), "only the case's own files");
+    assert!(chat.send(case_id, " ", &[]).is_err());
+    let turn_id = chat.send(case_id, "Draft the power of attorney", &files).unwrap();
     eventually("the turn on the relay", || stub.state.chat_turns.lock().unwrap().len() == 2).await;
+    let user = stub.state.chat_turns.lock().unwrap()[1]["user"].clone();
+    assert_eq!(user[0]["text"], "Draft the power of attorney");
+    assert!(user[1]["text"].as_str().unwrap().contains(&format!("file {}: draft.txt", files[0])));
     chat.stop(case_id).await.unwrap();
     assert_eq!(*stub.state.chat_cancelled.lock().unwrap(), [turn_id]);
     chunks.send(sse("done", json!({"messages": [], "stopped": "cancelled", "model": null, "usage": {}}))).unwrap();
@@ -954,6 +964,12 @@ async fn chat_turns_are_refused_without_the_chat_and_can_be_stopped() {
     let last = updates.lock().unwrap().last().unwrap().clone();
     assert_eq!((last.event.as_str(), last.data["stopped"].as_str()), ("done", Some("cancelled")));
     assert_eq!(chat.thread(case_id).unwrap().messages.len(), 1, "the user's message stays with a stopped turn");
+    let stored = &chat.thread(case_id).unwrap().messages[0].message;
+    assert_eq!(
+        (stored["files"][0]["id"].as_i64(), stored["files"][0]["description"].as_str()),
+        (Some(files[0]), Some("Old draft"))
+    );
+    assert_eq!(stored["content"].as_array().unwrap().len(), 1, "the thread keeps the text as the user wrote it");
 }
 
 #[tokio::test(flavor = "multi_thread")]

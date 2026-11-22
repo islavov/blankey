@@ -5,10 +5,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "../vendor/preact-htm.js";
 import { call, invoke } from "./api.js";
 import { language, number, t } from "./i18n.js";
-import { html } from "./lib.js";
+import { fileKind, html, Icon, megabytes, useLoad } from "./lib.js";
 
 // -- store -------------------------------------------------------------------------------
-// live turn: {turnId, userText, sentAt, steps: [part], status, done, stopped, error, failed, endedAt, ms}; steps are
+// live turn: {turnId, userText, files, sentAt, steps: [part], status, done, stopped, error, failed, endedAt, ms}; steps are
 // shaped like the stored assistant parts (text, tool-call with a `state` and, once it ran, its `ms`), except
 // reasoning, which keeps its summary lines as `thoughts`
 
@@ -18,6 +18,9 @@ const live = new Map();
 const ended = new Map();
 // case id -> the composer's text, kept while another case is open
 const drafts = new Map();
+// case id -> the files that go with the next message, already in the case: {id, name, description, type, size}
+const attached = new Map();
+const NO_FILES = [];
 // case id -> tool calls and turns ended, which may have added to the case's lists
 const worked = new Map();
 let workChanges = 0;
@@ -35,8 +38,8 @@ function changed(runningToo = false) {
 }
 
 /** A turn that just started; `userText` and `sentAt` are null when this window did not see it start. */
-const newTurn = (turnId, userText, sentAt = null) => ({
-  turnId, userText, sentAt, steps: [], status: null, done: false, stopped: null, error: null, failed: false, endedAt: 0, ms: null,
+const newTurn = (turnId, userText, sentAt = null, files = NO_FILES) => ({
+  turnId, userText, files, sentAt, steps: [], status: null, done: false, stopped: null, error: null, failed: false, endedAt: 0, ms: null,
 });
 
 /** Appends streamed text to the last step when it is text, else starts a new text step. */
@@ -77,7 +80,7 @@ export function chatEvent({ case_id: caseId, turn_id: turnId, event, data = {} }
   }
   if (event === "started") {
     running.add(caseId);
-    live.set(caseId, newTurn(turnId, data.text ?? "", data.sent_at ?? null));
+    live.set(caseId, newTurn(turnId, data.text ?? "", data.sent_at ?? null, data.files ?? NO_FILES));
     return changed(true);
   }
   const wasRunning = running.has(caseId);
@@ -119,6 +122,7 @@ export function chatEvent({ case_id: caseId, turn_id: turnId, event, data = {} }
     Object.assign(turn, { failed: true, status: null, error: { code: data.code, message: data.message }, ms: data.ms ?? null });
     // nothing of the turn was stored: its text goes back into the composer to send again
     if (!drafts.get(caseId)?.trim() && turn.userText) drafts.set(caseId, turn.userText);
+    if (!attached.get(caseId)?.length && turn.files.length) attached.set(caseId, turn.files);
   }
   changed(running.has(caseId) !== wasRunning);
 }
@@ -142,12 +146,26 @@ export function resetChat() {
   running.clear();
   live.clear();
   drafts.clear();
+  attached.clear();
   changed(true);
 }
 
 /** The composer's text for the case. */
 const setDraft = (caseId, text) => {
   drafts.set(caseId, text);
+  changed();
+};
+
+/** Files kept in the case go with its next message. */
+export function attachFiles(caseId, files) {
+  const current = attached.get(caseId) ?? NO_FILES;
+  attached.set(caseId, [...current, ...files.filter((file) => !current.some((f) => f.id === file.id))]);
+  changed();
+}
+
+/** The files that go with the case's next message, replaced; they stay in the case either way. */
+const setAttached = (caseId, files) => {
+  attached.set(caseId, files);
   changed();
 };
 
@@ -169,10 +187,10 @@ function useStamp(stamp) {
   }, []);
 }
 
-/** The case's live turn, whether it runs, its draft and how many of its turns ended; re-renders on every change. */
+/** The case's live turn, whether it runs, its draft with its files, and how many of its turns ended; re-renders on every change. */
 export function useChat(caseId) {
   useStamp(() => changes);
-  return { running: running.has(caseId), turn: live.get(caseId) ?? null, ended: ended.get(caseId) ?? 0, draft: drafts.get(caseId) ?? "" };
+  return { running: running.has(caseId), turn: live.get(caseId) ?? null, ended: ended.get(caseId) ?? 0, draft: drafts.get(caseId) ?? "", files: attached.get(caseId) ?? NO_FILES };
 }
 
 /** How many of the case's tool calls and turns ended, to reload what they may have added; re-renders only then. */
@@ -211,17 +229,27 @@ const ERRORS = {
 /** What went wrong, in the user's language when the code is known. */
 const errorText = (error) => ERRORS[error.code]?.() || error.message;
 
-/** What a new user can ask first; a click sends it. */
-const STARTERS = [
-  () => t("Make a template from a document in this case"),
-  () => t("Fill in a document for the people in this case"),
-  () => t("What can you do?"),
-];
+/**
+ * What a new user can ask first; a click sends it. With a template and a person to fill it for, that comes first;
+ * `attach` asks for a document and leaves the question in the composer.
+ */
+function starters(info, templates) {
+  const template = templates?.[0];
+  const client = info.profiles[0];
+  return [
+    template && client && { text: t("Fill “{template}” with {client}'s details", { template: template.name, client: client.name }) },
+    { text: t("Drop a document and create a template"), attach: true },
+    { text: t("Prepare a car sale contract for a new client") },
+    { text: t("I'm a lawyer / notary. What can Blankey do for me?") },
+    { text: t("How does the AI work without seeing my clients' personal data?") },
+    { text: t("What should I do first?") },
+  ].filter(Boolean);
+}
 
 /** The same for the sample case: the two steps to its first document. */
-const SAMPLE_STARTERS = [
-  () => t("Make a template from the sample contract in this case"),
-  () => t("Fill in the contract for the lender and the borrower"),
+const sampleStarters = () => [
+  { text: t("Make a template from the sample contract in this case") },
+  { text: t("Fill in the contract for the lender and the borrower") },
 ];
 
 const STATUS = {
@@ -291,9 +319,29 @@ function Progress({ lines }) {
   return html`<details class="chat-reasoning"><summary>${t("Progress")}</summary><div>${lines.map((line, i) => html`<div key=${i}>${line}</div>`)}</div></details>`;
 }
 
-/** The Chat tab of a case: the stored thread, the turn streaming now, and the composer. `sample`: the sample case. */
-export function CaseChat({ caseId, sample }) {
+/** Files sent or to be sent with a message: what each is, never its content. A click opens one; `onRemove` leaves one out. */
+function FileBlocks({ files, sent, onOpen, onRemove }) {
+  if (!files?.length) return null;
+  return html`
+    <div class=${`chat-files ${sent ? "sent" : ""}`}>
+      ${files.map((file) => html`
+        <div class="chat-file" key=${file.id} title=${file.name} onClick=${() => onOpen(file)}>
+          <${Icon} name="documents" />
+          <span class="chat-file-name">${file.description || file.name}</span>
+          <span class="muted">${fileKind(file)} · ${megabytes(file.size)}</span>
+          ${onRemove && html`<button class="ghost remove" title=${t("Leave out")} onClick=${(e) => (e.stopPropagation(), onRemove(file))}>✕</button>`}
+        </div>`)}
+    </div>`;
+}
+
+/**
+ * The Chat tab of a case: the stored thread, the turn streaming now, and the composer. `attach` asks for files,
+ * keeps them in the case and adds them to the next message; `open` shows a file of a message.
+ */
+export function CaseChat({ info, attach, open }) {
+  const { id: caseId, sample } = info;
   const chat = useChat(caseId);
+  const templates = useLoad(() => call("list_templates", { caseId }).catch(() => []), [caseId]);
   const [thread, setThread] = useState(null);
   const box = useRef();
   // follows new content while the user is at the bottom
@@ -331,7 +379,7 @@ export function CaseChat({ caseId, sample }) {
     return html`
       ${thread.summary &&
       html`<details class="chat-note"><summary>${t("Earlier messages are summarized")}</summary><div>${thread.summary}</div></details>`}
-      ${turnsOf(thread.messages).map((turn) => html`<${StoredTurn} key=${turn.seq} turn=${turn} />`)}`;
+      ${turnsOf(thread.messages).map((turn) => html`<${StoredTurn} key=${turn.seq} turn=${turn} open=${open} />`)}`;
   }, [thread, language()]);
 
   const { turn } = chat;
@@ -340,12 +388,21 @@ export function CaseChat({ caseId, sample }) {
   const empty = !thread?.messages.length && !turn && !chat.running;
 
   const send = async (text = chat.draft.trim()) => {
-    if (!text || chat.running) return;
+    const { files } = chat;
+    if ((!text && !files.length) || chat.running) return;
     stick.current = true;
+    attached.delete(caseId);
     if (text === chat.draft.trim()) setDraft(caseId, "");
-    await call("send_chat_message", { caseId, text }).catch(() => {
+    else changed();
+    const args = files.length ? { caseId, text, files: files.map((file) => file.id) } : { caseId, text };
+    await call("send_chat_message", args).catch(() => {
       if (!drafts.get(caseId)) setDraft(caseId, text);
+      attachFiles(caseId, files);
     });
+  };
+  const start = async (starter) => {
+    if (!starter.attach) return send(starter.text);
+    if ((await attach()) && !drafts.get(caseId)?.trim()) setDraft(caseId, t("Create a template from this document"));
   };
   const onKeyDown = (e) => {
     if (e.isComposing) return;
@@ -364,33 +421,38 @@ export function CaseChat({ caseId, sample }) {
       ${thread &&
       html`
         ${storedView}
-        ${turn && !stored && !turn.failed && html`<${LiveTurn} turn=${turn} running=${chat.running} />`}
+        ${turn && !stored && !turn.failed && html`<${LiveTurn} turn=${turn} running=${chat.running} open=${open} />`}
         ${chat.running && !turn && html`<div class="chat-status"><${Spinner} /> ${t("The assistant is working")}</div>`}
         ${turn && html`<${TurnEnd} turn=${turn} />`}
         ${empty &&
         html`<div class="empty">
           ${sample
             ? t("This is a sample case. Ask the assistant to turn the contract into a template, then to fill it in for the two people here.")
-            : t("Ask the assistant to work on this case. It knows the people, files and notes in it, never the values in profiles.")}
+            : html`<div class="chat-welcome">${t("How can I help with this case?")}</div>
+                ${t("The AI sees field names, never your clients' values.")}`}
           <div class="chat-starters" data-help="chat.starters">
-            ${(sample ? SAMPLE_STARTERS : STARTERS).map((text) => html`<button class="chip" onClick=${() => send(text())}>${text()}</button>`)}
+            ${(sample ? sampleStarters() : starters(info, templates)).map((starter) => html`
+              <button class="chip" onClick=${() => start(starter)}>${starter.attach && html`<${Icon} name="upload" />`}${starter.text}</button>`)}
           </div>
         </div>`}`}
     </div>
     <div class="chat-composer">
-      <textarea rows="2" data-help="chat.message" placeholder=${t("Ask the assistant about this case")} value=${chat.draft}
+      <${FileBlocks} files=${chat.files} onOpen=${open} onRemove=${(file) => setAttached(caseId, chat.files.filter((f) => f.id !== file.id))} />
+      <textarea rows="2" data-help="chat.message" placeholder=${t("Ask anything, or drop a document here…")} value=${chat.draft}
         onInput=${(e) => setDraft(caseId, e.target.value)} onKeyDown=${onKeyDown}></textarea>
       ${chat.running
         ? html`<button class="danger" data-help="chat.stop" onClick=${() => call("stop_chat", { caseId }).catch(() => {})}>${t("Stop")}</button>`
-        : html`<button class="primary" data-help="chat.send" disabled=${!chat.draft.trim()} onClick=${() => send()}>${t("Send")}</button>`}
+        : html`<button class="primary" data-help="chat.send" disabled=${!chat.draft.trim() && !chat.files.length} onClick=${() => send()}>${t("Send")}</button>`}
     </div>`;
 }
 
-/** The user's message and its timing, then what the assistant did, collapsed, and what it answered. */
-function StoredTurn({ turn }) {
+/** The user's message, the files sent with it and its timing, then what the assistant did, collapsed, and what it answered. */
+function StoredTurn({ turn, open }) {
   const text = turn.user ? partsOf(turn.user).filter((p) => p.type === "text").map((p) => p.text).join("\n") : "";
   return html`
-    ${text && html`<div class="chat-msg user">${text}</div><${TurnTime} timing=${storedTiming(turn.user.timing)} />`}
+    ${text && html`<div class="chat-msg user">${text}</div>`}
+    <${FileBlocks} files=${turn.user?.files} sent onOpen=${open} />
+    ${turn.user && html`<${TurnTime} timing=${storedTiming(turn.user.timing)} />`}
     <${Progress} lines=${turn.lines} />
     ${turn.texts.map((text, i) => html`<div key=${i} class="chat-text">${text}</div>`)}`;
 }
@@ -399,13 +461,14 @@ function StoredTurn({ turn }) {
  * The turn as it streams: the user's message, then what the assistant wrote; while it works, one line at the bottom
  * says what it is doing (its latest progress line, or that it waits or summarizes), and once done its progress collapses.
  */
-function LiveTurn({ turn, running }) {
+function LiveTurn({ turn, running, open }) {
   const lines = turn.steps.flatMap((step) => (step.type === "reasoning" ? linesOf(step) : []));
   const texts = turn.steps.filter((step) => step.type === "text" && step.text);
   const thinking = turn.steps.at(-1)?.type === "reasoning";
   const now = STATUS[turn.status]?.() || lines.at(-1) || (thinking ? t("Thinking…") : t("The assistant is working"));
   return html`
     ${turn.userText && html`<div class="chat-msg user">${turn.userText}</div>`}
+    <${FileBlocks} files=${turn.files} sent onOpen=${open} />
     <${TurnTime} timing=${{ sentAt: turn.sentAt, ms: turn.ms, tools: sum(turn.steps.map((step) => step.ms)) }} />
     ${!running && html`<${Progress} lines=${lines} />`}
     ${texts.map((step, i) => html`<div key=${i} class="chat-text">${step.text}</div>`)}

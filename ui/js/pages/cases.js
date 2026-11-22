@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "../../vendor/preact-htm.js";
 import { call, refreshStatus } from "../api.js";
-import { CaseChat, Spinner, useRunning, useWorked } from "../chat.js";
+import { attachFiles, CaseChat, Spinner, useRunning, useWorked } from "../chat.js";
 import { openFill } from "../fill/form.js";
 import { HelpNote } from "../help.js";
 import { t, tn } from "../i18n.js";
-import { html, Icon, KIND_NAMES, matches, megabytes, reload, state, update, useGenerated, useLoad, useStore, when } from "../lib.js";
+import { fileKind, html, Icon, isOldWord, KIND_NAMES, matches, megabytes, reload, state, update, useGenerated, useLoad, useStore, when } from "../lib.js";
 import { openDocumentCheck } from "../docread.js";
 import { openReview } from "../review.js";
 import { openDocuments, openViewer } from "../viewer.js";
@@ -51,7 +51,10 @@ export function dragEnd() {
   if (state.drag) update({ drag: null });
 }
 
-/** Files dropped on the window: into the Import sheet when it is open, else, dropped on the open case, a new import into it. */
+/**
+ * Files dropped on the window: into the Import sheet when it is open, else, dropped on the open case, a new import
+ * into it; on its chat they go into the case as they are and with the next message.
+ */
 export function dropFiles(paths, position) {
   const target = dragTarget(position);
   dragEnd();
@@ -59,7 +62,9 @@ export function dropFiles(paths, position) {
   if (importing) return importing(paths);
   if (isSheetOpen() || isDialogOpen()) return;
   if (state.page !== "cases" || !shown) return toast(t("Open a case to import files into it"));
-  if (target?.closest(".case-detail")) openImport(shown, paths);
+  if (!target?.closest(".case-detail")) return;
+  if (document.querySelector(".case-tab.chat-tab")) attachToChat(shown, paths);
+  else openImport(shown, paths);
 }
 
 export function Cases() {
@@ -198,7 +203,7 @@ function CaseDetail({ caseId }) {
     ["activity", t("Activity"), info.counts.activity],
   ].filter(Boolean);
   const content = {
-    chat: () => (chat ? html`<${CaseChat} caseId=${info.id} sample=${info.sample} />` : html`<${SampleGuide} info=${info} />`),
+    chat: () => (chat ? html`<${CaseChat} info=${info} attach=${() => attachToChat(info)} open=${(file) => openFromChat(info, file)} />` : html`<${SampleGuide} info=${info} />`),
     files: () => html`<${CaseFiles} info=${info} />`,
     profiles: () => html`<${CaseProfiles} info=${info} />`,
     templates: () => html`<${CaseTemplates} info=${info} />`,
@@ -315,20 +320,6 @@ const READABLE = ["application/pdf", "application/vnd.openxmlformats-officedocum
 // what Blankey can read as a known document: a scan or a photo
 const DOCUMENT_TYPES = ["application/pdf", "image/png", "image/jpeg", "image/webp"];
 
-/** A Word 97-2003 file, which the assistant cannot read: typed so on import, or an earlier import named .doc. */
-const isOldWord = ({ type, name }) => type === "application/msword" || (type === "application/octet-stream" && /\.doc$/i.test(name));
-
-/** What the file is: the known document Blankey read it as, else its file type. */
-function fileKind(file) {
-  const { type } = file;
-  if (file.document) return file.document;
-  if (type === "application/pdf") return "PDF";
-  if (type.includes("wordprocessingml")) return "Word";
-  if (isOldWord(file)) return "Word (.doc)";
-  if (type.startsWith("image/")) return t("Image");
-  return t("File");
-}
-
 const fileLabel = (f) => f.description || f.name;
 
 const openOutside = (file) => call("open_collected_files", { ids: [file.id] });
@@ -354,6 +345,22 @@ async function makeProfileGlobal(p) {
   reload();
 }
 
+const READABLE_HERE = (file) => READABLE.includes(file.type) || file.type.startsWith("image/") || isOldWord(file);
+
+/** Opens a case file: beside its profile when it became one, else inside Blankey when it can be shown, else in its app. */
+const openCaseFile = (info, file) => {
+  const profile = file.doctype ? info.profiles.find((p) => p.id === file.profile_id) : null;
+  return profile ? openDocumentCheck(file) : READABLE_HERE(file) ? openFile(file) : openOutside(file);
+};
+
+/** A file block in the chat was clicked: the file opens over the chat, as it is now. */
+async function openFromChat(info, { id }) {
+  const files = await call("list_collected_files", { caseId: info.id }).catch(() => []);
+  const file = files.find((f) => f.id === id);
+  if (!file) return toast(t("This file is no longer in the case"));
+  openCaseFile(info, file);
+}
+
 function CaseFiles({ info }) {
   const files = useLoad(() => call("list_collected_files", { caseId: info.id }), [info.id]);
   // files are read as documents only with a document config set from Blankey Online
@@ -363,9 +370,9 @@ function CaseFiles({ info }) {
 
   // the profile a recognized file became
   const profileOf = (file) => (file.doctype ? info.profiles.find((p) => p.id === file.profile_id) : null);
-  const shown = (file) => READABLE.includes(file.type) || file.type.startsWith("image/") || isOldWord(file);
+  const shown = READABLE_HERE;
   // a file that became a profile opens beside it: the profile on the left, the file on the right
-  const open = (file) => (profileOf(file) ? openDocumentCheck(file) : shown(file) ? openFile(file) : openOutside(file));
+  const open = (file) => openCaseFile(info, file);
   const rename = async (file) => {
     const values = await dialog({ title: t("Rename {name}", { name: file.name }), fields: [{ name: "name", label: t("File name"), value: file.name }], ok: t("Rename") });
     const name = values?.name.trim();
@@ -450,6 +457,48 @@ const importItem = (path) => {
   return { path, name, description: name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim() };
 };
 
+/**
+ * Encrypts the files into the case, each `{path, name, description}`. An old Word file is kept as the .docx made from
+ * it: says so first, since its layout can shift, and afterwards names those that could not be converted. What the
+ * import did, or null when it was not done.
+ */
+async function importFiles(caseId, items) {
+  const kinds = await call("recognize_files", { paths: items.map((i) => i.path) }).catch(() => []);
+  const old = items.filter((i) => kinds.some((k) => k.path === i.path && k.type === "application/msword"));
+  if (old.length) {
+    const go = await dialog({
+      title: t("Old Word files (.doc) need converting"),
+      text: t("{names}: Blankey makes a .docx of it so the assistant can read it. The layout can shift, so check it after the import.", { names: old.map((i) => i.name).join(", ") }),
+      ok: t("Convert and import"),
+    });
+    if (!go) return null;
+  }
+  const chosen = items.map(({ path, name, description }) => ({ path, description: description.trim() || name }));
+  const imported = await call("import_case_files", { caseId, items: chosen }).catch(() => null);
+  if (imported?.old_word.length) {
+    dialog({
+      title: t("The assistant cannot read old Word files (.doc)"),
+      text: t("{names}: open it in Word, save it as .docx and import that file. The .doc stays in the case.", { names: imported.old_word.join(", ") }),
+      cancel: null,
+    });
+  }
+  return imported;
+}
+
+/**
+ * Files for the next chat message: kept in the case, described by their names, and shown in the composer. Asks which
+ * files when no paths are given. True when files were added.
+ */
+async function attachToChat(info, paths) {
+  paths ??= await call("pick_files").catch(() => []);
+  if (!paths.length) return false;
+  const imported = await importFiles(info.id, paths.map(importItem));
+  if (!imported) return false;
+  attachFiles(info.id, imported.files);
+  reload();
+  return true;
+}
+
 function ImportSheet({ info, paths, close }) {
   const [items, setItems] = useState(() => paths.map(importItem));
   const add = (more) => setItems((current) => [...current, ...more.filter((p) => !current.some((i) => i.path === p)).map(importItem)]);
@@ -465,31 +514,12 @@ function ImportSheet({ info, paths, close }) {
   const leaveOut = (path) => setItems(items.filter((i) => i.path !== path));
   const more = async () => add(await call("pick_files").catch(() => []));
   const save = async () => {
-    const chosen = items.map(({ path, name, description }) => ({ path, description: description.trim() || name }));
-    // an old Word file is kept as the .docx made from it: say so first, since its layout can shift
-    const kinds = await call("recognize_files", { paths: items.map((i) => i.path) }).catch(() => []);
-    const old = items.filter((i) => kinds.some((k) => k.path === i.path && k.type === "application/msword"));
-    if (old.length) {
-      const go = await dialog({
-        title: t("Old Word files (.doc) need converting"),
-        text: t("{names}: Blankey makes a .docx of it so the assistant can read it. The layout can shift, so check it after the import.", { names: old.map((i) => i.name).join(", ") }),
-        ok: t("Convert and import"),
-      });
-      if (!go) return;
-    }
-    const imported = await call("import_case_files", { caseId: info.id, items: chosen }).catch(() => null);
+    const imported = await importFiles(info.id, items);
     if (!imported) return;
     toast(tn(imported.count, "{n} file imported", "{n} files imported"));
     update({ caseId: info.id, caseTab: "files" });
     close();
     reload();
-    if (imported.old_word.length) {
-      dialog({
-        title: t("The assistant cannot read old Word files (.doc)"),
-        text: t("{names}: open it in Word, save it as .docx and import that file. The .doc stays in the case.", { names: imported.old_word.join(", ") }),
-        cancel: null,
-      });
-    }
   };
 
   return html`
