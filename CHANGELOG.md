@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- User manual: a PDF in English and in Bulgarian comes with every release, on setting up a workspace, the Blankey
+  Online account, working with cases and the built-in AI assistant. Its screenshots are taken from the app itself
+  when the release is built.
+- Cases: the tabs of a case wrap to a second line, where in Bulgarian they ran off the window.
+
 ## 0.5.0
 
 - Privacy: an assistant on the same computer finds no readable copy of a case file or a document in Blankey's

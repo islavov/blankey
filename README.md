@@ -19,6 +19,7 @@ cargo run                        # debug builds use ~/Library/Application Suppor
 cargo test --workspace           # the app, the known-documents engine (doctypes/) and docset
 cargo fmt --all && cargo clippy --workspace --all-targets
 cd .. && npm install && npm test # UI tests (Node, happy-dom), no build step
+npm run manual                   # the user manual, one PDF per language in dist/manual (see "User manual")
 ```
 
 `BLANKEY_DATA_DIR=/some/dir` picks another data dir. Release builds use the per-user data directory
@@ -50,10 +51,32 @@ without it, builds carry the development key that only a local relay accepts. `B
 To release: bump the version in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, update `CHANGELOG.md`,
 then push the tag `v<version>` on that commit. `.github/workflows/release.yml` makes a draft release with the version's
 changelog section as its notes, builds every platform while the tests (`ci.yml`, also run on pushes to main and PRs)
-run alongside, uploads the installers once both pass, and publishes the release last. Installed apps look for updates
+run alongside, uploads the installers and the user manual's PDFs (built by the `manual` job of `ci.yml`) once both
+pass, and publishes the release last. Installed apps look for updates
 in the latest published release, so it must never be published before `latest.json` is on it. A manual run without a
 tag only builds and keeps the installers as workflow artifacts; with a tag it uploads to that existing release. Rust caches are saved only on main, so a manual run on main before tagging warms
 the build caches.
+
+## User manual
+
+The manual of the latest release: [English](https://github.com/islavov/blankey/releases/latest/download/Blankey-manual-en.pdf),
+[Български](https://github.com/islavov/blankey/releases/latest/download/Blankey-manual-bg.pdf).
+
+It is built, not written around pasted screenshots: `npm run manual` opens the real UI in headless Chromium over the
+tests' fake backend (`manual/app.html`), runs the scenes in `manual/scenes/` once per language, each a walk through
+one part of the app that takes screenshots on its way, and lays them out with that language's text into
+`dist/manual/Blankey-manual-<code>.pdf`. A scene that no longer finds its control fails the build, so the manual
+cannot fall behind the UI. `npx playwright install chromium --only-shell` fetches the browser once.
+
+- A language is a folder in `manual/languages/` (its code must be one of the UI's, `ui/i18n/languages.json`) with
+  the chapters as Markdown and `manual.json` for the cover. Every language has the same chapter files with the same
+  screenshots, `![caption](shot:<scene>-<name>)`; the build says what is missing. Images on adjacent lines share
+  a row, and a `>` quote is a warning in bold red. Chapters stay short: a sentence or two, then the pictures.
+- A new chapter is a scene in `manual/scenes/` (added to `SCENES` in `manual/build.mjs`) and a Markdown file in each
+  language. `npm run manual -- --scene cases --lang en` runs one scene while writing it, `--headed` shows the
+  browser, `--pdf` lays out again without taking the screenshots.
+- CI builds the manual on every push and pull request (the `manual` job, artifact `blankey-manual`), and the release
+  attaches the PDFs to the GitHub release with the installers.
 
 ## First launch
 
@@ -168,6 +191,8 @@ replacements no longer apply.
 - `ui/`: Preact + htm components (vendored in `ui/vendor`), loaded as ES modules with no build step. `ui/js/main.js`
   boots, `pages/` has one file per page, `fill/` the fill form. `ui/tests/` runs the real UI in happy-dom against a
   fake backend; release builds package `ui/` without the tests (`scripts/stage-ui.sh`)
+- `manual/`: the user manual: scenes that drive the UI for its screenshots, the text per language, and the build
+  that makes the PDFs (see "User manual")
 
 ## License
 
