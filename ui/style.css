@@ -468,7 +468,19 @@ input.case-title:focus { background: var(--input); }
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .chat-time { align-self: flex-end; margin-top: -6px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.chat-text { max-width: 760px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-text { max-width: 760px; overflow-wrap: anywhere; }
+.chat-text > * { margin: 0; }
+.chat-text > * + * { margin-top: 8px; }
+.chat-text p, .chat-text li { white-space: pre-wrap; }
+.chat-text h3 { font-size: 15px; }
+.chat-text h4, .chat-text h5, .chat-text h6 { font-size: 13px; }
+.chat-text ul, .chat-text ol { padding-left: 22px; }
+.chat-text li > ul, .chat-text li > ol { margin: 2px 0 0; }
+.chat-text li + li { margin-top: 2px; }
+.chat-text code { background: var(--code); border-radius: 4px; padding: 1px 4px; }
+.chat-text pre { background: var(--code); border-radius: 8px; padding: 10px 12px; overflow: auto; }
+.chat-text pre code { background: none; padding: 0; white-space: pre; }
+.chat-text hr { border: 0; border-top: 1px solid var(--line); }
 .chat-reasoning, .chat-note { color: var(--muted); font-size: 12px; max-width: 760px; }
 .chat-reasoning > summary, .chat-note > summary { cursor: default; width: fit-content; }
 .chat-reasoning > div, .chat-note > div { margin: 4px 0 0 4px; padding-left: 10px; border-left: 2px solid var(--line); white-space: pre-wrap; }

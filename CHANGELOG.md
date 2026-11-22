@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- AI assistant: the Markdown in its answers shows as formatting: bold, italic, code, headings, lists and code
+  blocks.
 - AI assistant: an empty chat opens with first questions a new user can act on (what Blankey does for a lawyer or
   notary, how the assistant works without seeing personal data, what to do first), and, once the case has a
   template and a person, "Fill … with …'s details". "Drop a document and create a template" asks for the document.
