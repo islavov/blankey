@@ -17,7 +17,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::config::{free_port, server_running, Config};
-use crate::core::Blankey;
+use crate::core::{Blankey, NEWER_DATA};
 use crate::i18n;
 use crate::keychain::{self, OsKeyring};
 
@@ -251,8 +251,34 @@ fn outlasts_relaunch(health_url: &str) -> bool {
     false
 }
 
+/// Says why Blankey cannot start and quits; for data from a newer version it offers the download page. The event
+/// loop is not running yet, so the dialog is a native one of its own.
+fn cannot_start(language: &str, error: &str) -> ! {
+    eprintln!("Blankey cannot start: {error}");
+    let newer = error == NEWER_DATA;
+    let download = i18n::t(language, "Download");
+    let (message, buttons) = if newer {
+        (
+            i18n::t(language, NEWER_DATA),
+            rfd::MessageButtons::OkCancelCustom(download.clone(), i18n::t(language, "Quit")),
+        )
+    } else {
+        (i18n::tf(language, "Blankey cannot open its data: {error}", &[("error", &error)]), rfd::MessageButtons::Ok)
+    };
+    let choice = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("Blankey")
+        .set_description(message)
+        .set_buttons(buttons)
+        .show();
+    if newer && choice == rfd::MessageDialogResult::Custom(download) {
+        let _ = open::that(format!("{}/latest", updates::RELEASES));
+    }
+    std::process::exit(1)
+}
+
 pub fn run() {
-    let mut config = Config::load().expect("cannot create the data directory");
+    let mut config = Config::load().unwrap_or_else(|e| cannot_start(&i18n::resolve(None, None), &e.to_string()));
     let relaunched = std::fs::remove_file(config.root_dir.join(RELAUNCH_MARK)).is_ok();
     let health_url = config.health_url();
     let already_running = if relaunched { outlasts_relaunch(&health_url) } else { server_running(&health_url) };
@@ -268,7 +294,8 @@ pub fn run() {
         }
     }
     let secrets = OsKeyring::for_data_dir(&config.data_dir, &Config::default_data_dir());
-    let app = Arc::new(Blankey::new(config, Box::new(secrets)).expect("cannot open the vault"));
+    let language = i18n::resolve(config.language.as_deref(), None);
+    let app = Arc::new(Blankey::new(config, Box::new(secrets)).unwrap_or_else(|e| cannot_start(&language, &e)));
     app.clear_scratch();
     let profile = app.vault().relay_language().ok().flatten();
     app.set_language(&app.resolve_language(profile.as_deref()));

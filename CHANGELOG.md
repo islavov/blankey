@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Start: when Blankey cannot open its data, it says why and quits instead of closing at once without a word. Data
+  saved by a newer version asks you to install the latest one, with a button to its download page.
+
 ## 0.5.0
 
 - Privacy: an assistant on the same computer finds no readable copy of a case file or a document in Blankey's

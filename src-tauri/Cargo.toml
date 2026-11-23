@@ -19,6 +19,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
+# the startup error box, shown before the event loop runs; the same one the dialog plugin uses
+rfd = { version = "0.16", default-features = false }
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-clipboard-manager = "2"

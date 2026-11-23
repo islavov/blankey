@@ -19,8 +19,11 @@ use crate::render::pdf_form;
 use crate::render::preview;
 use crate::templates::engine::{self, BindingReport, Rendered};
 use crate::templates::{bindings, docx, fill, Origin, SaveTemplate, StrMap, Template, TemplateKind, TemplateStore};
-use crate::vault::{Bindings, FieldInfo, FieldInput, NewDocument, Profiles, Vault};
+use crate::vault::{Bindings, FieldInfo, FieldInput, NewDocument, Profiles, Vault, VaultError};
 
+/// Why `Blankey::new` refuses a vault a later version has upgraded.
+pub const NEWER_DATA: &str =
+    crate::i18n::mark("This data was saved by a newer version of Blankey. Install the latest version to open it.");
 pub const PROFILE_INPUT: &str = "profile_input";
 pub const FILL: &str = "fill";
 pub const FILE: &str = "file";
@@ -105,8 +108,12 @@ pub struct Blankey {
 }
 
 impl Blankey {
+    /// Opens the data of the configured workspace; a vault from a later version fails with `NEWER_DATA`.
     pub fn new(config: Config, secrets: Box<dyn SecretStore>) -> Result<Self, String> {
-        let vault = Vault::open(&config.db_path(), secrets).map_err(|e| e.to_string())?;
+        let vault = Vault::open(&config.db_path(), secrets).map_err(|e| match e {
+            VaultError::Schema(_) => NEWER_DATA.to_string(),
+            e => e.to_string(),
+        })?;
         let templates = TemplateStore::new(config.templates_dir());
         let library = Library::open(&config.library_db_path())?;
         let device_language = config.language.clone();
@@ -707,5 +714,15 @@ mod tests {
         app.vault().lock();
         assert!(app.unlock_with_keyring());
         assert_eq!(*vault_free.lock().unwrap(), Some(true));
+    }
+
+    #[test]
+    fn a_vault_from_a_later_version_is_refused_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::load_from(dir.path().join("data")).unwrap();
+        let later = crate::vault::schema_version() + 1;
+        rusqlite::Connection::open(config.db_path()).unwrap().pragma_update(None, "user_version", later).unwrap();
+        let refused = Blankey::new(config, Box::new(MemoryStore::default())).err();
+        assert_eq!(refused.as_deref(), Some(NEWER_DATA));
     }
 }
