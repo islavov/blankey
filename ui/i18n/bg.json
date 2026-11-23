@@ -884,6 +884,8 @@
   "This file is not a Blankey backup.": "Този файл не е архив на Blankey.",
   "The backup file is damaged.": "Архивният файл е повреден.",
   "This backup was made by a newer version of Blankey. Update Blankey first.": "Архивът е направен с по-нова версия на Blankey. Първо обновете Blankey.",
+  "This data was saved by a newer version of Blankey. Install the latest version to open it.": "Данните са записани с по-нова версия на Blankey. Инсталирайте последната версия, за да ги отворите.",
+  "Blankey cannot open its data: {error}": "Blankey не може да отвори данните си: {error}",
   "The workspace that is open: a set of profiles, cases, templates and documents with its own master password. Lock Blankey to open another one or add one. A local backup saves all of it in one file, encrypted with its master password; the lock screen restores it as a workspace, on this or another computer.": "Отвореното работно пространство: набор от профили, казуси, шаблони и документи със своя главна парола. Заключете Blankey, за да отворите друго или да добавите ново. Локалният архив го записва цялото в един файл, криптиран с главната му парола; от екрана за отключване го възстановявате като работно пространство на този или на друг компютър.",
   "This is a sample case. The guide above says what to ask next; the questions below do the same.": "Това е примерен казус. Ръководството горе показва какво да поискате; въпросите по-долу правят същото.",
   "Ask the assistant to fill in the contract first.": "Първо помолете асистента да попълни договора.",

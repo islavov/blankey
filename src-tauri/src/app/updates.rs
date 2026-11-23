@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter};
 use super::{notify, state, tray};
 use crate::i18n::{mark, tf};
 
-const RELEASES: &str = "https://github.com/islavov/blankey/releases";
+pub(super) const RELEASES: &str = "https://github.com/islavov/blankey/releases";
 const FIRST_DELAY: Duration = Duration::from_secs(30);
 const INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 #[cfg(target_os = "linux")]
