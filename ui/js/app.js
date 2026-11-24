@@ -41,7 +41,9 @@ export function App() {
   return html`
     <div class="app">
       <aside class="sidebar">
-        <div class="sidebar-top" data-tauri-drag-region></div>
+        <div class="sidebar-top" data-tauri-drag-region>
+          <span class="beta-tag" data-tauri-drag-region data-help="sidebar.beta">${t("Beta")}</span>
+        </div>
         <nav id="nav">
           <${NavItem} id="cases" active=${page === "cases"} />
           ${SECTIONS.map(([section, ids]) => html`

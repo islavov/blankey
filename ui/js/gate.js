@@ -59,6 +59,10 @@ export function LanguagePick() {
     </div>`;
 }
 
+/** Blankey's icon on the first-use and lock screens, with the beta tag on its corner. */
+export const Logo = () => html`
+  <div class="gate-logo"><img src="icon.png" alt="" class="gate-icon" /><span class="beta-tag">${t("Beta")}</span></div>`;
+
 /** The centered card; `onSubmit(values)` may throw a message, shown under the form. `language` adds the picker;
  * `workspaces` the select box with the open workspace, which opens another one. */
 function GateForm({ title, text, onSubmit, language, workspaces, children }) {
@@ -87,7 +91,7 @@ function GateForm({ title, text, onSubmit, language, workspaces, children }) {
     <div class="gate" data-tauri-drag-region>
       ${language && html`<${LanguagePick} />`}
       <div class="gate-card">
-        <img src="icon.png" alt="" class="gate-icon" />
+        <${Logo} />
         <h1>${title}</h1>
         <p class="muted">${text}</p>
         <form autocomplete="off" ref=${form} onSubmit=${submit}>${workspaces && html`<${WorkspacePick} />`}${children}</form>

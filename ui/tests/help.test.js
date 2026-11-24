@@ -36,6 +36,12 @@ test("hovering a nav item, a page action or a sidebar button shows what it does"
   assert.equal(text(".help-title"), "Lock");
 });
 
+test("the beta tag at the top of the sidebar says Blankey is still being built", async () => {
+  assert.equal(text(".sidebar-top .beta-tag"), "Beta");
+  await hover($(".sidebar-top .beta-tag"));
+  assert.deepEqual(shown(), helpText("sidebar.beta"));
+});
+
 test("leaving a control for its pane waits a moment, then shows the pane", async () => {
   await hover(byText("#page-actions button", "Delete"));
   await hover($(".page"));

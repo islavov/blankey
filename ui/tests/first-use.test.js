@@ -28,6 +28,7 @@ test("after the recovery key comes the wizard, not the app", async () => {
   await check($(".gate input[type=checkbox]"));
   await submit($(".gate form"));
   assert.equal(text(".gate h1"), "Blankey is better online");
+  assert.equal(text(".gate-logo .beta-tag"), "Beta");
   assert.ok($("#gate-language"));
   assert.equal($(".app"), null);
 });

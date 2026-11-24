@@ -20,6 +20,7 @@ const HELP = {
   "nav.templates": () => [t("Templates"), t("A document with blanks: a Word file, a PDF form or a Typst source. Blanks for personal data are bound to profile fields; your AI assistant can fill the rest.")],
   "nav.profiles": () => [t("Profiles"), t("Where the sensitive data lives: names, ID numbers, addresses, bank details and files. Your AI assistant fills other blanks itself, but here it sees only field names, never values.")],
   "nav.links": () => [t("Collection links"), t("A request you send to someone for their data and files. They are encrypted in the sender's browser and can only be opened on this computer, not by Blankey Online or anyone in between. Useful for an ID card photo, for example.")],
+  "sidebar.beta": () => [t("Beta"), t("Blankey is still being built. Features change from version to version, and some may not work as they should yet.")],
   "sidebar.relay": () => [t("Blankey Online"), t("Lets web agents such as claude.ai reach Blankey. The dot is green when connected. Click to sign in or see its settings.")],
   "sidebar.lock": () => [t("Lock"), t("Everything Blankey keeps is encrypted with your password, on this computer. Locking makes it unreadable until you unlock it again.")],
   "sidebar.theme": () => [t("Light or dark"), t("Switches between the light and the dark look. Remembered on this computer.")],
