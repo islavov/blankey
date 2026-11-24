@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Beta: a "Beta" tag at the top of the sidebar and on the logo of the lock and first-use screens. Its help says
+  Blankey is still being built and some things may not work as they should yet.
 - Start: when Blankey cannot open its data, it says why and quits instead of closing at once without a word. Data
   saved by a newer version asks you to install the latest one, with a button to its download page.
 

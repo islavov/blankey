@@ -108,6 +108,8 @@ input[type=checkbox] { accent-color: var(--accent); }
 .gate { height: 100%; display: grid; place-items: center; }
 .gate-card { width: 380px; text-align: center; }
 .gate-icon { width: 76px; height: 76px; }
+.gate-logo { position: relative; width: fit-content; margin: 0 auto; }
+.gate-logo .beta-tag { position: absolute; right: -16px; bottom: 6px; background: var(--accent); color: var(--accent-text); }
 .gate-card h1 { font-size: 20px; margin: 10px 0 4px; }
 .gate-card form { display: grid; gap: 8px; margin-top: 16px; text-align: left; }
 .gate-card form > button { justify-self: stretch; padding: 6px; }
@@ -228,7 +230,11 @@ input[type=checkbox] { accent-color: var(--accent); }
 /* -- layout ------------------------------------------------------------------- */
 .app { display: grid; grid-template-columns: 220px 1fr; height: 100%; }
 .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
-.sidebar-top { height: 44px; flex: none; }
+.sidebar-top { height: 44px; flex: none; display: flex; align-items: center; justify-content: flex-end; padding: 0 14px; }
+.beta-tag {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; line-height: 16px;
+  padding: 0 7px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); cursor: default;
+}
 #nav { flex: 1; overflow: auto; padding: 0 10px; }
 .nav-section { font-size: 11px; font-weight: 600; color: var(--muted); padding: 12px 10px 4px; }
 .nav-item { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 6px; cursor: default; }

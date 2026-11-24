@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "../vendor/preact-htm.js";
 import { call, refreshRelay } from "./api.js";
-import { enterApp, LanguagePick } from "./gate.js";
+import { enterApp, LanguagePick, Logo } from "./gate.js";
 import { t } from "./i18n.js";
 import { html, Icon, useStore } from "./lib.js";
 import { stateLabel } from "./pages/settings.js";
@@ -31,7 +31,7 @@ export function Welcome() {
     <div class="gate welcome" data-tauri-drag-region>
       <${LanguagePick} />
       <div class="gate-card wide">
-        <img src="icon.png" alt="" class="gate-icon" />
+        <${Logo} />
         ${page === "online" ? html`<${Online} onOffline=${() => setPage("agent")} />` : html`<${Agent} onBack=${() => setPage("online")} />`}
       </div>
     </div>`;

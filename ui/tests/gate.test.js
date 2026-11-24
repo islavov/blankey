@@ -5,6 +5,7 @@ import { $, startApp, submit, text, type } from "./setup.js";
 test("unlock: Touch ID is tried once, a wrong password is refused, the right one opens the app", async () => {
   const backend = await startApp({ unlocked: false });
   assert.equal(text(".gate h1"), "Blankey is locked");
+  assert.equal(text(".gate-logo .beta-tag"), "Beta");
   assert.equal(backend.called("unlock_quick").length, 1);
 
   const form = $(".gate form");
